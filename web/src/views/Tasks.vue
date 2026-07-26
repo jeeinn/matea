@@ -53,9 +53,10 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160">
+        <el-table-column label="操作" width="200">
           <template #default="{ row }">
             <el-button size="small" type="primary" link @click="viewTask(row)">详情</el-button>
+            <el-button size="small" type="primary" link @click="viewTask(row, true)">对话</el-button>
             <el-button
               v-if="row.status === 'pending' || row.status === 'running' || row.status === 'partial'"
               size="small"
@@ -81,7 +82,7 @@
     </el-card>
 
     <!-- Task Detail Dialog -->
-    <el-dialog v-model="showDetail" title="任务详情" width="700px" :close-on-click-modal="false">
+    <el-dialog v-model="showDetail" title="任务详情" width="860px" :close-on-click-modal="false">
       <el-descriptions :column="2" border>
         <el-descriptions-item label="ID">{{ selectedTask?.id }}</el-descriptions-item>
         <el-descriptions-item label="类型">{{ selectedTask?.task_type }}</el-descriptions-item>
@@ -124,6 +125,48 @@
         </el-descriptions>
       </div>
 
+      <div ref="conversationSection" class="task-conversation">
+        <div class="conversation-header">
+          <h4>Agent 对话日志</h4>
+          <el-tag v-if="conversationCount > 0" size="small" type="info">{{ conversationCount }} 条</el-tag>
+        </div>
+        <div v-loading="conversationLoading">
+          <el-alert
+            v-if="!conversationLoading && conversationMessages.length === 0"
+            type="info"
+            :closable="false"
+            show-icon
+            title="暂无对话日志"
+            description="请在「系统配置」开启 debug.conversation_log.enabled 后重新跑任务；仅多轮 Agent Loop（如 solve_issue / solve_comment）会写入。"
+          />
+          <el-collapse v-else v-model="openIterations">
+            <el-collapse-item
+              v-for="group in conversationByIteration"
+              :key="group.iteration"
+              :name="String(group.iteration)"
+              :title="`第 ${group.iteration} 轮（${group.messages.length} 条消息）`"
+            >
+              <div
+                v-for="msg in group.messages"
+                :key="msg.id"
+                class="conv-msg"
+              >
+                <div class="conv-msg-meta">
+                  <el-tag size="small" :type="roleTagType(msg.role)">{{ msg.role }}</el-tag>
+                  <span v-if="msg.tool_call_id" class="conv-meta-extra">tool_call_id={{ msg.tool_call_id }}</span>
+                  <span class="conv-meta-extra">seq={{ msg.seq }}</span>
+                </div>
+                <pre v-if="msg.content" class="conv-content">{{ msg.content }}</pre>
+                <div v-if="msg.tool_calls" class="conv-tools">
+                  <div class="conv-tools-label">tool_calls</div>
+                  <pre class="conv-content">{{ formatToolCalls(msg.tool_calls) }}</pre>
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+      </div>
+
       <div v-if="selectedTask?.repo && selectedTask?.issue_id" class="task-workflow">
         <el-button type="primary" link @click="goToWorkflow">查看工作流详情</el-button>
       </div>
@@ -132,7 +175,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { Refresh } from '@element-plus/icons-vue'
@@ -145,6 +188,11 @@ const agents = ref([])
 const showDetail = ref(false)
 const selectedTask = ref(null)
 const taskUsage = ref(null)
+const conversationMessages = ref([])
+const conversationCount = ref(0)
+const conversationLoading = ref(false)
+const openIterations = ref([])
+const conversationSection = ref(null)
 const loading = ref(false)
 const resettingId = ref(null)
 const total = ref(0)
@@ -163,7 +211,19 @@ const agentMap = computed(() => {
   return map
 })
 
-const taskTypes = ref(['analyze_issue', 'review_pr', 'reply_comment', 'solve_issue', 'fix_bug', 'trigger'])
+const taskTypes = ref(['analyze_issue', 'review_pr', 'reply_comment', 'solve_issue', 'fix_bug', 'solve_comment', 'trigger'])
+
+const conversationByIteration = computed(() => {
+  const map = new Map()
+  for (const msg of conversationMessages.value) {
+    const iter = msg.iteration ?? 0
+    if (!map.has(iter)) map.set(iter, [])
+    map.get(iter).push(msg)
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([iteration, messages]) => ({ iteration, messages }))
+})
 
 const loadTasks = async () => {
   loading.value = true
@@ -208,18 +268,57 @@ const loadAgents = async () => {
   agents.value = await api.get('/agents') || []
 }
 
-const viewTask = async (task) => {
+const roleTagType = (role) => {
+  const types = { system: 'info', user: '', assistant: 'success', tool: 'warning' }
+  return types[role] || 'info'
+}
+
+const formatToolCalls = (raw) => {
+  if (!raw) return ''
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
+const loadConversation = async (taskId) => {
+  conversationLoading.value = true
+  conversationMessages.value = []
+  try {
+    const res = await api.get(`/tasks/${taskId}/conversation`)
+    conversationMessages.value = res?.messages || []
+    conversationCount.value = res?.count || conversationMessages.value.length
+    openIterations.value = conversationByIteration.value.map((g) => String(g.iteration))
+  } catch {
+    conversationMessages.value = []
+    conversationCount.value = 0
+  } finally {
+    conversationLoading.value = false
+  }
+}
+
+const viewTask = async (task, scrollToConversation = false) => {
   showDetail.value = true
   selectedTask.value = task
   taskUsage.value = null
+  conversationMessages.value = []
+  conversationCount.value = 0
+  openIterations.value = []
   try {
     const res = await api.get(`/tasks/${task.id}`)
     if (res?.task) {
       selectedTask.value = res.task
       taskUsage.value = res.usage || null
+      conversationCount.value = res.conversation_count || 0
     }
   } catch {
     // 忽略错误，使用列表中的数据
+  }
+  await loadConversation(task.id)
+  if (scrollToConversation) {
+    await nextTick()
+    conversationSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 }
 
@@ -299,12 +398,69 @@ onMounted(() => {
 
 .task-result h4,
 .task-error h4,
-.task-usage h4 {
+.task-usage h4,
+.task-conversation h4 {
   margin-bottom: 10px;
 }
 
-.task-usage {
+.task-usage,
+.task-conversation {
   margin-top: 20px;
+}
+
+.conversation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.conversation-header h4 {
+  margin: 0;
+}
+
+.conv-msg {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fafafa;
+}
+
+.conv-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.conv-meta-extra {
+  font-size: 12px;
+  color: #909399;
+}
+
+.conv-content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
+  background: #fff;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.conv-tools {
+  margin-top: 8px;
+}
+
+.conv-tools-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 4px;
 }
 
 .token-value {

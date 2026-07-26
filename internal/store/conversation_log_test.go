@@ -41,6 +41,13 @@ func TestAppendAndListConversationLogs(t *testing.T) {
 	assert.Contains(t, entries[0].ToolCalls, "read_file")
 	assert.Equal(t, "tool", entries[1].Role)
 	assert.Equal(t, "c1", entries[1].ToolCallID)
+
+	n, err := db.CountConversationLogs(task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	n, err = db.CountConversationLogs(task.ID + 99)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
 }
 
 func TestAppendConversationMessagesTruncatesContent(t *testing.T) {

@@ -79,15 +79,44 @@ func (h *Handler) getTask(w http.ResponseWriter, r *http.Request) {
 
 	// Get usage summary
 	usageSummary, _ := h.db.GetTaskUsageSummary(id)
+	convCount, _ := h.db.CountConversationLogs(id)
 
 	resp := map[string]interface{}{
-		"task": task,
+		"task":               task,
+		"conversation_count": convCount,
 	}
 	if usageSummary != nil {
 		resp["usage"] = usageSummary
 	}
 
 	writeJSON(w, 200, resp)
+}
+
+// getTaskConversation returns persisted Agent Loop messages for a task
+// (populated when debug.conversation_log.enabled is on).
+func (h *Handler) getTaskConversation(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r, "id")
+	if err != nil {
+		writeError(w, 400, "invalid id")
+		return
+	}
+	if _, err := h.db.GetTask(id); err != nil {
+		writeError(w, 404, "task not found")
+		return
+	}
+	entries, err := h.db.ListConversationLogs(id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []store.ConversationLogEntry{}
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"task_id":  id,
+		"count":    len(entries),
+		"messages": entries,
+	})
 }
 
 func (h *Handler) resetTask(w http.ResponseWriter, r *http.Request) {

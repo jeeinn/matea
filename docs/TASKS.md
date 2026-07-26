@@ -16,9 +16,10 @@
 ```text
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review（已交付）
         │
-        ├─► 逻辑 Issue 归一 + Agent 并发（本 PR 交付）
-        ├─► 【下一步】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
-        └─► 更后：转阶段 unassign · 沙箱 · OpenCode A+ · LLM 可选
+        ├─► 逻辑 Issue 归一 + Agent 并发（已合入）
+        ├─► 【进行中】可观测性 WebUI：Agent 对话日志
+        ├─► 随后：审计日志 WebUI · local-only 高亮 · 转阶段 unassign
+        └─► 更后：沙箱 · OpenCode A+ · LLM 可选
 ```
 
 ---
@@ -33,7 +34,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ---
 
-## 2. 逻辑 Issue 归一 + Agent 并发（本 PR 交付）
+## 2. 逻辑 Issue 归一 + Agent 并发（已合入 #22）
 
 来源：2026-07-26 实跑 — 同仓并行：PR#2 @coder（续作）与 Issue#3 @同一 coder；以及 review 挂 `issueID=1`、PR 评论 @ 挂 `issueID=2` 的键分裂。
 
@@ -72,12 +73,13 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ---
 
-## 3. 可观测性 / WebUI（与 §2 并行或随后）
+## 3. 可观测性 / WebUI（当前优先）
 
 > **系统日志说明（现状，非待办）**：运行日志走 stdout + 可选文件（bootstrap 已默认 `logging.path: "./data"` → `./data/matea.log`），**不入库**。入库的是 `operation_logs` 与开启调试后的 `task_conversation_logs`。
 
-- [ ] **Agent 对话日志查看（WebUI）**  
-  按 `task_id` 查询 API；任务列表可跳转；展示多轮 role / content / tool_calls。  
+- [x] **Agent 对话日志查看（WebUI）**（`feat/webui-task-conversation-logs`）  
+  `GET /api/tasks/{id}/conversation`；任务详情 /「对话」入口；按 iteration 折叠展示 role / content / tool_calls。  
+  需开启 `debug.conversation_log.enabled` 才会写入（系统配置已有开关）。  
 - [ ] **（可选）操作审计日志 WebUI**（已有 `GET /api/logs`）  
 - [ ] **（可选）WebUI 高亮未推送分支**
 
