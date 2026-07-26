@@ -325,7 +325,7 @@ npm test'
             <el-form-item label="记录 Agent 对话">
               <el-switch v-model="form['debug.conversation_log.enabled']" />
               <div class="form-tip">
-                开启后，solve / fix_bug 等多轮任务的每轮 LLM 消息与 tool call 将持久化到 <code>task_conversation_logs</code> 表
+                开启后，solve / fix_bug 等多轮任务的每轮 LLM 消息与 tool call 将持久化到 <code>task_conversation_logs</code> 表；可在「任务」详情或「对话」入口查看
                 <el-tag v-if="sourceTag('debug.conversation_log.enabled')" size="small" :type="sourceTag('debug.conversation_log.enabled') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('debug.conversation_log.enabled') }}
                 </el-tag>

@@ -86,6 +86,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents/{id}/tasks", h.authorizeWrap(h.listAgentTasks))
 	mux.HandleFunc("GET /api/tasks", h.authorizeWrap(h.listTasks))
 	mux.HandleFunc("GET /api/tasks/{id}", h.authorizeWrap(h.getTask))
+	mux.HandleFunc("GET /api/tasks/{id}/conversation", h.authorizeWrap(h.getTaskConversation))
 	mux.HandleFunc("POST /api/tasks/{id}/reset", h.authorizeWrap(h.resetTask))
 	mux.HandleFunc("GET /api/logs", h.authorizeWrap(h.listLogs))
 	mux.HandleFunc("GET /api/stats", h.authorizeWrap(h.getStats))

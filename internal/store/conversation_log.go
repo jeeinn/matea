@@ -76,6 +76,16 @@ func (db *DB) ListConversationLogs(taskID int64) ([]ConversationLogEntry, error)
 	return entries, rows.Err()
 }
 
+// CountConversationLogs returns how many conversation log rows exist for a task.
+func (db *DB) CountConversationLogs(taskID int64) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM task_conversation_logs WHERE task_id = ?`, taskID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count conversation logs: %w", err)
+	}
+	return n, nil
+}
+
 func truncateStoredContent(s string, maxChars int) string {
 	if maxChars <= 0 || len(s) <= maxChars {
 		return s
