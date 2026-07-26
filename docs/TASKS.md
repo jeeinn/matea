@@ -1,6 +1,6 @@
 # 任务清单
 
-> 更新：2026-07-24  
+> 更新：2026-07-26  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · OpenCode 可选 · 不做多托管平台抽象  
 > 决策：[archived/20260714-coding-gateway-multi-vcs.md](archived/20260714-coding-gateway-multi-vcs.md)  
 > 已归档交付记录：  
@@ -14,66 +14,102 @@
 ## 演进主线
 
 ```text
-P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
+P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review（已交付）
         │
-        ├─► PR 续作注入 review / 评论历史（进行中 / 本分支）
-        ├─► 【下一步】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
-        └─► 更后：沙箱细项 · OpenCode A+ · LLM 可选 · 运维可选
+        ├─► 【下一步】逻辑 Issue 归一 + Agent 并发策略（串行可入队 / 或并行）
+        ├─► 【并行或随后】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
+        └─► 更后：转阶段 unassign · 沙箱 · OpenCode A+ · LLM 可选
 ```
 
 ---
 
-## 1. PR 续作注入评论 / review 历史（优先）
+## 1. PR 续作注入评论 / review 历史（已交付）
 
-来源：2026-07-24 实跑 [rust-study#2](http://182.92.129.124:3000/jeeinn/rust-study/pulls/2) — Request Reviewer 后在 PR 上 `@ai-coder 根据上面的 review 结果进行修改`，coder 只拿到触发评论正文，**未注入** ai-reviewer 的审查内容，续作 commit 与 review 建议无关。
+来源：2026-07-24 实跑 [rust-study#2](http://182.92.129.124:3000/jeeinn/rust-study/pulls/2)。
 
-- [x] **`solve_comment` 注入 PR 评论 / review 历史**（分支 `feat/pr-continue-inject-review-history`）  
-  `buildTaskContext` 在 `solve_comment` 时拉取 `IssueComments`（PR 优先），优先保留 review-role agent 评论，最近约 10 条；跳过「已开始处理」进度评论；单条正文上限 8k。  
-  目标：用户只需 `@coder 按 review 修改`，模型仍能看到具体意见。
+- [x] **`solve_comment` 注入 PR 评论 / review 历史**（`feat/pr-continue-inject-review-history`）  
+  `buildTaskContext` 拉取近期评论，优先 review-role；跳过进度评论；单条上限 8k。  
+  2026-07-26 实测：`Injected 7 recent comments` / `Injected 3 recent comments` 已验证。
 
 ---
 
-## 2. 可观测性 / WebUI（其次）
+## 2. 逻辑 Issue 归一 + Agent 并发（下一步，优先于 / 可与可观测性并行）
 
-> **系统日志说明（现状，非待办）**：运行日志走 stdout + 可选文件（bootstrap 已默认 `logging.path: "./data"` → `./data/matea.log`），**不入库**。入库的是 `operation_logs`（操作审计）与开启调试后的 `task_conversation_logs`（Agent 对话）。查系统日志请看终端或 `matea.log`。
+来源：2026-07-26 实跑 — 同仓并行：PR#2 @coder（续作）与 Issue#3 @同一 coder；以及 review 挂 `issueID=1`、PR 评论 @ 挂 `issueID=2` 的键分裂。
+
+### 2.1 逻辑 Issue 归一（P0）
+
+现状：Session / Workflow / in-flight 键为 `(repo, issue_id)`；PR 会话评论里 Gitea 的 `issue.number` = **PR 号**，而 `review_requested` 常解析为 **linked Issue**（如 `Fixes #1`）→ 账本与 Session 分裂。
+
+- [ ] **PR 评论 / PR 事件统一到逻辑 Issue**  
+  - 解析顺序：PR body `Fixes/Closes #N`（及现有 `resolveLinkedIssue`）→ 必要时 API 补全 → **`logic_issue_id=N`**，`pr_id=P` 单独保存。  
+  - Session / WorkflowContext / in-flight **一律用 `logic_issue_id`**。  
+  - 评论注入仍对 **PR number** 调 `IssueComments`（与逻辑键解耦）。  
+  - Issue 上 @ 与 PR 上 @ 应落到同一 coder Session（同一逻辑 Issue）。  
+  - 无 linked Issue 的纯 PR：约定特例键（如 `issue_id=0` + `pr_id`），单独文档化。
+
+### 2.2 Agent 并发策略（P1）— 可配置，禁止「直接拒绝」
+
+现状：in-flight 仅锁 `(repo, issue_id)` → **同一 Agent 可并行跑多个 Issue**（Session/Workspace 已按 Issue 隔离，一般不需再拆 Session）。
+
+产品倾向（已确认）：
+
+| 模式 | 行为 | 说明 |
+|------|------|------|
+| **parallel（并行）** | 保持现状：仅 Issue 级锁 | 多 Issue 可同时跑；接受共享 LLM/Gitea token 压力 |
+| **serial_queue（串行入队）** | 同 `agent_id` 同时最多 1 个 running；其余 **入队等待**，不丢弃、不评论拒绝 | 上一任务结束后自动开下一单 |
+
+- [ ] **配置项**（建议）：如 `dispatcher.agent_concurrency: parallel | serial_queue`（默认可先 `parallel`，文档说明串行更稳）。  
+- [ ] **`serial_queue` 实现**：Agent 级队列或「有 running 则保持 pending + 扫描器/完成回调唤醒」；进度可评论「已排队，当前执行 task #X」（可选，非拒绝）。  
+- [ ] **明确不做**：同 Agent 忙碌时直接 skip / 硬拒绝入队（体验差，与本次决策不符）。  
+- [ ] Session 键保持 `(repo, logic_issue_id, agent_id, role)`；**不为并发再拆 Session 维度**。
+
+### 2.3 相关跟进（本批可顺手或紧随）
+
+- [ ] **转阶段 Unassign 404**  
+  analyze→coder 时 `DELETE .../issues/{n}/assignees` 在实测 Gitea 上 404；核对版本 API 或改实现，避免前一 Agent 残留在 assignees。  
+- [ ] 日志打印 `logic_issue_id` / `pr_id` / `session_id` / `agent_id`，便于并行场景排查。
+
+---
+
+## 3. 可观测性 / WebUI（与 §2 并行或随后）
+
+> **系统日志说明（现状，非待办）**：运行日志走 stdout + 可选文件（bootstrap 已默认 `logging.path: "./data"` → `./data/matea.log`），**不入库**。入库的是 `operation_logs` 与开启调试后的 `task_conversation_logs`。
 
 - [ ] **Agent 对话日志查看（WebUI）**  
-  现状：`debug.conversation_log.enabled` 可将多轮 LLM 消息写入 `task_conversation_logs`（store 已有 `ListConversationLogs`），但 **无 REST 读接口、无前端页面**。  
-  需求：按 `task_id` 查询 API；WebUI 展示多轮对话（role / content / tool_calls）；**任务列表可跳转**至该 task 对话（详情入口或 `/tasks/:id/conversation`）。
-- [ ] **（可选）操作审计日志 WebUI**  
-  `operation_logs` 已入库且有 `GET /api/logs`，前端无页面。
-- [ ] **（可选）WebUI 高亮未推送分支**  
-  日志侧已有 local-only `[WARN]`；UI 高亮仍待做。
+  按 `task_id` 查询 API；任务列表可跳转；展示多轮 role / content / tool_calls。  
+- [ ] **（可选）操作审计日志 WebUI**（已有 `GET /api/logs`）  
+- [ ] **（可选）WebUI 高亮未推送分支**
 
 ---
 
-## 3. 更后 / 按需
+## 4. 更后 / 按需
 
 ### 运维可选
 
-- [ ] （可选）bootstrap 启动日志打印「Logging to file: …」，确认文件落盘成功
+- [ ] （可选）bootstrap 启动日志打印「Logging to file: …」
 
 ### 沙箱可选增强
 
-详见 [archived/20260604-sandbox-roadmap.md](archived/20260604-sandbox-roadmap.md)（核心已交付）
+详见 [archived/20260604-sandbox-roadmap.md](archived/20260604-sandbox-roadmap.md)
 
 - [ ] （可选）`cat` 行号范围、`find` glob、审计日志内容摘要
-- [ ] （可选）sandbox 拦截 agent 侧 `git commit` / `git push`，统一走 finalize
+- [ ] （可选）sandbox 拦截 agent 侧 `git commit` / `git push`
 
 ### OpenCode A+
 
-设计：[server-runtime-design-v4.md](server-runtime-design-v4.md) §A+ · 清单归档：[archived/20260714-todo-opencode-path-a.md](archived/20260714-todo-opencode-path-a.md)
+设计：[server-runtime-design-v4.md](server-runtime-design-v4.md) §A+ · [archived/20260714-todo-opencode-path-a.md](archived/20260714-todo-opencode-path-a.md)
 
 - [ ] SSE 进度 → Issue 评论或 task progress
-- [ ] 持久化 `opencode_session_id`（Session 续作）
-- [ ] OpenCode 集成测试：mock server + 假仓库
-- [ ] Claude PrintBackend（契约型 CLI，非 Path B）
+- [ ] 持久化 `opencode_session_id`
+- [ ] OpenCode 集成测试
+- [ ] Claude PrintBackend（非 Path B）
 
 ### LLM 可选增强
 
 [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md)
 
-- [ ] tiktoken 精确计数（可选开启）
+- [ ] tiktoken 精确计数
 - [ ] 超长 Session 语义摘要
 - [ ] per-task 成本预算上限
 
@@ -81,8 +117,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
 
 | 项 | 说明 |
 |----|------|
-| 文件级 analyze 落地 checklist / README 链接自动核对 | soft gate 文案已归档交付；自动核对未做 |
-| API 中间件链 | CORS / 限流 / 访问日志；有运维痛点再立项 |
+| 文件级 analyze 落地 checklist | soft gate 文案已归档；自动核对未做 |
+| API 中间件链 | 有运维痛点再立项 |
 | `gitea.Client` Transport 显式复用 | DefaultTransport 已够用 |
 
 ---
@@ -91,10 +127,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
 
 | 项 | 说明 |
 |----|------|
-| GitHub / GitLab / Gitee 多平台 Host SPI | 中小团队 Gitea-first |
+| GitHub / GitLab / Gitee 多平台 Host SPI | Gitea-first |
 | Issue 级任意 PR base（label/body） | 边缘场景 |
-| 远程 OpenCode / Path B worktree 基础设施 | v4 非目标；另议 |
-| Gateway 反向做成 MCP Server | 后置，非当前 ToolPack/MCP 消费路径 |
+| 远程 OpenCode / Path B worktree | v4 非目标 |
+| Gateway 做成 MCP Server | 后置 |
+| 同 Agent 忙碌时硬拒绝入队 | 与 §2.2 决策冲突；串行必须可排队 |
 
 ---
 
@@ -104,8 +141,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 现行架构 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 部署 |
-| [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend 设计权威 |
-| [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 剩余可选增强 |
-| [archived/20260724-TASKS.md](archived/20260724-TASKS.md) | 写路径 / 摩擦 / Bootstrap 交付记录 |
-| [archived/20260723-TASKS.md](archived/20260723-TASKS.md) | P3 + 开源后加固交付记录 |
-| [archived/](archived/) | 历史设计、签核、E2E、清单 |
+| [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend |
+| [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选 |
+| [archived/20260724-TASKS.md](archived/20260724-TASKS.md) | 写路径 / 摩擦 / Bootstrap |
+| [archived/20260723-TASKS.md](archived/20260723-TASKS.md) | P3 + 开源后加固 |
+| [archived/](archived/) | 历史设计、签核、E2E |
