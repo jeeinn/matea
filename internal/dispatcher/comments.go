@@ -45,35 +45,35 @@ func (d *Dispatcher) postL3Notification(task *store.Task) {
 	}
 
 	switch task.TaskType {
-	case "analyze_issue":
-		if !d.wfPolicy.Notify.OnAnalyzeDone {
-			return
-		}
-		body := workflow.FormatL3Comment(workflow.L3AnalyzeDone, map[string]string{
-			"task_id":    fmt.Sprintf("%d", task.ID),
-			"agent_name": agent.GiteaUsername,
-		})
-		d.postGateComment(agent, task.Repo, task.IssueID, body)
+		case "analyze_issue":
+			if !d.wfPolicy.Notify.OnAnalyzeDone {
+				return
+			}
+			body := workflow.FormatL3Comment(workflow.L3AnalyzeDone, map[string]string{
+				"task_id":    fmt.Sprintf("%d", task.ID),
+				"agent_name": agent.GiteaUsername,
+			})
+			d.postGateComment(agent, task.Repo, effectiveIssueKey(task.IssueID, task.PRID), body)
 
-	case "solve_issue", "fix_bug", "solve_comment":
-		if !d.wfPolicy.Notify.OnCoderPROpened {
-			return
+		case "solve_issue", "fix_bug", "solve_comment":
+			if !d.wfPolicy.Notify.OnCoderPROpened {
+				return
+			}
+			// Only notify when a PR was actually created
+			if task.PRID == 0 {
+				return
+			}
+			// Extract PR URL from result
+			prURL := ""
+			if matches := prURLPattern.FindStringSubmatch(task.Result); len(matches) >= 2 {
+				prURL = matches[1]
+			}
+			if prURL == "" {
+				return
+			}
+			body := workflow.FormatL3Comment(workflow.L3CoderPROpened, map[string]string{
+				"pr_url": prURL,
+			})
+			d.postGateComment(agent, task.Repo, effectiveIssueKey(task.IssueID, task.PRID), body)
 		}
-		// Only notify when a PR was actually created
-		if task.PRID == 0 {
-			return
-		}
-		// Extract PR URL from result
-		prURL := ""
-		if matches := prURLPattern.FindStringSubmatch(task.Result); len(matches) >= 2 {
-			prURL = matches[1]
-		}
-		if prURL == "" {
-			return
-		}
-		body := workflow.FormatL3Comment(workflow.L3CoderPROpened, map[string]string{
-			"pr_url": prURL,
-		})
-		d.postGateComment(agent, task.Repo, task.IssueID, body)
-	}
 }

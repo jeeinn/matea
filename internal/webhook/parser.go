@@ -3,6 +3,7 @@ package webhook
 import (
 	"encoding/json"
 	"log"
+	"strings"
 )
 
 // WebhookEvent represents the parsed Gitea webhook event.
@@ -40,6 +41,21 @@ type Issue struct {
 	Assignees []User  `json:"assignees"`
 	Labels    []Label `json:"labels"`
 	HTMLURL   string  `json:"html_url"`
+	// PullRequest is present (often `{}`) when this issue object is a PR conversation
+	// in issue_comment webhooks. Used to distinguish PR# from Issue#.
+	PullRequest json.RawMessage `json:"pull_request,omitempty"`
+}
+
+// IsPullRequest reports whether this issue payload represents a pull request
+// (Gitea issue_comment on a PR, or HTML URL under /pulls/).
+func (i *Issue) IsPullRequest() bool {
+	if i == nil {
+		return false
+	}
+	if len(i.PullRequest) > 0 && string(i.PullRequest) != "null" {
+		return true
+	}
+	return strings.Contains(i.HTMLURL, "/pulls/")
 }
 
 type PullRequest struct {

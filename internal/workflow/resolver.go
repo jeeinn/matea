@@ -207,20 +207,76 @@ func (r *Resolver) taskTypeForRole(role string, evt *webhook.WebhookEvent) strin
 	}
 }
 
-// resolveLinkedIssue tries to extract the linked issue number from the PR body.
-// Returns 0 if no linked issue is found.
+// resolveLinkedIssue extracts the linked issue number from PR / PR-as-issue body
+// (Fixes/Closes/Resolves #N). Returns 0 if none found.
 func (r *Resolver) resolveLinkedIssue(evt *webhook.WebhookEvent) int {
-	if evt.PR == nil || evt.PR.Body == "" {
-		return 0
-	}
-	matches := linkedIssuePattern.FindStringSubmatch(evt.PR.Body)
-	if len(matches) >= 2 {
-		n, err := strconv.Atoi(matches[1])
-		if err == nil {
+	for _, body := range linkedIssueBodies(evt) {
+		if n := extractLinkedIssue(body); n > 0 {
 			return n
 		}
 	}
 	return 0
+}
+
+func linkedIssueBodies(evt *webhook.WebhookEvent) []string {
+	if evt == nil {
+		return nil
+	}
+	var bodies []string
+	if evt.PR != nil && evt.PR.Body != "" {
+		bodies = append(bodies, evt.PR.Body)
+	}
+	// issue_comment on a PR: Gitea puts the PR body on evt.Issue (number = PR#).
+	if evt.Issue != nil && evt.Issue.Body != "" && (evt.PR != nil || evt.Issue.IsPullRequest()) {
+		bodies = append(bodies, evt.Issue.Body)
+	}
+	return bodies
+}
+
+func extractLinkedIssue(body string) int {
+	matches := linkedIssuePattern.FindStringSubmatch(body)
+	if len(matches) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// isPRConversation reports whether the event is about a pull request thread.
+func isPRConversation(evt *webhook.WebhookEvent) bool {
+	if evt == nil {
+		return false
+	}
+	if evt.PR != nil {
+		return true
+	}
+	return evt.Issue != nil && evt.Issue.IsPullRequest()
+}
+
+// ResolveLogicIssueAndPR returns logical identifiers for an event:
+//   - logic issue id from Fixes/Closes #N when on a PR; else the Issue number
+//   - pr id when the conversation is a PR (0 for plain issues)
+//
+// Pure PR with no linked issue: issueID=0, prID=P. Downstream must map this
+// via effectiveIssueKey (prID) for session/lock/workflow/writeback — do not
+// key storage on raw 0.
+func (r *Resolver) ResolveLogicIssueAndPR(evt *webhook.WebhookEvent) (issueID, prID int) {
+	if isPRConversation(evt) {
+		if evt.PR != nil {
+			prID = evt.PR.Number
+		} else if evt.Issue != nil {
+			prID = evt.Issue.Number
+		}
+		issueID = r.resolveLinkedIssue(evt) // 0 if none
+		return issueID, prID
+	}
+	if evt.Issue != nil {
+		issueID = evt.Issue.Number
+	}
+	return issueID, prID
 }
 
 // IsAgentSender checks if the event sender is any active agent (to prevent self-trigger loops).
@@ -253,20 +309,8 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 		return nil
 	}
 
-	// Determine issue ID
-	issueID := 0
-	if evt.Issue != nil {
-		issueID = evt.Issue.Number
-	}
-
-	// Determine PR ID (for pull_request_comment events)
-	prID := 0
-	if evt.PR != nil {
-		prID = evt.PR.Number
-	} else if evt.Issue != nil {
-		// Try to infer from issue (comments on issues that have PRs)
-		// This is handled by the WorkflowContext
-	}
+	// Session / Workflow keys use logic issue; PR APIs use prID.
+	issueID, prID := r.ResolveLogicIssueAndPR(evt)
 
 	// Determine task type based on role and force commands
 	taskType := r.commentTaskType(agent, forceDev, forceReply, evt)
@@ -314,11 +358,6 @@ func (r *Resolver) commentTaskType(agent *store.Agent, forceDev, forceReply bool
 	case store.RoleAnalyze:
 		return "reply_comment" // Analyze is read-only
 	case store.RoleCoder:
-		// If it's a PR comment, likely continuation → solve_comment
-		if evt.PR != nil {
-			return "solve_comment"
-		}
-		// Issue comment → solve_comment (will create PR if no existing one)
 		return "solve_comment"
 	case store.RoleReview:
 		return "reply_comment" // Review discussion is read-only

@@ -34,19 +34,20 @@ type TaskFailedCallback func(task *store.Task)
 
 // Executor runs agent tasks from the queue with concurrency control.
 type Executor struct {
-	maxConcurrent int
-	llmRegistry   *llm.Registry
-	db            *store.DB
-	sem           chan struct{}
-	retryCount    int // task_retry_count: whole-task retries after runner failure
-	giteaFactory  GiteaClientFactory
-	runnerFactory *agents.RunnerFactory
-	agentDefaults config.AgentDefaultsConfig
-	defaultLoop   config.AgentLoopConfig
-	sandboxCfg    sandbox.SandboxConfig
-	mcpCfg        config.MCPConfig
-	onComplete    TaskCompleteCallback
-	onFailed      TaskFailedCallback
+	maxConcurrent    int
+	agentConcurrency string // parallel | serial_queue
+	llmRegistry      *llm.Registry
+	db               *store.DB
+	sem              chan struct{}
+	retryCount       int // task_retry_count: whole-task retries after runner failure
+	giteaFactory     GiteaClientFactory
+	runnerFactory    *agents.RunnerFactory
+	agentDefaults    config.AgentDefaultsConfig
+	defaultLoop      config.AgentLoopConfig
+	sandboxCfg       sandbox.SandboxConfig
+	mcpCfg           config.MCPConfig
+	onComplete       TaskCompleteCallback
+	onFailed         TaskFailedCallback
 
 	// rootCtx is cancelled on Shutdown so in-flight agent loops abort promptly.
 	rootCtx    context.Context
@@ -55,34 +56,43 @@ type Executor struct {
 	// Per-task cancel registry for WebUI reset / abort.
 	runMu   sync.Mutex
 	running map[int64]*runningTask // taskID → cancel handle
+
+	// serial_queue: in-process claim so two workers cannot start the same agent.
+	agentMu   sync.Mutex
+	agentBusy map[int64]bool
 }
 
 type runningTask struct {
-	repo      string
-	issueID   int
-	cancel    context.CancelFunc
-	external  bool // true when cancelled via CancelTask / CancelByIssue (skip finalize)
+	repo     string
+	issueID  int
+	cancel   context.CancelFunc
+	external bool // true when cancelled via CancelTask / CancelByIssue (skip finalize)
 }
 
 // NewExecutor creates a new Executor.
-func NewExecutor(maxConcurrent, retryCount int, llmRegistry *llm.Registry, db *store.DB, agentDefaults config.AgentDefaultsConfig, defaultLoop config.AgentLoopConfig, sandboxCfg sandbox.SandboxConfig, mcpCfg config.MCPConfig) *Executor {
+func NewExecutor(maxConcurrent, retryCount int, agentConcurrency string, llmRegistry *llm.Registry, db *store.DB, agentDefaults config.AgentDefaultsConfig, defaultLoop config.AgentLoopConfig, sandboxCfg sandbox.SandboxConfig, mcpCfg config.MCPConfig) *Executor {
 	if defaultLoop.MaxIterations <= 0 {
 		defaultLoop = config.DefaultAgentLoopConfig()
 	}
+	if agentConcurrency != config.AgentConcurrencySerialQueue {
+		agentConcurrency = config.AgentConcurrencyParallel
+	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Executor{
-		maxConcurrent: maxConcurrent,
-		llmRegistry:   llmRegistry,
-		sandboxCfg:    sandboxCfg,
-		db:            db,
-		sem:           make(chan struct{}, maxConcurrent),
-		retryCount:    retryCount,
-		agentDefaults: agentDefaults,
-		defaultLoop:   defaultLoop,
-		mcpCfg:        mcpCfg,
-		rootCtx:       rootCtx,
-		rootCancel:    rootCancel,
-		running:       make(map[int64]*runningTask),
+		maxConcurrent:    maxConcurrent,
+		agentConcurrency: agentConcurrency,
+		llmRegistry:      llmRegistry,
+		sandboxCfg:       sandboxCfg,
+		db:               db,
+		sem:              make(chan struct{}, maxConcurrent),
+		retryCount:       retryCount,
+		agentDefaults:    agentDefaults,
+		defaultLoop:      defaultLoop,
+		mcpCfg:           mcpCfg,
+		rootCtx:          rootCtx,
+		rootCancel:       rootCancel,
+		running:          make(map[int64]*runningTask),
+		agentBusy:        make(map[int64]bool),
 	}
 }
 
@@ -182,14 +192,75 @@ func (e *Executor) Start(queue *TaskQueue) {
 	for i := 0; i < e.maxConcurrent; i++ {
 		go e.worker(queue)
 	}
-	log.Printf("[INFO] Executor started with %d workers", e.maxConcurrent)
+	log.Printf("[INFO] Executor started with %d workers (agent_concurrency=%s)", e.maxConcurrent, e.agentConcurrency)
 }
 
 func (e *Executor) worker(queue *TaskQueue) {
 	for task := range queue.Dequeue() {
+		if !e.tryAcquireAgentSlot(task) {
+			log.Printf("[INFO] Task %d deferred (agent_id=%d serial_queue busy); stays pending", task.ID, task.AgentID)
+			continue
+		}
 		e.sem <- struct{}{} // acquire
 		e.executeSafely(task)
 		<-e.sem // release
+		e.releaseAgentSlot(task.AgentID)
+		e.kickNextForAgent(queue, task.AgentID)
+	}
+}
+
+// tryAcquireAgentSlot claims the agent for serial_queue mode.
+// In parallel mode always returns true.
+func (e *Executor) tryAcquireAgentSlot(task *store.Task) bool {
+	if e.agentConcurrency != config.AgentConcurrencySerialQueue || task == nil {
+		return true
+	}
+	e.agentMu.Lock()
+	defer e.agentMu.Unlock()
+	if e.agentBusy[task.AgentID] {
+		return false
+	}
+	if e.db != nil {
+		busy, err := e.db.HasRunningTaskForAgent(task.AgentID, task.ID)
+		if err != nil {
+			log.Printf("[WARN] HasRunningTaskForAgent agent=%d: %v; deferring task %d", task.AgentID, err, task.ID)
+			return false
+		}
+		if busy {
+			return false
+		}
+	}
+	e.agentBusy[task.AgentID] = true
+	return true
+}
+
+func (e *Executor) releaseAgentSlot(agentID int64) {
+	if e.agentConcurrency != config.AgentConcurrencySerialQueue {
+		return
+	}
+	e.agentMu.Lock()
+	delete(e.agentBusy, agentID)
+	e.agentMu.Unlock()
+}
+
+// kickNextForAgent pushes the next pending task for this agent onto the queue channel.
+func (e *Executor) kickNextForAgent(queue *TaskQueue, agentID int64) {
+	if e.agentConcurrency != config.AgentConcurrencySerialQueue || e.db == nil || queue == nil {
+		return
+	}
+	next, err := e.db.NextPendingTaskForAgent(agentID)
+	if err != nil {
+		log.Printf("[WARN] NextPendingTaskForAgent agent=%d: %v", agentID, err)
+		return
+	}
+	if next == nil {
+		return
+	}
+	select {
+	case queue.ch <- next:
+		log.Printf("[INFO] serial_queue woke pending task %d for agent_id=%d", next.ID, agentID)
+	default:
+		// Scanner will pick it up; channel full is non-fatal.
 	}
 }
 
@@ -414,7 +485,8 @@ func (e *Executor) runTask(ctx context.Context, task *store.Task, agent *store.A
 }
 
 // writebackTargetID returns the Gitea issue/PR index to post comments on.
-// For review_pr with PRID set, comments go on the PR (Gitea uses issue API index).
+// review_pr prefers PRID so review lands on the PR thread even when IssueID is a linked issue.
+// Pure PR tasks may have IssueID=0 with PRID set — fall back to PRID for any task type.
 func writebackTargetID(task *store.Task) (targetID int, ok bool) {
 	if task == nil {
 		return 0, false
@@ -424,6 +496,9 @@ func writebackTargetID(task *store.Task) (targetID int, ok bool) {
 	}
 	if task.IssueID > 0 {
 		return task.IssueID, true
+	}
+	if task.PRID > 0 {
+		return task.PRID, true
 	}
 	return 0, false
 }

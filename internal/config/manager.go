@@ -189,6 +189,7 @@ func (m *ConfigManager) getActiveMap() map[string]interface{} {
 		"dispatcher.max_concurrent":                cfg.Dispatcher.MaxConcurrent,
 		"dispatcher.task_retry_count":              cfg.Dispatcher.TaskRetryCount,
 		"dispatcher.rate_limit_backoff":            cfg.Dispatcher.RateLimitBackoff,
+		"dispatcher.agent_concurrency":             cfg.Dispatcher.AgentConcurrency,
 		"llm.rate_limit_retries":                   cfg.LLM.RateLimitRetries,
 		"agents.defaults.provider":                 cfg.Agents.Defaults.Provider,
 		"agents.defaults.model":                    cfg.Agents.Defaults.Model,

@@ -125,6 +125,14 @@ func applyDefaults(cfg *Config) {
 		cfg.Dispatcher.TaskRetryCount = 1
 	}
 	cfg.Dispatcher.RetryCount = 0 // clear deprecated field after migration
+	switch cfg.Dispatcher.AgentConcurrency {
+	case "", AgentConcurrencyParallel:
+		cfg.Dispatcher.AgentConcurrency = AgentConcurrencyParallel
+	case AgentConcurrencySerialQueue:
+		// ok
+	default:
+		cfg.Dispatcher.AgentConcurrency = AgentConcurrencyParallel
+	}
 	if cfg.LLM.RateLimitRetries == 0 {
 		cfg.LLM.RateLimitRetries = 1
 	}

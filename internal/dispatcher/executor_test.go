@@ -48,6 +48,12 @@ func TestWritebackTargetID(t *testing.T) {
 			t.Fatalf("got id=%d ok=%v, want 2 true", id, ok)
 		}
 	})
+	t.Run("pure PR solve_comment falls back to PRID", func(t *testing.T) {
+		id, ok := writebackTargetID(&store.Task{TaskType: "solve_comment", IssueID: 0, PRID: 20})
+		if !ok || id != 20 {
+			t.Fatalf("got id=%d ok=%v, want 20 true", id, ok)
+		}
+	})
 	t.Run("no target when both zero", func(t *testing.T) {
 		_, ok := writebackTargetID(&store.Task{TaskType: "review_pr", IssueID: 0, PRID: 0})
 		if ok {
@@ -94,7 +100,7 @@ func TestHandleTaskPanicMarksTaskFailed(t *testing.T) {
 	}
 
 	var failedTask *store.Task
-	e := NewExecutor(1, 0, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
+	e := NewExecutor(1, 0, config.AgentConcurrencyParallel, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
 	e.SetOnFailed(func(t *store.Task) {
 		failedTask = t
 	})
@@ -138,7 +144,7 @@ func newWritebackExecutor(t *testing.T, serverURL string) (*Executor, *store.Tas
 	}
 
 	var completeCalls, failedCalls int32
-	e := NewExecutor(1, 0, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
+	e := NewExecutor(1, 0, config.AgentConcurrencyParallel, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
 	e.SetGiteaClientFactory(&fakeGiteaFactory{serverURL: serverURL}, func() config.DebugConfig { return config.DebugConfig{} }, nil)
 	e.SetOnComplete(func(*store.Task) { atomic.AddInt32(&completeCalls, 1) })
 	e.SetOnFailed(func(*store.Task) { atomic.AddInt32(&failedCalls, 1) })
@@ -275,7 +281,7 @@ func TestFormatPartialFailureComment(t *testing.T) {
 }
 
 func TestExecutorCancelByIssue(t *testing.T) {
-	e := NewExecutor(1, 0, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.SandboxConfig{}, config.MCPConfig{})
+	e := NewExecutor(1, 0, config.AgentConcurrencyParallel, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.SandboxConfig{}, config.MCPConfig{})
 	defer e.Shutdown()
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -305,5 +311,61 @@ func TestExecutorCancelByIssue(t *testing.T) {
 	}
 	if e.unregisterRunning(2) {
 		t.Fatal("task 2 should not be external")
+	}
+}
+
+func TestSerialQueueAgentSlot(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	agent := createTestAgent(t, db)
+
+	e := NewExecutor(2, 0, config.AgentConcurrencySerialQueue, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
+	defer e.Shutdown()
+
+	t1 := &store.Task{ID: 101, AgentID: agent.ID}
+	t2 := &store.Task{ID: 102, AgentID: agent.ID}
+
+	if !e.tryAcquireAgentSlot(t1) {
+		t.Fatal("first acquire should succeed")
+	}
+	if e.tryAcquireAgentSlot(t2) {
+		t.Fatal("second acquire for same agent should defer")
+	}
+	e.releaseAgentSlot(agent.ID)
+	if !e.tryAcquireAgentSlot(t2) {
+		t.Fatal("after release, acquire should succeed")
+	}
+}
+
+func TestSerialQueueDefersWhenDBRunning(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	agent := createTestAgent(t, db)
+
+	running := &store.Task{
+		AgentID: agent.ID, TaskType: "solve_issue", Status: store.StatusRunning,
+		Repo: "o/r", IssueID: 1, DeliveryID: "serial-run",
+	}
+	if err := db.CreateTask(running); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	e := NewExecutor(2, 0, config.AgentConcurrencySerialQueue, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.DefaultConfig(), config.DefaultMCPConfig())
+	defer e.Shutdown()
+
+	pending := &store.Task{ID: 999, AgentID: agent.ID}
+	if e.tryAcquireAgentSlot(pending) {
+		t.Fatal("should defer while another task is running in DB")
+	}
+}
+
+func TestParallelIgnoresAgentSlot(t *testing.T) {
+	e := NewExecutor(2, 0, config.AgentConcurrencyParallel, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), sandbox.SandboxConfig{}, config.MCPConfig{})
+	defer e.Shutdown()
+
+	t1 := &store.Task{ID: 1, AgentID: 7}
+	t2 := &store.Task{ID: 2, AgentID: 7}
+	if !e.tryAcquireAgentSlot(t1) || !e.tryAcquireAgentSlot(t2) {
+		t.Fatal("parallel mode must not serialize by agent")
 	}
 }

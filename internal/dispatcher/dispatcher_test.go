@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -217,6 +218,113 @@ func TestDispatcherDuplicateDelivery(t *testing.T) {
 	}
 
 	t.Logf("Duplicate delivery correctly rejected")
+}
+
+func TestPurePRCommentsUseDistinctEffectiveKeys(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	coder := &store.Agent{
+		Name: "coder", GiteaUsername: "coder-ds", GiteaToken: "tok",
+		Provider: "mock", Model: "m", Role: store.RoleCoder, Status: "active",
+		MaxOutputTokens: 1024, MaxInputTokens: 8192, Temperature: 0.3,
+	}
+	if err := db.CreateAgent(coder); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+
+	commented := make(map[int]int) // issue/PR number → comment posts
+	giteaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// POST /api/v1/repos/{owner}/{repo}/issues/{n}/comments
+		if r.Method == http.MethodPost {
+			var n int
+			if _, err := fmt.Sscanf(r.URL.Path, "/api/v1/repos/owner/repo/issues/%d/comments", &n); err == nil && n > 0 {
+				commented[n]++
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer giteaServer.Close()
+
+	d := NewDispatcher(db, &config.GiteaConfig{URL: giteaServer.URL}, &config.DispatcherConfig{
+		MaxConcurrent: 2, QueueSize: 10,
+	}, nil, nil, sandbox.DefaultConfig(), config.DefaultMCPConfig())
+
+	registry := agents.NewRegistry()
+	registry.Refresh(coder)
+	d.SetWorkflowComponents(
+		registry,
+		workflow.NewResolver(registry),
+		workflow.NewWorkflowManager(db),
+		workflow.NewL1Gate(db),
+		workflow.NewSessionService(db, ""),
+		nil, nil,
+	)
+
+	mkEvt := func(delivery string, prNum int) *webhook.WebhookEvent {
+		return &webhook.WebhookEvent{
+			DeliveryID: delivery,
+			Event:      "pull_request_comment",
+			Action:     "created",
+			Repo:       webhook.Repository{FullName: "owner/repo"},
+			PR:         &webhook.PullRequest{Number: prNum, Body: "no linked issue"},
+			Comment:    &webhook.Comment{Body: "@coder-ds please continue", User: webhook.User{Login: "human"}},
+			Sender:     webhook.User{Login: "human"},
+		}
+	}
+
+	if !d.HandleEvent(mkEvt("pure-pr-20", 20)) {
+		t.Fatal("HandleEvent PR#20 failed")
+	}
+	if !d.HandleEvent(mkEvt("pure-pr-21", 21)) {
+		t.Fatal("HandleEvent PR#21 should succeed (must not collide on issue_id=0)")
+	}
+
+	tasks, err := db.ListPendingTasks()
+	if err != nil {
+		t.Fatalf("ListPendingTasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 pending tasks, got %d", len(tasks))
+	}
+
+	byIssue := map[int]*store.Task{}
+	for _, task := range tasks {
+		byIssue[task.IssueID] = task
+		if task.PRID != task.IssueID {
+			t.Fatalf("pure PR task issue_id=%d pr_id=%d; want effective_key==pr_id", task.IssueID, task.PRID)
+		}
+	}
+	if byIssue[20] == nil || byIssue[21] == nil {
+		t.Fatalf("tasks keyed by PR numbers missing: %+v", byIssue)
+	}
+
+	s20, err := db.GetSessionByRepoIssueAgentRole("owner/repo", 20, coder.ID, store.RoleCoder)
+	if err != nil {
+		t.Fatalf("session 20: %v", err)
+	}
+	s21, err := db.GetSessionByRepoIssueAgentRole("owner/repo", 21, coder.ID, store.RoleCoder)
+	if err != nil {
+		t.Fatalf("session 21: %v", err)
+	}
+	if s20.ID == s21.ID {
+		t.Fatal("PR#20 and PR#21 must not share a session")
+	}
+	if byIssue[20].SessionID != s20.ID || byIssue[21].SessionID != s21.ID {
+		t.Fatalf("task session mismatch: t20=%s s20=%s t21=%s s21=%s",
+			byIssue[20].SessionID, s20.ID, byIssue[21].SessionID, s21.ID)
+	}
+
+	// Progress comments must land on each PR (not silent no-op on issue_id=0).
+	if commented[20] == 0 || commented[21] == 0 {
+		t.Fatalf("expected gate comments on PR 20 and 21, got %v", commented)
+	}
+
+	id, ok := writebackTargetID(byIssue[20])
+	if !ok || id != 20 {
+		t.Fatalf("writebackTargetID for pure PR#20 = %d ok=%v", id, ok)
+	}
 }
 
 func TestTaskQueuePersistence(t *testing.T) {

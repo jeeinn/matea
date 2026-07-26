@@ -86,6 +86,7 @@ func TestMentionResolveOnPRComment(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "solve_comment", result.TaskType)
 	assert.Equal(t, 20, result.PRID)
+	assert.Equal(t, 0, result.IssueID, "pure PR without Fixes #N uses logic_issue_id=0")
 }
 
 func TestMentionForceDevMode(t *testing.T) {
