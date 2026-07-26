@@ -16,8 +16,8 @@
 ```text
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review（已交付）
         │
-        ├─► 【下一步】逻辑 Issue 归一 + Agent 并发策略（串行可入队 / 或并行）
-        ├─► 【并行或随后】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
+        ├─► 逻辑 Issue 归一 + Agent 并发（本 PR 交付）
+        ├─► 【下一步】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
         └─► 更后：转阶段 unassign · 沙箱 · OpenCode A+ · LLM 可选
 ```
 
@@ -33,7 +33,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ---
 
-## 2. 逻辑 Issue 归一 + Agent 并发（下一步，优先于 / 可与可观测性并行）
+## 2. 逻辑 Issue 归一 + Agent 并发（本 PR 交付）
 
 来源：2026-07-26 实跑 — 同仓并行：PR#2 @coder（续作）与 Issue#3 @同一 coder；以及 review 挂 `issueID=1`、PR 评论 @ 挂 `issueID=2` 的键分裂。
 
@@ -41,12 +41,12 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 现状：Session / Workflow / in-flight 键为 `(repo, issue_id)`；PR 会话评论里 Gitea 的 `issue.number` = **PR 号**，而 `review_requested` 常解析为 **linked Issue**（如 `Fixes #1`）→ 账本与 Session 分裂。
 
-- [ ] **PR 评论 / PR 事件统一到逻辑 Issue**  
-  - 解析顺序：PR body `Fixes/Closes #N`（及现有 `resolveLinkedIssue`）→ 必要时 API 补全 → **`logic_issue_id=N`**，`pr_id=P` 单独保存。  
-  - Session / WorkflowContext / in-flight **一律用 `logic_issue_id`**。  
+- [x] **PR 评论 / PR 事件统一到逻辑 Issue**（`feat/logic-issue-normalize-and-agent-queue`）  
+  - `ResolveLogicIssueAndPR`：PR body / PR-as-issue body 的 `Fixes/Closes #N` → **`logic_issue_id=N`**，`pr_id=P`。  
+  - Session / WorkflowContext / in-flight **一律用 `effectiveIssueKey(logic, pr)`**（有 linked 用 logic；纯 PR 回退 `pr_id`）。  
   - 评论注入仍对 **PR number** 调 `IssueComments`（与逻辑键解耦）。  
-  - Issue 上 @ 与 PR 上 @ 应落到同一 coder Session（同一逻辑 Issue）。  
-  - 无 linked Issue 的纯 PR：约定特例键（如 `issue_id=0` + `pr_id`），单独文档化。
+  - Issue 上 @ 与 PR 上 @（同一 `Fixes #N`）落到同一逻辑 Issue。  
+  - 无 linked Issue 的纯 PR：Resolver 产出 `(0, P)`，下游 `effective_key=P`（避免 `issue_id=0` 碰撞 / 写回失败）。
 
 ### 2.2 Agent 并发策略（P1）— 可配置，禁止「直接拒绝」
 
@@ -59,16 +59,16 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | **parallel（并行）** | 保持现状：仅 Issue 级锁 | 多 Issue 可同时跑；接受共享 LLM/Gitea token 压力 |
 | **serial_queue（串行入队）** | 同 `agent_id` 同时最多 1 个 running；其余 **入队等待**，不丢弃、不评论拒绝 | 上一任务结束后自动开下一单 |
 
-- [ ] **配置项**（建议）：如 `dispatcher.agent_concurrency: parallel | serial_queue`（默认可先 `parallel`，文档说明串行更稳）。  
-- [ ] **`serial_queue` 实现**：Agent 级队列或「有 running 则保持 pending + 扫描器/完成回调唤醒」；进度可评论「已排队，当前执行 task #X」（可选，非拒绝）。  
-- [ ] **明确不做**：同 Agent 忙碌时直接 skip / 硬拒绝入队（体验差，与本次决策不符）。  
-- [ ] Session 键保持 `(repo, logic_issue_id, agent_id, role)`；**不为并发再拆 Session 维度**。
+- [x] **配置项**：`dispatcher.agent_concurrency: parallel | serial_queue`（默认 `parallel`）。  
+- [x] **`serial_queue` 实现**：有 running 则保持 pending；完成时 `kickNextForAgent` + 扫描器兜底；**不** skip/硬拒绝入队。  
+- [x] **明确不做**：同 Agent 忙碌时直接 skip / 硬拒绝入队。  
+- [x] Session 键保持 `(repo, effective_key, agent_id, role)`（effective_key = linked issue 或纯 PR 的 `pr_id`）；**不为并发再拆 Session 维度**。
 
 ### 2.3 相关跟进（本批可顺手或紧随）
 
 - [ ] **转阶段 Unassign 404**  
   analyze→coder 时 `DELETE .../issues/{n}/assignees` 在实测 Gitea 上 404；核对版本 API 或改实现，避免前一 Agent 残留在 assignees。  
-- [ ] 日志打印 `logic_issue_id` / `pr_id` / `session_id` / `agent_id`，便于并行场景排查。
+- [x] 日志打印 `logic_issue_id` / `pr_id` / `session_id` / `agent_id`，便于并行场景排查。
 
 ---
 
