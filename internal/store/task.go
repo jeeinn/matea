@@ -187,6 +187,36 @@ func (db *DB) ListPendingTasks() ([]*Task, error) {
 	return tasks, nil
 }
 
+// HasRunningTaskForAgent reports whether another task for agentID is currently running.
+// excludeTaskID (when > 0) is ignored — useful when checking before promoting a candidate.
+func (db *DB) HasRunningTaskForAgent(agentID, excludeTaskID int64) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM tasks WHERE agent_id=? AND status=? AND id!=?`,
+		agentID, StatusRunning, excludeTaskID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("has running task for agent: %w", err)
+	}
+	return n > 0, nil
+}
+
+// NextPendingTaskForAgent returns the highest-priority pending task for an agent, or nil.
+func (db *DB) NextPendingTaskForAgent(agentID int64) (*Task, error) {
+	var t Task
+	err := db.QueryRow(
+		fmt.Sprintf(`SELECT %s FROM tasks WHERE agent_id=? AND status=? ORDER BY priority DESC, created_at ASC LIMIT 1`, taskColumns),
+		agentID, StatusPending,
+	).Scan(taskScanFields(&t)...)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("next pending task for agent: %w", err)
+	}
+	return &t, nil
+}
+
 // GetTask returns a task by ID.
 func (db *DB) GetTask(id int64) (*Task, error) {
 	var t Task

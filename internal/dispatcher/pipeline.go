@@ -20,13 +20,26 @@ func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
 
 	// Step 1b: Check for /matea reset command in comments
 	if evt.Comment != nil && strings.Contains(evt.Comment.Body, "/matea reset") {
-		issueID := 0
-		if evt.Issue != nil {
-			issueID = evt.Issue.Number
+		logicIssue, prID := d.resolver.ResolveLogicIssueAndPR(evt)
+		repo := evt.Repo.FullName
+		if logicIssue > 0 {
+			log.Printf("[INFO] /matea reset for %s#%d (logic_issue=%d pr=%d)", repo, logicIssue, logicIssue, prID)
+			d.resetIssue(repo, logicIssue)
+			return true
 		}
-		if issueID > 0 {
-			log.Printf("[INFO] /matea reset command detected for %s#%d", evt.Repo.FullName, issueID)
-			d.resetIssue(evt.Repo.FullName, issueID)
+		if prID > 0 {
+			// Pure PR: effective key is prID (also clear legacy issue_id=0 if any).
+			key := effectiveIssueKey(0, prID)
+			log.Printf("[INFO] /matea reset for pure PR %s effective_key=%d (logic_issue=0 pr=%d)", repo, key, prID)
+			d.resetIssue(repo, key)
+			if key != 0 {
+				d.resetIssue(repo, 0) // legacy pure-PR rows before effectiveKey fix
+			}
+			return true
+		}
+		if evt.Issue != nil && evt.Issue.Number > 0 {
+			log.Printf("[INFO] /matea reset command detected for %s#%d", repo, evt.Issue.Number)
+			d.resetIssue(repo, evt.Issue.Number)
 			return true
 		}
 	}
@@ -52,12 +65,16 @@ func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
 	}
 
 	repo := evt.Repo.FullName
-	issueID := result.IssueID
+	logicIssueID := result.IssueID
+	prID := result.PRID
+	// Session / lock / workflow / task.IssueID / gate comments use effective key.
+	// Resolver may return logic_issue_id=0 for pure PRs; fall back to pr_id.
+	issueID := effectiveIssueKey(logicIssueID, prID)
 
 	// Handle lifecycle events (archive, done) — no agent required
 	if result.Lifecycle != "" {
-		log.Printf("[INFO] Lifecycle event: %s issueID=%d prID=%d merged=%v",
-			result.Lifecycle, result.IssueID, result.PRID, result.Merged)
+		log.Printf("[INFO] Lifecycle event: %s logic_issue_id=%d pr_id=%d merged=%v",
+			result.Lifecycle, logicIssueID, prID, result.Merged)
 		return d.handleLifecycleEvent(result, repo)
 	}
 
@@ -67,8 +84,8 @@ func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
 		return true
 	}
 
-	log.Printf("[INFO] Resolved: agent=%q role=%s taskType=%s issueID=%d prID=%d",
-		result.Agent.Name, result.Role, result.TaskType, result.IssueID, result.PRID)
+	log.Printf("[INFO] Resolved: agent=%q agent_id=%d role=%s taskType=%s logic_issue_id=%d pr_id=%d effective_key=%d",
+		result.Agent.Name, result.Agent.ID, result.Role, result.TaskType, logicIssueID, prID, issueID)
 
 	// Step 3: L1 gate check
 	if d.l1Gate != nil {
@@ -185,8 +202,8 @@ func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
 	task := &store.Task{
 		Event:      evt.Event,
 		Repo:       repo,
-		IssueID:    issueID,
-		PRID:       result.PRID,
+		IssueID:    issueID, // effective key (logic issue, or prID for pure PR)
+		PRID:       prID,
 		AgentID:    result.Agent.ID,
 		TaskType:   result.TaskType,
 		Context:    taskContext,
@@ -213,8 +230,8 @@ func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
 		return false
 	}
 
-	log.Printf("[INFO] Task %d enqueued: agent=%s role=%s type=%s on %s#%d",
-		task.ID, result.Agent.Name, result.Role, result.TaskType, repo, issueID)
+	log.Printf("[INFO] Task %d enqueued: agent_id=%d agent=%s role=%s type=%s logic_issue_id=%d pr_id=%d effective_key=%d session_id=%s",
+		task.ID, result.Agent.ID, result.Agent.Name, result.Role, result.TaskType, logicIssueID, prID, issueID, sessionID)
 
 	// Post progress comment
 	d.postGateComment(result.Agent, repo, issueID,

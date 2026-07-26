@@ -403,6 +403,43 @@ func TestTaskWithSessionAndRole(t *testing.T) {
 	assert.Equal(t, RoleCoder, got.Role)
 }
 
+func TestHasRunningTaskForAgentAndNextPending(t *testing.T) {
+	db := newTestDB(t)
+
+	agent := &Agent{Name: "a", GiteaUsername: "u", GiteaToken: "t", Status: "active"}
+	require.NoError(t, db.CreateAgent(agent))
+
+	busy, err := db.HasRunningTaskForAgent(agent.ID, 0)
+	require.NoError(t, err)
+	assert.False(t, busy)
+
+	running := &Task{
+		Event: "issues", Repo: "owner/repo", IssueID: 1, AgentID: agent.ID,
+		TaskType: "solve_issue", Status: StatusRunning, DeliveryID: "run-1",
+	}
+	require.NoError(t, db.CreateTask(running))
+	require.NoError(t, db.UpdateTaskStatus(running.ID, StatusRunning, "", ""))
+
+	busy, err = db.HasRunningTaskForAgent(agent.ID, 0)
+	require.NoError(t, err)
+	assert.True(t, busy)
+
+	busy, err = db.HasRunningTaskForAgent(agent.ID, running.ID)
+	require.NoError(t, err)
+	assert.False(t, busy, "exclude self")
+
+	pending := &Task{
+		Event: "issues", Repo: "owner/repo", IssueID: 2, AgentID: agent.ID,
+		TaskType: "solve_issue", Status: StatusPending, DeliveryID: "pend-1", Priority: 10,
+	}
+	require.NoError(t, db.CreateTask(pending))
+
+	next, err := db.NextPendingTaskForAgent(agent.ID)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	assert.Equal(t, pending.ID, next.ID)
+}
+
 func TestHasPendingOrRunningTask(t *testing.T) {
 	db := newTestDB(t)
 

@@ -66,9 +66,14 @@ func NewDispatcher(
 			agentDefaults.Timeout = config.DefaultAgentDefaults().Timeout
 		}
 	}
+	agentConcurrency := config.AgentConcurrencyParallel
+	if dispatcherCfg != nil && dispatcherCfg.AgentConcurrency != "" {
+		agentConcurrency = dispatcherCfg.AgentConcurrency
+	}
 	executor := NewExecutor(
 		dispatcherCfg.MaxConcurrent,
 		dispatcherCfg.TaskRetryCount,
+		agentConcurrency,
 		llmRegistry,
 		db,
 		agentDefaults,

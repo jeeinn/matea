@@ -364,3 +364,25 @@ func TestParseEventNoAssignee(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, evt.Assignee)
 }
+
+func TestIssueIsPullRequest(t *testing.T) {
+	payload := []byte(`{
+		"action": "created",
+		"repository": {"id": 1, "name": "repo", "full_name": "owner/repo"},
+		"issue": {
+			"id": 2, "number": 2, "title": "PR", "body": "Fixes #1", "state": "open",
+			"user": {"id": 1, "login": "admin"},
+			"html_url": "http://gitea/owner/repo/pulls/2",
+			"pull_request": {}
+		},
+		"comment": {"id": 1, "body": "@coder hi", "user": {"id": 1, "login": "human"}},
+		"sender": {"id": 1, "login": "human"}
+	}`)
+	evt, err := ParseEvent("issue_comment", "del-pr-comment", payload)
+	require.NoError(t, err)
+	require.NotNil(t, evt.Issue)
+	assert.True(t, evt.Issue.IsPullRequest())
+
+	plain := &Issue{Number: 3, HTMLURL: "http://gitea/owner/repo/issues/3"}
+	assert.False(t, plain.IsPullRequest())
+}

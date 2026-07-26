@@ -386,3 +386,72 @@ func TestResolvePRClosedStateClosedMergedTrue(t *testing.T) {
 	assert.Equal(t, 15, result.PRID)
 	assert.Equal(t, 8, result.IssueID)
 }
+
+func TestPRCommentUsesLinkedLogicIssue(t *testing.T) {
+	reg := setupRegistry()
+	resolver := NewResolver(reg)
+
+	// Real-world shape: issue_comment on a PR — issue.number is PR#, body has Fixes #1.
+	evt := &webhook.WebhookEvent{
+		Event:  "issue_comment",
+		Action: "created",
+		Repo:   webhook.Repository{FullName: "owner/repo"},
+		Issue: &webhook.Issue{
+			Number:      2,
+			Body:        "Fixes #1\n\nImplement feature",
+			HTMLURL:     "http://gitea/owner/repo/pulls/2",
+			PullRequest: []byte("{}"),
+		},
+		Comment: &webhook.Comment{Body: "@coder-ds please address review"},
+		Sender:  webhook.User{Login: "human"},
+	}
+	result := resolver.Resolve(evt)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.IssueID, "logic issue from Fixes #1")
+	assert.Equal(t, 2, result.PRID, "PR number preserved for PR APIs")
+	assert.Equal(t, "solve_comment", result.TaskType)
+}
+
+func TestPRCommentAndReviewShareLogicIssue(t *testing.T) {
+	reg := setupRegistry()
+	resolver := NewResolver(reg)
+
+	reviewEvt := buildPRReviewRequestedEvent([]string{"reviewer-gpt"})
+	reviewEvt.PR.Number = 2
+	reviewEvt.PR.Body = "Fixes #1"
+	review := resolver.Resolve(reviewEvt)
+	require.NotNil(t, review)
+
+	commentEvt := &webhook.WebhookEvent{
+		Event:   "pull_request_comment",
+		Action:  "created",
+		Repo:    webhook.Repository{FullName: "owner/repo"},
+		PR:      &webhook.PullRequest{Number: 2, Body: "Fixes #1"},
+		Comment: &webhook.Comment{Body: "@coder-ds continue"},
+		Sender:  webhook.User{Login: "human"},
+	}
+	comment := resolver.Resolve(commentEvt)
+	require.NotNil(t, comment)
+
+	assert.Equal(t, review.IssueID, comment.IssueID)
+	assert.Equal(t, 1, comment.IssueID)
+	assert.Equal(t, 2, comment.PRID)
+}
+
+func TestPurePRCommentIssueIDZero(t *testing.T) {
+	reg := setupRegistry()
+	resolver := NewResolver(reg)
+
+	evt := &webhook.WebhookEvent{
+		Event:   "pull_request_comment",
+		Action:  "created",
+		Repo:    webhook.Repository{FullName: "owner/repo"},
+		PR:      &webhook.PullRequest{Number: 20, Body: "no linked issue"},
+		Comment: &webhook.Comment{Body: "@coder-ds rename please"},
+		Sender:  webhook.User{Login: "reviewer"},
+	}
+	result := resolver.Resolve(evt)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.IssueID)
+	assert.Equal(t, 20, result.PRID)
+}

@@ -106,6 +106,7 @@ func commentFetchTarget(evt *webhook.WebhookEvent) (owner, repo string, issueOrP
 	owner, repo = parts[0], parts[1]
 
 	// Gitea stores PR conversation comments under the PR index via the issues API.
+	// Always fetch by PR number (not logic issue id) so review history stays on the PR thread.
 	if evt.PR != nil && evt.PR.Number > 0 {
 		return owner, repo, evt.PR.Number
 	}

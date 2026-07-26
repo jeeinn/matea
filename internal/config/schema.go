@@ -94,9 +94,20 @@ type DispatcherConfig struct {
 	QueueSize        int `yaml:"queue_size"`
 	RateLimitBackoff int `yaml:"rate_limit_backoff"` // seconds to wait on HTTP 429; 0 = disabled
 
+	// AgentConcurrency controls whether one agent may run multiple issues at once.
+	// "parallel" (default): only issue-level in-flight lock.
+	// "serial_queue": at most one running task per agent_id; others stay pending and wait.
+	AgentConcurrency string `yaml:"agent_concurrency"`
+
 	// Deprecated: use TaskRetryCount. Kept for YAML/DB migration only.
 	RetryCount int `yaml:"retry_count,omitempty"`
 }
+
+// Agent concurrency modes for DispatcherConfig.AgentConcurrency.
+const (
+	AgentConcurrencyParallel    = "parallel"
+	AgentConcurrencySerialQueue = "serial_queue"
+)
 
 type DatabaseConfig struct {
 	Path string `yaml:"path"`

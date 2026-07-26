@@ -17,6 +17,7 @@ var configKeys = []string{
 	"dispatcher.max_concurrent",
 	"dispatcher.task_retry_count",
 	"dispatcher.rate_limit_backoff",
+	"dispatcher.agent_concurrency",
 	"llm.rate_limit_retries",
 	"agents.defaults.provider",
 	"agents.defaults.model",
@@ -59,6 +60,13 @@ func parseConfigValue(key, value string) (interface{}, error) {
 			return nil, fmt.Errorf("not a number: %s", value)
 		}
 		return n, nil
+	case "dispatcher.agent_concurrency":
+		switch value {
+		case AgentConcurrencyParallel, AgentConcurrencySerialQueue:
+			return value, nil
+		default:
+			return nil, fmt.Errorf("invalid agent_concurrency %q (want parallel|serial_queue)", value)
+		}
 	case "agents.defaults.temperature":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil {
@@ -114,6 +122,8 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Dispatcher.TaskRetryCount
 	case "dispatcher.rate_limit_backoff":
 		return cfg.Dispatcher.RateLimitBackoff
+	case "dispatcher.agent_concurrency":
+		return cfg.Dispatcher.AgentConcurrency
 	case "llm.rate_limit_retries":
 		return cfg.LLM.RateLimitRetries
 	case "agents.defaults.provider":
@@ -190,6 +200,13 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 			return fmt.Errorf("not a number: %s", value)
 		}
 		cfg.Dispatcher.RateLimitBackoff = n
+	case "dispatcher.agent_concurrency":
+		switch value {
+		case AgentConcurrencyParallel, AgentConcurrencySerialQueue:
+			cfg.Dispatcher.AgentConcurrency = value
+		default:
+			return fmt.Errorf("invalid agent_concurrency %q (want parallel|serial_queue)", value)
+		}
 	case "llm.rate_limit_retries":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -306,6 +323,8 @@ func getConfigEntry(cfg *Config, key string) string {
 		return strconv.Itoa(cfg.Dispatcher.TaskRetryCount)
 	case "dispatcher.rate_limit_backoff":
 		return strconv.Itoa(cfg.Dispatcher.RateLimitBackoff)
+	case "dispatcher.agent_concurrency":
+		return cfg.Dispatcher.AgentConcurrency
 	case "llm.rate_limit_retries":
 		return strconv.Itoa(cfg.LLM.RateLimitRetries)
 	case "agents.defaults.provider":

@@ -63,7 +63,7 @@ func TestTruncateCommentBody(t *testing.T) {
 
 func TestCommentFetchTargetPrefersPR(t *testing.T) {
 	evt := &webhook.WebhookEvent{
-		Repo: webhook.Repository{FullName: "jeeinn/rust-study"},
+		Repo:  webhook.Repository{FullName: "jeeinn/rust-study"},
 		Issue: &webhook.Issue{Number: 2},
 		PR:    &webhook.PullRequest{Number: 2},
 	}
