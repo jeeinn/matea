@@ -57,6 +57,22 @@ func (r *Registry) GetByGiteaUsername(username string) *store.Agent {
 	return r.byUser[username]
 }
 
+// GiteaUsernamesByRole returns Gitea usernames of active agents with the given role.
+func (r *Registry) GiteaUsernamesByRole(role string) []string {
+	if r == nil || role == "" {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, a := range r.agents {
+		if a != nil && a.Role == role && a.GiteaUsername != "" {
+			out = append(out, a.GiteaUsername)
+		}
+	}
+	return out
+}
+
 // Refresh reloads a single agent into the registry.
 func (r *Registry) Refresh(agent *store.Agent) {
 	r.mu.Lock()

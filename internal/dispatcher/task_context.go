@@ -12,7 +12,18 @@ import (
 // buildTaskContext constructs the context string for the task from the event.
 // If the agent has a user_template, it renders it with the event data.
 // Otherwise, it falls back to the default context builder.
+// For write-path continuations (solve_comment), recent PR/issue comments —
+// especially review-agent feedback — are appended so the coder sees review
+// guidance even when the triggering comment only says "fix per review".
 func (d *Dispatcher) buildTaskContext(evt *webhook.WebhookEvent, agent *store.Agent, taskType string) string {
+	base := d.renderTaskContextBase(evt, agent, taskType)
+	if needsCommentHistory(taskType) {
+		base = d.appendCommentHistory(base, evt)
+	}
+	return base
+}
+
+func (d *Dispatcher) renderTaskContextBase(evt *webhook.WebhookEvent, agent *store.Agent, taskType string) string {
 	// Try to use agent's user_template first
 	if agent.UserTemplate != "" {
 		rendered, err := RenderTemplate(agent.UserTemplate, BuildTemplateData(evt))
@@ -37,8 +48,84 @@ func (d *Dispatcher) buildTaskContext(evt *webhook.WebhookEvent, agent *store.Ag
 		}
 	}
 
-	// Fallback to default context builder
 	return d.buildDefaultContext(evt)
+}
+
+func needsCommentHistory(taskType string) bool {
+	switch taskType {
+	case "solve_comment":
+		return true
+	default:
+		return false
+	}
+}
+
+// appendCommentHistory fetches recent issue/PR comments and appends them to context.
+// Failures are best-effort: the base context is still returned.
+func (d *Dispatcher) appendCommentHistory(base string, evt *webhook.WebhookEvent) string {
+	owner, repo, commentIssueID := commentFetchTarget(evt)
+	if owner == "" || repo == "" || commentIssueID <= 0 {
+		return base
+	}
+
+	client := d.GetAdminGiteaClient()
+	if client == nil {
+		return base
+	}
+
+	comments, err := client.IssueComments(owner, repo, commentIssueID)
+	if err != nil {
+		log.Printf("[WARN] Failed to fetch comments for %s/%s#%d: %v", owner, repo, commentIssueID, err)
+		return base
+	}
+	if len(comments) == 0 {
+		return base
+	}
+
+	prefer := d.reviewAgentUsernames()
+	selected := selectCommentsForContext(comments, prefer, commentHistoryLimit)
+	history := formatCommentHistory(selected, prefer)
+	if history == "" {
+		return base
+	}
+
+	log.Printf("[INFO] Injected %d recent comments into solve_comment context for %s/%s#%d",
+		len(selected), owner, repo, commentIssueID)
+	return base + history
+}
+
+func commentFetchTarget(evt *webhook.WebhookEvent) (owner, repo string, issueOrPR int) {
+	if evt == nil {
+		return "", "", 0
+	}
+	full := evt.Repo.FullName
+	parts := strings.SplitN(full, "/", 2)
+	if len(parts) != 2 {
+		return "", "", 0
+	}
+	owner, repo = parts[0], parts[1]
+
+	// Gitea stores PR conversation comments under the PR index via the issues API.
+	if evt.PR != nil && evt.PR.Number > 0 {
+		return owner, repo, evt.PR.Number
+	}
+	if evt.Issue != nil && evt.Issue.Number > 0 {
+		return owner, repo, evt.Issue.Number
+	}
+	return owner, repo, 0
+}
+
+func (d *Dispatcher) reviewAgentUsernames() map[string]bool {
+	out := make(map[string]bool)
+	if d == nil || d.registry == nil {
+		return out
+	}
+	for _, u := range d.registry.GiteaUsernamesByRole(store.RoleReview) {
+		if u != "" {
+			out[u] = true
+		}
+	}
+	return out
 }
 
 // buildDefaultContext builds the default context string without templates.

@@ -16,8 +16,8 @@
 ```text
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
         │
-        ├─► 【下一步】PR 续作注入 review / 评论历史
-        ├─► 【随后】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
+        ├─► PR 续作注入 review / 评论历史（进行中 / 本分支）
+        ├─► 【下一步】可观测性 WebUI（对话日志 → 审计日志 → local-only 高亮）
         └─► 更后：沙箱细项 · OpenCode A+ · LLM 可选 · 运维可选
 ```
 
@@ -27,9 +27,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（均已归档）
 
 来源：2026-07-24 实跑 [rust-study#2](http://182.92.129.124:3000/jeeinn/rust-study/pulls/2) — Request Reviewer 后在 PR 上 `@ai-coder 根据上面的 review 结果进行修改`，coder 只拿到触发评论正文，**未注入** ai-reviewer 的审查内容，续作 commit 与 review 建议无关。
 
-- [ ] **`solve_comment`（及同类写路径续作）注入 PR 评论 / review 历史**  
-  组装 `task.Context` / prompt 时，除触发评论外，拉取该 PR（`IssueComments`）近期评论，优先包含 review agent 的审查报告；截断策略可对齐 `InteractionRunner`（约最近 10 条）或按 token 预算裁剪。  
-  目标：用户只需 `@coder 按 review 修改`，模型仍能看到具体意见，避免跑偏改无关文件。
+- [x] **`solve_comment` 注入 PR 评论 / review 历史**（分支 `feat/pr-continue-inject-review-history`）  
+  `buildTaskContext` 在 `solve_comment` 时拉取 `IssueComments`（PR 优先），优先保留 review-role agent 评论，最近约 10 条；跳过「已开始处理」进度评论；单条正文上限 8k。  
+  目标：用户只需 `@coder 按 review 修改`，模型仍能看到具体意见。
 
 ---
 
