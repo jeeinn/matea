@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-07-27
+
+可观测性 WebUI 与写路径 / 工作流加固补丁：对话日志与审计日志可在 Web 查看，并合入逻辑 Issue 归一、Agent 串行队列与若干实跑修复。  
+推送本 tag 后由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 生成 **draft** Release；维护者在 GitHub 上核对后 Publish。
+
+### Added
+- **Agent 对话日志 WebUI**（#23）：`GET /api/tasks/{id}/conversation`；任务详情 /「对话」入口按 iteration 展示 role / content / tool_calls（需开启 `debug.conversation_log.enabled`）
+- **操作审计日志 WebUI**（#24）：`/logs` 页 + 侧边栏入口；消费 `GET /api/logs`；Agent 名、任务深链 `/tasks?task=`、多行 detail 展开、分页空页回退、窗口内关键字搜索
+- **逻辑 Issue 归一**（#22）：PR 评论/事件用 `Fixes/Closes #N` 作为 session/workflow 键；纯 PR 经 `effectiveIssueKey(pr_id)` 避免 `issue_id=0` 碰撞
+- **Agent 并发**（#22）：`dispatcher.agent_concurrency: parallel | serial_queue`（默认 parallel）；串行时同 agent 排队等待、不硬拒绝
+- **PR 续作注入 review 历史**（#20/#21）：`solve_comment` 拉取近期 PR/Issue 评论，优先 review-role
+
 ### Fixed
-- **SenseNova + DeepSeek 模型门禁误杀**：`sensenova` 内置目录补齐 `deepseek-v4-flash` / `deepseek-v4-pro`；API 发现或仅存 ID 的稀疏元数据按 model ID 从内置目录补全 `supports_tools`（E2E 常用 `sensenova`/`deepseek-v4-flash` 不再被 0.11.2 coder 门禁误拒）
-- **自发现未知模型误杀**：`/models` 仅返回 ID、且不在 builtin 时，不再把零值 `supports_tools=false` 当成「明确不支持」；门禁仅拦截已知 false（builtin 或用户填全的自定义元数据），与 `meta=nil` 不误杀策略一致；发现结果对未知 ID 乐观标记 `supports_tools=true`
+- **SenseNova + DeepSeek 模型门禁误杀**：`sensenova` 内置目录补齐 `deepseek-v4-flash` / `deepseek-v4-pro`；稀疏元数据按 model ID 补全 `supports_tools`（#17）
+- **自发现未知模型误杀**：`/models` 仅返回 ID 且不在 builtin 时，不再把零值 `supports_tools=false` 当明确不支持（#17）
+- **工作流重置**：重置时取消 in-flight 任务并释放 lock；系统默认不再误强制 `verify_commands` override（#18）
+- **写路径 / Agent 摩擦**（#19）：干净树先 push 再 CreatePR；失败闭环；shell 别名改写；Git identity；bootstrap `logging.path` 落盘等
 
 ## [0.11.2] - 2026-07-24
 
@@ -383,7 +397,8 @@ Matea 品牌首发：项目更名、Bootstrap 自配置、Release 恢复单二�
 - SQLite 存储 (WAL 模式)
 - YAML 配置 (环境变量展开)
 
-[Unreleased]: https://github.com/jeeinn/matea/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/jeeinn/matea/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/jeeinn/matea/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/jeeinn/matea/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/jeeinn/matea/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/jeeinn/matea/compare/v0.10.2...v0.11.0
