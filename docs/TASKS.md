@@ -17,8 +17,9 @@
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review（已交付）
         │
         ├─► 逻辑 Issue 归一 + Agent 并发（已合入）
-        ├─► 【进行中】可观测性 WebUI：Agent 对话日志
-        ├─► 随后：审计日志 WebUI · local-only 高亮 · 转阶段 unassign
+        ├─► 可观测性 WebUI：Agent 对话日志（已合入 #23）
+        ├─► 【进行中】审计日志 WebUI（`feat/webui-operation-audit-logs`）
+        ├─► 随后：local-only 高亮 · 转阶段 unassign
         └─► 更后：沙箱 · OpenCode A+ · LLM 可选
 ```
 
@@ -80,7 +81,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **Agent 对话日志查看（WebUI）**（`feat/webui-task-conversation-logs`）  
   `GET /api/tasks/{id}/conversation`；任务详情 /「对话」入口；按 iteration 折叠展示 role / content / tool_calls。  
   需开启 `debug.conversation_log.enabled` 才会写入（系统配置已有开关）。  
-- [ ] **（可选）操作审计日志 WebUI**（已有 `GET /api/logs`）  
+- [x] **操作审计日志 WebUI**（`feat/webui-operation-audit-logs`，合入前）  
+  新增 `/logs` 页面 + 侧边栏「审计日志」入口；消费已有 `GET /api/logs`（limit/offset 分页）。  
+  表格：ID / 时间 / Agent 名 / 任务深链 `/tasks?task=` / 动作 / 多行 `detail` 展开；分页空页回退；搜索拉取最近 500 条做客户端过滤。  
 - [ ] **（可选）WebUI 高亮未推送分支**
 
 ---
