@@ -23,6 +23,10 @@
           <el-icon><Link /></el-icon>
           <span>工作流</span>
         </el-menu-item>
+        <el-menu-item index="/logs">
+          <el-icon><Document /></el-icon>
+          <span>审计日志</span>
+        </el-menu-item>
         <el-menu-item index="/agents">
           <el-icon><User /></el-icon>
           <span>Agent 管理</span>
@@ -92,7 +96,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
-import { Monitor, User, List, Link, UserFilled, Tools } from '@element-plus/icons-vue'
+import { Monitor, User, List, Link, UserFilled, Tools, Document } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

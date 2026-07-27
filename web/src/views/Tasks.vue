@@ -175,12 +175,13 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+const route = useRoute()
 const router = useRouter()
 
 const tasks = ref([])
@@ -359,10 +360,38 @@ const goToWorkflow = () => {
   })
 }
 
-onMounted(() => {
-  loadTasks()
-  loadAgents()
+const openTaskFromQuery = async () => {
+  const raw = route.query.task
+  if (raw == null || raw === '') return
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  if (!Number.isFinite(id) || id <= 0) return
+  // Prefer list row when present; otherwise fetch by id.
+  const fromList = tasks.value.find((t) => t.id === id)
+  if (fromList) {
+    await viewTask(fromList, true)
+    return
+  }
+  try {
+    const res = await api.get(`/tasks/${id}`)
+    if (res?.task) {
+      await viewTask(res.task, true)
+    }
+  } catch {
+    ElMessage.warning(`任务 #${id} 不存在或无法加载`)
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadTasks(), loadAgents()])
+  await openTaskFromQuery()
 })
+
+watch(
+  () => route.query.task,
+  () => {
+    openTaskFromQuery()
+  }
+)
 </script>
 
 <style scoped>
