@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-07-31
+
+WebUI 任务页交互补丁：任务详情与 Agent 对话日志拆成独立对话框。  
+推送本 tag 后由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 生成 **draft** Release；维护者在 GitHub 上核对后 Publish。
+
+### Changed
+- **任务详情 / 对话分拆**（#25）：独立 `TaskConversation` 对话框承载多轮 Agent 日志（竞态安全加载、错误重试）；详情对话框专注元数据与 usage
+
 ## [0.11.3] - 2026-07-27
 
 可观测性 WebUI 与写路径 / 工作流加固补丁：对话日志与审计日志可在 Web 查看，并合入逻辑 Issue 归一、Agent 串行队列与若干实跑修复。  
@@ -397,7 +405,8 @@ Matea 品牌首发：项目更名、Bootstrap 自配置、Release 恢复单二�
 - SQLite 存储 (WAL 模式)
 - YAML 配置 (环境变量展开)
 
-[Unreleased]: https://github.com/jeeinn/matea/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/jeeinn/matea/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/jeeinn/matea/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/jeeinn/matea/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/jeeinn/matea/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/jeeinn/matea/compare/v0.11.0...v0.11.1

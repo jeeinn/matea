@@ -1,6 +1,6 @@
 # 任务清单
 
-> 更新：2026-07-27（v0.11.3）  
+> 更新：2026-07-31（v0.11.4）  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · OpenCode 可选 · 不做多托管平台抽象  
 > 决策：[archived/20260714-coding-gateway-multi-vcs.md](archived/20260714-coding-gateway-multi-vcs.md)  
 > 已归档交付记录：  
@@ -17,7 +17,7 @@
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review（已交付）
         │
         ├─► 逻辑 Issue 归一 + Agent 并发（已合入 #22 · v0.11.3）
-        ├─► 可观测性 WebUI：对话日志 #23 · 审计日志 #24（v0.11.3）
+        ├─► 可观测性 WebUI：对话日志 #23 · 审计日志 #24（v0.11.3）· 详情/对话分拆 #25（v0.11.4）
         ├─► 【下一步】local-only 高亮 · 转阶段 Unassign 404
         └─► 更后：沙箱 · OpenCode A+ · LLM 可选
 ```
@@ -73,13 +73,15 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ---
 
-## 3. 可观测性 / WebUI（v0.11.3 已交付对话 + 审计；下一步 local-only）
+## 3. 可观测性 / WebUI（对话 + 审计已交付；v0.11.4 详情/对话分拆；下一步 local-only）
 
 > **系统日志说明（现状，非待办）**：运行日志走 stdout + 可选文件（bootstrap 已默认 `logging.path: "./data"` → `./data/matea.log`），**不入库**。入库的是 `operation_logs` 与开启调试后的 `task_conversation_logs`。
 
 - [x] **Agent 对话日志查看（WebUI）**（#23 · v0.11.3）  
   `GET /api/tasks/{id}/conversation`；任务详情 /「对话」入口；按 iteration 折叠展示 role / content / tool_calls。  
   需开启 `debug.conversation_log.enabled` 才会写入（系统配置已有开关）。  
+- [x] **任务详情与对话分拆**（#25 · v0.11.4）  
+  独立 `TaskConversation` 对话框（竞态安全加载、错误重试）；详情对话框专注元数据与 usage。  
 - [x] **操作审计日志 WebUI**（#24 · v0.11.3）  
   `/logs` 页面 + 侧边栏「审计日志」；消费 `GET /api/logs`；Agent 名、任务深链 `/tasks?task=`、多行 detail 展开；分页空页回退；搜索窗口 500 条客户端过滤。  
 - [ ] **（可选）WebUI 高亮未推送分支**
