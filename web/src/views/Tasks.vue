@@ -53,10 +53,10 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200">
+        <el-table-column label="操作" width="220">
           <template #default="{ row }">
-            <el-button size="small" type="primary" link @click="viewTask(row)">详情</el-button>
-            <el-button size="small" type="primary" link @click="viewTask(row, true)">对话</el-button>
+            <el-button size="small" type="primary" link @click="viewTaskDetail(row)">详情</el-button>
+            <el-button size="small" type="success" link @click="viewConversation(row)">对话</el-button>
             <el-button
               v-if="row.status === 'pending' || row.status === 'running' || row.status === 'partial'"
               size="small"
@@ -81,22 +81,28 @@
       </div>
     </el-card>
 
-    <!-- Task Detail Dialog -->
-    <el-dialog v-model="showDetail" title="任务详情" width="860px" :close-on-click-modal="false">
+    <!-- Task Detail Dialog - 仅显示基本信息、结果、用量统计 -->
+    <el-dialog v-model="showDetail" title="任务详情" width="800px" :close-on-click-modal="false">
       <el-descriptions :column="2" border>
         <el-descriptions-item label="ID">{{ selectedTask?.id }}</el-descriptions-item>
-        <el-descriptions-item label="类型">{{ selectedTask?.task_type }}</el-descriptions-item>
-        <el-descriptions-item label="仓库">{{ selectedTask?.repo }}</el-descriptions-item>
-        <el-descriptions-item label="Issue">{{ selectedTask?.issue_id }}</el-descriptions-item>
+        <el-descriptions-item label="类型">
+          <el-tag size="small" type="info">{{ selectedTask?.task_type }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="Agent">
+          {{ agentMap[selectedTask?.agent_id] || selectedTask?.agent_id }}
+        </el-descriptions-item>
         <el-descriptions-item label="状态">
           <el-tag :type="getStatusType(selectedTask?.status)">{{ selectedTask?.status }}</el-tag>
         </el-descriptions-item>
+        <el-descriptions-item label="仓库">{{ selectedTask?.repo }}</el-descriptions-item>
+        <el-descriptions-item label="Issue">{{ selectedTask?.issue_id }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ formatDate(selectedTask?.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="完成时间">{{ formatDate(selectedTask?.finished_at) }}</el-descriptions-item>
       </el-descriptions>
 
       <div v-if="selectedTask?.result" class="task-result">
         <h4>执行结果</h4>
-        <el-input type="textarea" :model-value="selectedTask.result" :rows="10" readonly />
+        <el-input type="textarea" :model-value="selectedTask.result" :rows="12" readonly />
       </div>
 
       <div v-if="selectedTask?.error" class="task-error">
@@ -125,61 +131,49 @@
         </el-descriptions>
       </div>
 
-      <div ref="conversationSection" class="task-conversation">
-        <div class="conversation-header">
-          <h4>Agent 对话日志</h4>
-          <el-tag v-if="conversationCount > 0" size="small" type="info">{{ conversationCount }} 条</el-tag>
-        </div>
-        <div v-loading="conversationLoading">
-          <el-alert
-            v-if="!conversationLoading && conversationMessages.length === 0"
-            type="info"
-            :closable="false"
-            show-icon
-            title="暂无对话日志"
-            description="请在「系统配置」开启 debug.conversation_log.enabled 后重新跑任务；仅多轮 Agent Loop（如 solve_issue / solve_comment）会写入。"
-          />
-          <el-collapse v-else v-model="openIterations">
-            <el-collapse-item
-              v-for="group in conversationByIteration"
-              :key="group.iteration"
-              :name="String(group.iteration)"
-              :title="`第 ${group.iteration} 轮（${group.messages.length} 条消息）`"
+      <template #footer>
+        <div class="dialog-footer">
+          <div class="footer-left">
+            <el-button
+              v-if="selectedTask?.repo && selectedTask?.issue_id"
+              type="primary"
+              link
+              @click="goToWorkflow"
             >
-              <div
-                v-for="msg in group.messages"
-                :key="msg.id"
-                class="conv-msg"
-              >
-                <div class="conv-msg-meta">
-                  <el-tag size="small" :type="roleTagType(msg.role)">{{ msg.role }}</el-tag>
-                  <span v-if="msg.tool_call_id" class="conv-meta-extra">tool_call_id={{ msg.tool_call_id }}</span>
-                  <span class="conv-meta-extra">seq={{ msg.seq }}</span>
-                </div>
-                <pre v-if="msg.content" class="conv-content">{{ msg.content }}</pre>
-                <div v-if="msg.tool_calls" class="conv-tools">
-                  <div class="conv-tools-label">tool_calls</div>
-                  <pre class="conv-content">{{ formatToolCalls(msg.tool_calls) }}</pre>
-                </div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
+              <el-icon><Connection /></el-icon>
+              查看工作流详情
+            </el-button>
+          </div>
+          <div class="footer-right">
+            <el-button
+              v-if="conversationCount > 0"
+              type="success"
+              @click="openConversationFromDetail"
+            >
+              <el-icon><ChatDotRound /></el-icon>
+              查看对话 ({{ conversationCount }})
+            </el-button>
+            <el-button @click="showDetail = false">关闭</el-button>
+          </div>
         </div>
-      </div>
-
-      <div v-if="selectedTask?.repo && selectedTask?.issue_id" class="task-workflow">
-        <el-button type="primary" link @click="goToWorkflow">查看工作流详情</el-button>
-      </div>
+      </template>
     </el-dialog>
+
+    <!-- Task Conversation Dialog - 独立的多轮对话弹窗 -->
+    <TaskConversation
+      v-model="showConversation"
+      :task="selectedTask"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, ChatDotRound, Connection } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import TaskConversation from '../components/TaskConversation.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -187,13 +181,10 @@ const router = useRouter()
 const tasks = ref([])
 const agents = ref([])
 const showDetail = ref(false)
+const showConversation = ref(false)
 const selectedTask = ref(null)
 const taskUsage = ref(null)
-const conversationMessages = ref([])
 const conversationCount = ref(0)
-const conversationLoading = ref(false)
-const openIterations = ref([])
-const conversationSection = ref(null)
 const loading = ref(false)
 const resettingId = ref(null)
 const total = ref(0)
@@ -213,18 +204,6 @@ const agentMap = computed(() => {
 })
 
 const taskTypes = ref(['analyze_issue', 'review_pr', 'reply_comment', 'solve_issue', 'fix_bug', 'solve_comment', 'trigger'])
-
-const conversationByIteration = computed(() => {
-  const map = new Map()
-  for (const msg of conversationMessages.value) {
-    const iter = msg.iteration ?? 0
-    if (!map.has(iter)) map.set(iter, [])
-    map.get(iter).push(msg)
-  }
-  return [...map.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([iteration, messages]) => ({ iteration, messages }))
-})
 
 const loadTasks = async () => {
   loading.value = true
@@ -269,60 +248,6 @@ const loadAgents = async () => {
   agents.value = await api.get('/agents') || []
 }
 
-const roleTagType = (role) => {
-  const types = { system: 'info', user: '', assistant: 'success', tool: 'warning' }
-  return types[role] || 'info'
-}
-
-const formatToolCalls = (raw) => {
-  if (!raw) return ''
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
-}
-
-const loadConversation = async (taskId) => {
-  conversationLoading.value = true
-  conversationMessages.value = []
-  try {
-    const res = await api.get(`/tasks/${taskId}/conversation`)
-    conversationMessages.value = res?.messages || []
-    conversationCount.value = res?.count || conversationMessages.value.length
-    openIterations.value = conversationByIteration.value.map((g) => String(g.iteration))
-  } catch {
-    conversationMessages.value = []
-    conversationCount.value = 0
-  } finally {
-    conversationLoading.value = false
-  }
-}
-
-const viewTask = async (task, scrollToConversation = false) => {
-  showDetail.value = true
-  selectedTask.value = task
-  taskUsage.value = null
-  conversationMessages.value = []
-  conversationCount.value = 0
-  openIterations.value = []
-  try {
-    const res = await api.get(`/tasks/${task.id}`)
-    if (res?.task) {
-      selectedTask.value = res.task
-      taskUsage.value = res.usage || null
-      conversationCount.value = res.conversation_count || 0
-    }
-  } catch {
-    // 忽略错误，使用列表中的数据
-  }
-  await loadConversation(task.id)
-  if (scrollToConversation) {
-    await nextTick()
-    conversationSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-}
-
 const formatCost = (cost) => {
   if (!cost || cost <= 0) return '-'
   if (cost < 0.01) return cost.toFixed(6) + ' USD'
@@ -352,8 +277,58 @@ const resetTask = async (task) => {
   }
 }
 
+// 详情请求竞态保护：仅最新请求可回写 selectedTask
+let detailRequestId = 0
+
+const invalidateDetailRequest = () => {
+  detailRequestId++
+}
+
+// 查看详情（独立弹窗）
+const viewTaskDetail = async (task) => {
+  // 如果对话弹窗打开，关闭它避免双弹窗抢同一 selectedTask
+  if (showConversation.value) {
+    showConversation.value = false
+  }
+  const requestId = ++detailRequestId
+  showDetail.value = true
+  selectedTask.value = task
+  taskUsage.value = null
+  conversationCount.value = 0
+  try {
+    const res = await api.get(`/tasks/${task.id}`)
+    // 已切换任务 / 已关闭详情 / 已打开对话时，丢弃过期响应
+    if (requestId !== detailRequestId || !showDetail.value) return
+    if (res?.task) {
+      selectedTask.value = res.task
+      taskUsage.value = res.usage || null
+      conversationCount.value = res.conversation_count || 0
+    }
+  } catch {
+    // 忽略错误，使用列表中的数据
+  }
+}
+
+// 查看对话（独立弹窗）- 与详情互斥
+const viewConversation = (task) => {
+  // 关闭详情弹窗，避免双弹窗抢同一 selectedTask
+  showDetail.value = false
+  invalidateDetailRequest()
+  selectedTask.value = task
+  showConversation.value = true
+}
+
+// 从详情弹窗打开对话
+const openConversationFromDetail = () => {
+  showDetail.value = false
+  invalidateDetailRequest()
+  showConversation.value = true
+}
+
+// 跳转到工作流详情
 const goToWorkflow = () => {
   showDetail.value = false
+  invalidateDetailRequest()
   router.push({
     path: '/workflows',
     query: { repo: selectedTask.value.repo, issue: selectedTask.value.issue_id }
@@ -368,13 +343,13 @@ const openTaskFromQuery = async () => {
   // Prefer list row when present; otherwise fetch by id.
   const fromList = tasks.value.find((t) => t.id === id)
   if (fromList) {
-    await viewTask(fromList, true)
+    await viewTaskDetail(fromList)
     return
   }
   try {
     const res = await api.get(`/tasks/${id}`)
     if (res?.task) {
-      await viewTask(res.task, true)
+      await viewTaskDetail(res.task)
     }
   } catch {
     ElMessage.warning(`任务 #${id} 不存在或无法加载`)
@@ -427,69 +402,12 @@ watch(
 
 .task-result h4,
 .task-error h4,
-.task-usage h4,
-.task-conversation h4 {
+.task-usage h4 {
   margin-bottom: 10px;
 }
 
-.task-usage,
-.task-conversation {
+.task-usage {
   margin-top: 20px;
-}
-
-.conversation-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.conversation-header h4 {
-  margin: 0;
-}
-
-.conv-msg {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  background: #fafafa;
-}
-
-.conv-msg-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.conv-meta-extra {
-  font-size: 12px;
-  color: #909399;
-}
-
-.conv-content {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  max-height: 320px;
-  overflow: auto;
-  background: #fff;
-  border-radius: 4px;
-  padding: 8px;
-}
-
-.conv-tools {
-  margin-top: 8px;
-}
-
-.conv-tools-label {
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 4px;
 }
 
 .token-value {
@@ -500,5 +418,23 @@ watch(
 .cost-value {
   color: #f56c6c;
   font-weight: 600;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>
