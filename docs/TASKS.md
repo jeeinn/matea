@@ -34,8 +34,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 > 边界：**`role` 为闭集** `analyze|coder|review`（创建任何 Agent 三选一）；**Agent 实例数不限**——同一 role 可创建多个实例按仓库/技术栈特化（如 `matea-coder-go` / `matea-coder-fe`）；三个模板仅是开箱默认值，不是数量上限。
 
-- [ ] 1.1.1 明确 `role` 为 Agent 职责的唯一真相（现状已满足，仅补文档）  
+- [x] 1.1.1 明确 `role` 为 Agent 职责的唯一真相（现状已满足，仅补文档）  
   在 AGENTS.md / ARCHITECTURE.md 显式声明：`role` 为闭集 `analyze|coder|review`，同一 role 允许多 Agent 实例（按仓库/技术栈特化）；**不引入 capabilities 概念**（代码库中从不存在，引入别名是净负债）。无代码改动。
+  ✅ 已完成（提交 91251ef）：已在 ARCHITECTURE.md 和 README.md 中补充完整 role 定义
 
 - [ ] 1.1.2 改造现有 `applyRoleWizard` 向导为默认模板：`matea-analyst` / `matea-coder` / `matea-review`  
   现状：向导已预设 name + system_prompt + user_template（`web/src/views/Agents.vue`）。差距仅三点：命名 `code-*` → `matea-*`、补默认 backend（`builtin`）、配合 1.1.3 填 gitea_username。命名迁移需同步 README / AGENTS.md / E2E 示例与存量用户引导。  
