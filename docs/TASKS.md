@@ -85,8 +85,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [ ] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
   Phase 1 中 `hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误（尚无实现）；**`hub-opencode` 例外，保持可用**（见 1.2.5）。未知 backend 必须报错，不得静默回落 builtin。
 
-- [ ] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
+- [x] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
   与 `HubBackend` 接口对齐；**Phase 1 保持 OpenCode 可用**，使接口抽象从两个真实实现（builtin + opencode）反推；保持现有配置兼容或提供迁移说明。
+  ✅ 已完成（提交 f783e43）：OpenCodeHTTPBackend 同时实现 HubBackend（同步 Submit + 终态缓存 Poll + Abort 映射 Cancel）；既有 CodingBackend 路径零改动
 
 - [x] 1.2.6 backend 标识符迁移：`internal` → `builtin`、`opencode_http` → `hub-opencode`（决策 #13，源码侧统一，非仅 DB/YAML）  
   注意：`BackendTypeBuiltin = "builtin"` 常量**值已是 `builtin`**（schema.go:275），双轨根源是运行时默认名 / `InternalCodingBackend.Name()` / store 兜底仍写字面量 `"internal"`。本项把源码、配置、测试、DB、UI 全部收敛到 `builtin`/`hub-opencode`，使 1.1.2 直接写 `builtin` 无顺序依赖。
