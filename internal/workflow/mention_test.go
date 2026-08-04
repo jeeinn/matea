@@ -99,7 +99,7 @@ func TestMentionForceDevMode(t *testing.T) {
 		Repo:   webhook.Repository{FullName: "owner/repo"},
 		Issue:  &webhook.Issue{Number: 5},
 		Comment: &webhook.Comment{
-			Body: "@analyze-007 /dev 请直接实现",
+			Body: "/dev\n@analyze-007 请直接实现",
 			User: webhook.User{Login: "human"},
 		},
 		Sender: webhook.User{Login: "human"},
@@ -120,7 +120,7 @@ func TestMentionForceReplyMode(t *testing.T) {
 		Repo:   webhook.Repository{FullName: "owner/repo"},
 		Issue:  &webhook.Issue{Number: 5},
 		Comment: &webhook.Comment{
-			Body: "@coder-ds /reply 只回答问题",
+			Body: "/reply\n@coder-ds 只回答问题",
 			User: webhook.User{Login: "human"},
 		},
 		Sender: webhook.User{Login: "human"},

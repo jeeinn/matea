@@ -4,7 +4,6 @@ import (
 	"log"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/store"
@@ -41,6 +40,38 @@ var linkedIssuePattern = regexp.MustCompile(`(?i)(?:fix(?:es|ed)?|close[sd]?|res
 
 // mentionPattern matches @username in comment bodies.
 var mentionPattern = regexp.MustCompile(`@(\w[\w-]*)`)
+
+// slashCommandPattern matches /command at line start (ignoring code blocks).
+// Matches: /dev, /reply, /force at the beginning of a line.
+var slashCommandPattern = regexp.MustCompile(`(?m)^/(\w+)`)
+
+// hasSlashCommand checks if a slash command appears at line start, excluding code blocks.
+func hasSlashCommand(body, command string) bool {
+	// Strip code blocks first to avoid false positives
+	body = stripCodeBlocks(body)
+
+	matches := slashCommandPattern.FindAllStringSubmatch(body, -1)
+	for _, match := range matches {
+		if len(match) >= 2 && match[1] == command {
+			return true
+		}
+	}
+	return false
+}
+
+// stripCodeBlocks removes markdown code blocks (``` and `) from text.
+func stripCodeBlocks(text string) string {
+	// Remove triple-backtick blocks (greedy match anything between ```)
+	tripleBacktick := regexp.MustCompile("(?s)```.*?```")
+	text = tripleBacktick.ReplaceAllString(text, "")
+
+	// Remove inline code
+	inlineCode := regexp.MustCompile("`[^`]*`")
+	text = inlineCode.ReplaceAllString(text, "")
+
+	return text
+}
+
 
 // Resolve determines what to do with a webhook event.
 // Returns nil if the event should be ignored.
@@ -114,16 +145,15 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 	// Determine task type based on role
 	taskType := r.taskTypeForRole(role, evt)
 
-	issueID := 0
-	if evt.Issue != nil {
-		issueID = evt.Issue.Number
-	}
+	// Use ResolveLogicIssueAndPR to support PR context (same as comment path)
+	issueID, prID := r.ResolveLogicIssueAndPR(evt)
 
 	return &ResolveResult{
 		Agent:    agent,
 		TaskType: taskType,
 		Role:     role,
 		IssueID:  issueID,
+		PRID:     prID,
 	}
 }
 
@@ -298,9 +328,9 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 		return nil
 	}
 
-	// Check for force mode commands
-	forceDev := strings.Contains(body, "/dev")
-	forceReply := strings.Contains(body, "/reply")
+	// Check for force mode commands (line-start anchored, excluding code blocks)
+	forceDev := hasSlashCommand(body, "dev")
+	forceReply := hasSlashCommand(body, "reply")
 
 	// Pull agent into conversation via @mention
 	agent := r.findMentionedAgent(body)
@@ -316,8 +346,8 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 	// Determine task type based on role and force commands
 	taskType := r.commentTaskType(agent, forceDev, forceReply, evt)
 
-	// Detect /force for soft gate bypass
-	force := strings.Contains(body, "/force") && !forceDev && !forceReply
+	// Detect /force for soft gate bypass (line-start anchored, excluding code blocks)
+	force := hasSlashCommand(body, "force") && !forceDev && !forceReply
 
 	return &ResolveResult{
 		Agent:    agent,
