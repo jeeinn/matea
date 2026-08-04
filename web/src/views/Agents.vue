@@ -93,7 +93,7 @@
           </el-button>
         </el-form-item>
         <el-form-item label="Coding Backend">
-          <el-select v-model="form.backend" placeholder="选择后端" style="width: 100%">
+          <el-select v-model="form.backend" placeholder="选择后端" style="width: 100%" @change="onBackendChange">
             <el-option
               v-for="b in backends"
               :key="b.name"
@@ -102,7 +102,7 @@
             />
           </el-select>
           <div class="form-tip">
-            编码阶段的执行后端。builtin 为内置 AgentLoop，hub-opencode 为远程 OpenCode 服务
+            编码阶段的执行后端。builtin 为内置 AgentLoop，hub-opencode 为远程 OpenCode 服务。切换后端会清空下方后端专属配置。
           </div>
         </el-form-item>
         <el-form-item label="关联仓库">
@@ -112,7 +112,8 @@
           <div class="form-tip">自动将 Agent 添加为仓库协作者（用于创建 PR）。也可以在 Gitea 仓库设置 → 协作者中手动添加</div>
           <el-alert v-if="!form.repos || form.repos.length === 0" title="Agent 需要至少关联一个仓库才能获得协作者权限，用于创建 PR" type="warning" :closable="false" show-icon style="margin-top: 8px" />
         </el-form-item>
-        <el-form-item label="Provider">
+        <!-- builtin 后端：Provider / Model 来自系统 LLM 配置（llm.providers） -->
+        <el-form-item label="Provider" v-if="isBuiltinBackend">
           <el-col :span="11">
             <el-select
               v-model="form.provider"
@@ -188,12 +189,32 @@
           />
         </el-form-item>
 
+        <!-- hub-opencode 后端：仅覆盖提交到 OpenCode 的模型/Provider（服务端实际消费的键） -->
+        <template v-if="isHubOpenCode">
+          <el-alert type="info" :closable="false" style="margin-bottom: 12px">
+            <template #title>
+              连接配置（URL / 鉴权 / 工作区模式）在服务器端 agents.backends.&lt;后端名&gt; 中按命名后端统一设置，
+              此处仅可覆盖提交到 OpenCode 的模型与 Provider。
+            </template>
+          </el-alert>
+          <el-form-item label="OpenCode 模型">
+            <el-input v-model="form.backend_options.opencode_model" placeholder="覆盖 opencode 端 model（可选）" />
+          </el-form-item>
+          <el-form-item label="OpenCode Provider">
+            <el-input v-model="form.backend_options.opencode_provider" placeholder="覆盖 opencode 端 provider（可选）" />
+          </el-form-item>
+          <el-form-item label="OpenCode Agent">
+            <el-input v-model="form.backend_options.opencode_agent" placeholder="提示性：opencode agent 名（可选）" />
+          </el-form-item>
+        </template>
+
         <!-- Prompt -->
         <el-form-item label="从模板导入">
           <el-select v-model="selectedTemplate" placeholder="选择内置模板快速填充" @change="applyTemplate" clearable style="width: 100%">
             <el-option v-for="tmpl in builtinTemplates" :key="tmpl.name" :label="tmpl.name" :value="tmpl.name" />
           </el-select>
         </el-form-item>
+        <!-- System Prompt / User Template 为 Agent 级人设与指令，所有后端均显示 -->
         <el-form-item label="System Prompt">
           <el-input v-model="form.system_prompt" type="textarea" :rows="5" placeholder="Agent 的系统提示词" />
         </el-form-item>
@@ -201,6 +222,22 @@
         <!-- 折叠：高级配置 -->
         <el-collapse v-model="advancedOpen">
           <el-collapse-item title="高级配置" name="advanced">
+            <!-- hub-hermes 后端连接配置（Phase 2 支持；仅 hub-hermes 显示） -->
+            <template v-if="isHubHermes">
+              <el-divider content-position="left">Hermes 后端（Phase 2，未接入服务端，仅占位）</el-divider>
+              <el-form-item label="Hermes URL">
+                <el-input v-model="form.backend_options.url" placeholder="https://hermes.example.com" />
+              </el-form-item>
+              <el-form-item label="Skill">
+                <el-input v-model="form.backend_options.skill" placeholder="如 dev" />
+              </el-form-item>
+              <el-form-item label="API Key">
+                <el-input v-model="form.backend_options.api_key" type="password" show-password />
+              </el-form-item>
+              <el-form-item label="记忆键 (Memory Keys)">
+                <el-input v-model="form.backend_options.memory_keys" type="textarea" :rows="2" placeholder="逗号分隔，如 user:123,repo:owner/foo" />
+              </el-form-item>
+            </template>
             <el-form-item label="状态">
               <el-select v-model="form.status">
                 <el-option label="活跃" value="active" />
@@ -237,7 +274,7 @@
                 </template>
               </div>
             </el-form-item>
-            <el-form-item label="Temperature">
+            <el-form-item label="Temperature" v-if="isBuiltinBackend">
               <el-slider v-model="form.temperature" :min="0" :max="2" :step="0.1" show-input style="width: 100%" />
               <div v-if="selectedModelMeta?.default_params?.temperature !== undefined" class="form-tip">
                 模型默认 {{ selectedModelMeta.default_params.temperature }}
@@ -252,7 +289,7 @@
             </el-form-item>
           </el-collapse-item>
 
-          <el-collapse-item v-if="form.role === 'coder'" title="Agent Loop 配置" name="loop">
+          <el-collapse-item v-if="isBuiltinBackend && form.role === 'coder'" title="Agent Loop 配置" name="loop">
             <el-form-item label="最大迭代轮数">
               <el-input-number v-model="form.loop_config.max_iterations" :min="1" :max="100" :step="1" />
               <div class="form-tip">默认 20</div>
@@ -342,6 +379,21 @@ const modelSource = ref('')
 const modelError = ref('')
 const modelCatalog = ref({})
 
+// 当前选中后端的类型，来自服务端 _meta.backends 的 type 字段（builtin | hub-opencode | hub-hermes）。
+// 据此决定 Agent 编辑表单显示哪一组字段。
+const selectedBackendType = computed(() => {
+  const b = backends.value.find(x => x.name === form.value.backend)
+  return b?.type || 'builtin'
+})
+const isBuiltinBackend = computed(() => selectedBackendType.value === 'builtin')
+const isHubOpenCode = computed(() => selectedBackendType.value === 'hub-opencode')
+const isHubHermes = computed(() => selectedBackendType.value === 'hub-hermes')
+
+// 切换后端时清空后端专属配置：不同后端的 backend_options 键集不同，跨类型保留无意义。
+const onBackendChange = () => {
+  form.value.backend_options = {}
+}
+
 /** Normalize API/catalog model objects to always expose official id. */
 const normalizeModels = (list) => {
   if (!Array.isArray(list)) return []
@@ -380,6 +432,7 @@ const formatContextWindow = (n) => {
 const backendTypeLabel = (type) => {
   if (type === 'builtin') return '内置'
   if (type === 'hub-opencode') return 'OpenCode'
+  if (type === 'hub-hermes') return 'Hermes'
   return type
 }
 
@@ -577,7 +630,8 @@ const editAgent = async (agent) => {
   }
   form.value = {
     ...agent,
-    loop_config: loopConfig
+    loop_config: loopConfig,
+    backend_options: agent.backend_options || {}
   }
   selectedTemplate.value = ''
   showCreateDialog.value = true
@@ -594,6 +648,12 @@ const saveAgent = async () => {
   try {
     const payload = { ...form.value }
     payload.loop_config = { ...payload.loop_config }
+    // 仅 hub 后端需要 backend_options；builtin 省略以避免清空既有值
+    if (isBuiltinBackend.value) {
+      delete payload.backend_options
+    } else {
+      payload.backend_options = form.value.backend_options || {}
+    }
     if (payload.loop_config.verify_commands_override) {
       payload.loop_config.verify_commands = payload.loop_config.verify_commands_text
         ? payload.loop_config.verify_commands_text.split('\n').map(s => s.trim()).filter(Boolean)

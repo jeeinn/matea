@@ -134,6 +134,7 @@ export function useAgentDefaults() {
       user_template: '',
       status: 'active',
       repos: [],
+      backend_options: {},
       loop_config: lc
     }
   }
