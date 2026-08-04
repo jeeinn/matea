@@ -102,9 +102,11 @@ chmod +x matea-linux-amd64   # Linux / macOS
 
 ### 4. 验证工作流
 
-1. 在 Gitea 创建 Issue，Assign `analyze-agent` → 等待分析评论  
-2. Assign `coder-agent` → 等待 PR 创建  
-3. 在 PR 上 Request `review-agent` → 等待审查评论  
+1. 在 Gitea 创建 Issue，Assign `matea-analyst` → 等待分析评论  
+2. Assign `matea-coder` → 等待 PR 创建  
+3. 在 PR 上 Request `matea-review` → 等待审查评论  
+
+> **命名说明**：推荐使用 `matea-analyst` / `matea-coder` / `matea-review` 作为默认 Agent 名称。这避免了单独使用 `matea` 带来的"总入口"误解。如果你的现有 Agent 使用旧命名（如 `code-analyzer`），仍然可以正常工作，只需在文档示例中替换为你的实际 Agent 名称即可。
 
 详细联调清单见 [docs/archived/20260709-v2-gitea-integration-checklist.md](docs/archived/20260709-v2-gitea-integration-checklist.md)。
 
