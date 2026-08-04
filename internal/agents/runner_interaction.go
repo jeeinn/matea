@@ -25,6 +25,12 @@ func NewInteractionRunner(factory *RunnerFactory) *InteractionRunner {
 
 // Run executes the interaction task.
 func (r *InteractionRunner) Run(ctx context.Context, task *store.Task, agent *store.Agent) (*Result, error) {
+	// Hub dispatch branch (1.2.4): reserved hub-* / unknown backends fail
+	// loudly. Reply stays on the builtin LLM in Phase 1.
+	if err := r.factory.validateHubDispatch(agent); err != nil {
+		return nil, err
+	}
+
 	// Parse repo owner/name
 	parts := strings.SplitN(task.Repo, "/", 2)
 	if len(parts) != 2 {

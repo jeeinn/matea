@@ -60,6 +60,15 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 
 	// Phase 0: resolve backend + optional health probe BEFORE preparing the
 	// workspace. Sidecar-down must not leave session clones / branches behind.
+	//
+	// Hub dispatch branch (1.2.4): reserved hub-* backends (hub-hermes /
+	// hub-openclaw / hub-api) and unknown names fail loudly here; builtin and
+	// configured hub-opencode instances continue through the CodingBackend
+	// path below. Phase 2 will dispatch hub backends via HubBackend
+	// Submit/Poll with Handle persistence (1.2.1) instead.
+	if err := factory.validateHubDispatch(agentCfg); err != nil {
+		return nil, err
+	}
 	backend, err := factory.ResolveCodingBackend(agentCfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve coding backend: %w", err)
