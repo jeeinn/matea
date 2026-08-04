@@ -129,14 +129,17 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 1.3 触发入口整理：`internal/ingress/gitea`
 
-- [ ] 1.3.1 将 `internal/webhook` 事件解析逻辑迁到 `internal/ingress/gitea`  
+- [x] 1.3.1 将 `internal/webhook` 事件解析逻辑迁到 `internal/ingress/gitea`  
   统一输出 `Intent` 结构。
+  ✅ 已完成（提交 24dd3a1, 861f59c）：整包迁移（git mv 保留历史，消费方统一 giteaingress 别名）；Intent 成为 ingress 唯一输出，HandleEvent/回调全链接线
 
-- [ ] 1.3.2 `Intent` 结构预留 `Source` / `Channel` / `ThreadID` 字段  
+- [x] 1.3.2 `Intent` 结构预留 `Source` / `Channel` / `ThreadID` 字段  
   为 MCP/API/CLI 触发留扩展。
+  ✅ 已完成（提交 bf96d5b）：Source 常量集（gitea + 保留 mcp/api/cli）、Channel/ThreadID omitempty、JSON 契约测试
 
-- [ ] 1.3.3 不新增其他触发器实现  
+- [x] 1.3.3 不新增其他触发器实现  
   Phase 1 只聚焦 Gitea webhook；接口先设计好。
+  ✅ 已完成（无需代码）：确认 internal/ingress 仅 gitea 一个实现；Phase 2 触发器契约已由 Intent.Source/Channel/ThreadID 承载
 
 ### 1.4 LLM 配置边界 + UI 动态表单
 
