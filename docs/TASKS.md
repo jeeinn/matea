@@ -77,9 +77,10 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   覆盖全 task_type；预留 `MemoryKeys`、`Channel`、`ThreadID`。
   ✅ 已完成（提交 ede10da）：已定义全部交换类型（含 ToolAccessGrant、State、Handle）
 
-- [ ] 1.2.3 把现有 `internal/agent` 的 loop 封装为 `builtin` backend  
+- [x] 1.2.3 把现有 `internal/agent` 的 loop 封装为 `builtin` backend  
   不废弃 `internal/llm` 和内置 Agent Loop；`RunnerFactory` 通过 `backend` 名选择。  
   验收：封装后 `tests/integration/` 既有全部用例零修改通过。
+  ✅ 已完成（提交 fc0552b）：BuiltinHubBackend 实现 HubBackend（写任务复用 AgentLoop，其余单次补全）；integration 零修改通过
 
 - [ ] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
   Phase 1 中 `hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误（尚无实现）；**`hub-opencode` 例外，保持可用**（见 1.2.5）。未知 backend 必须报错，不得静默回落 builtin。
