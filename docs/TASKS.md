@@ -123,8 +123,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   验收：存量 `backend='internal'` 行经迁移 + 归一化后正确路由；全部现有测试零回退通过；`BackendTypeBuiltin` 值保持 `"builtin"`。
   ✅ 已完成（提交 64a8b42, 3a0f08e）：(a)-(f) 全部落地，全量测试零回退通过；commit_message.go:137 按排除要求未动
 
-- [ ] 1.2.7 Mock Hub 测试地基  
+- [x] 1.2.7 Mock Hub 测试地基  
   TestEnv 增加 Mock Hub（模拟正常返回 / 超时 / 502 / 鉴权失败 / 异步长任务）；接口定完立刻以其验证可测性，为 Phase 2 测试铺路。
+  ✅ 已完成（提交 c13addb）：MockHub 挂载 TestEnv；五场景 + 取消 + 未知任务共 7 个测试通过
 
 ### 1.3 触发入口整理：`internal/ingress/gitea`
 
