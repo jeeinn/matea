@@ -142,8 +142,16 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 		role = store.RoleAnalyze
 	}
 
-	// Determine task type based on role
-	taskType := r.taskTypeForRole(role, evt)
+	// Resolve task type from the (role, surface, intent) table.
+	// review+issue+assign has no mapping → task not created (previously it
+	// produced review_pr and was rejected later by the L1 gate; resolving
+	// to nil here is the same externally-visible outcome, one step earlier).
+	surface := DetermineSurface(evt)
+	taskType := ResolveTaskType(role, surface, IntentAssign, evt)
+	if taskType == "" {
+		log.Printf("[DEBUG] No task type mapping for role=%q surface=%q intent=%q, ignoring", role, surface, IntentAssign)
+		return nil
+	}
 
 	// Use ResolveLogicIssueAndPR to support PR context (same as comment path)
 	issueID, prID := r.ResolveLogicIssueAndPR(evt)
@@ -183,12 +191,18 @@ func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveRes
 	for _, reviewer := range evt.PR.RequestedReviewers {
 		agent := r.registry.GetByGiteaUsername(reviewer.Login)
 		if agent != nil && agent.Role == store.RoleReview {
+			// Resolve task type from the (role, surface, intent) table
+			taskType := ResolveTaskType(store.RoleReview, SurfacePR, IntentReviewRequested, evt)
+			if taskType == "" {
+				return nil
+			}
+
 			// Try to resolve linked issue from PR body
 			issueID := r.resolveLinkedIssue(evt)
 
 			return &ResolveResult{
 				Agent:    agent,
-				TaskType: "review_pr",
+				TaskType: taskType,
 				Role:     store.RoleReview,
 				IssueID:  issueID,
 				PRID:     evt.PR.Number,
@@ -213,28 +227,6 @@ func (r *Resolver) resolvePRClosed(evt *webhook.WebhookEvent) *ResolveResult {
 		PRID:      evt.PR.Number,
 		Lifecycle: "archive",
 		Merged:    merged,
-	}
-}
-
-// taskTypeForRole determines the task type based on agent role and event context.
-func (r *Resolver) taskTypeForRole(role string, evt *webhook.WebhookEvent) string {
-	switch role {
-	case store.RoleAnalyze:
-		return "analyze_issue"
-	case store.RoleCoder:
-		// Check for business label "bug" → fix_bug, otherwise solve_issue
-		if evt.Issue != nil {
-			for _, label := range evt.Issue.Labels {
-				if label.Name == "bug" {
-					return "fix_bug"
-				}
-			}
-		}
-		return "solve_issue"
-	case store.RoleReview:
-		return "review_pr"
-	default:
-		return "analyze_issue"
 	}
 }
 
@@ -343,8 +335,28 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 	// Session / Workflow keys use logic issue; PR APIs use prID.
 	issueID, prID := r.ResolveLogicIssueAndPR(evt)
 
-	// Determine task type based on role and force commands
-	taskType := r.commentTaskType(agent, forceDev, forceReply, evt)
+	// Derive intent: slash commands override plain mention (dev wins over reply,
+	// matching the previous commentTaskType precedence).
+	intent := IntentMention
+	if forceDev {
+		intent = IntentSlashDev
+	} else if forceReply {
+		intent = IntentSlashReply
+	}
+
+	// Resolve task type from the (role, surface, intent) table.
+	// Empty role falls back to analyze (previously the switch default returned
+	// reply_comment; analyze+mention maps to the same task type).
+	role := agent.Role
+	if role == "" {
+		role = store.RoleAnalyze
+	}
+	surface := DetermineSurface(evt)
+	taskType := ResolveTaskType(role, surface, intent, evt)
+	if taskType == "" {
+		log.Printf("[DEBUG] No task type mapping for role=%q surface=%q intent=%q, ignoring", role, surface, intent)
+		return nil
+	}
 
 	// Detect /force for soft gate bypass (line-start anchored, excluding code blocks)
 	force := hasSlashCommand(body, "force") && !forceDev && !forceReply
@@ -372,27 +384,4 @@ func (r *Resolver) findMentionedAgent(body string) *store.Agent {
 		}
 	}
 	return nil
-}
-
-// commentTaskType determines the task type for a comment-based continuation.
-func (r *Resolver) commentTaskType(agent *store.Agent, forceDev, forceReply bool, evt *webhook.WebhookEvent) string {
-	// Force modes override role-based logic
-	if forceDev {
-		return "solve_comment"
-	}
-	if forceReply {
-		return "reply_comment"
-	}
-
-	// Role-based routing
-	switch agent.Role {
-	case store.RoleAnalyze:
-		return "reply_comment" // Analyze is read-only
-	case store.RoleCoder:
-		return "solve_comment"
-	case store.RoleReview:
-		return "reply_comment" // Review discussion is read-only
-	default:
-		return "reply_comment"
-	}
 }

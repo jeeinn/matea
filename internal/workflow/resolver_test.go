@@ -106,6 +106,21 @@ func TestResolveAssignedUnknownUser(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestResolveAssignedReviewAgentToIssueIgnored(t *testing.T) {
+	// Explicit acceptance point from the 1.1.4a code review:
+	// assigning a review agent to a plain Issue must NOT produce review_pr
+	// (previously taskTypeForRole returned review_pr unconditionally and the
+	// task was rejected later by the L1 gate — same external outcome, but one
+	// step later). With the resolve table wired in, the event resolves to nil.
+	reg := setupRegistry()
+	resolver := NewResolver(reg)
+
+	evt := buildIssueAssignedEvent("reviewer-gpt", nil)
+	result := resolver.Resolve(evt)
+
+	assert.Nil(t, result, "review agent assigned to a plain Issue must not trigger a task")
+}
+
 func TestResolveAssignedFromIssueAssigneeField(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
