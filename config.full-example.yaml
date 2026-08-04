@@ -51,6 +51,7 @@ logging:
   path: "./data/logs"
 
 llm:
+  # 仅用于 builtin 后端的 Agent。hub-* 后端（如 hub-opencode）由 Hub 自行管理 LLM，不读取此处。
   providers:
     # DeepSeek（推荐，性价比高）
     # models 未设置 → 使用内置模型目录

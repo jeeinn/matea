@@ -208,6 +208,10 @@ func (b *BuiltinHubBackend) executeWrite(ctx context.Context, tc *TaskContext) (
 }
 
 // resolveProvider looks up the LLM provider named by the TaskContext.
+// resolveProvider resolves the LLM provider for the **builtin** backend from the
+// global llm.providers config (via the LLM registry). It is only ever called for
+// the builtin backend: hub-* backends manage their own LLM and must never reach
+// this path (see hub_dispatch.go).
 func (b *BuiltinHubBackend) resolveProvider(tc *TaskContext) (llm.Provider, error) {
 	if tc.Provider == "" {
 		return nil, fmt.Errorf("builtin backend: TaskContext.Provider is required")

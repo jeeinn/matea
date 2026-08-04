@@ -119,6 +119,8 @@ type LoggingConfig struct {
 }
 
 type LLMConfig struct {
+	// Providers 是 **builtin** 后端的 LLM 配置来源。
+	// hub-* 后端（如 hub-opencode）由 Hub 自身管理 LLM，不读取此处配置。
 	Providers        map[string]ProviderConfig `yaml:"providers"`
 	Defaults         LLMDefaultsConfig         `yaml:"defaults"`
 	RateLimitRetries int                       `yaml:"rate_limit_retries"` // retries after HTTP 429; 0 = no retry (still needs rate_limit_backoff > 0)

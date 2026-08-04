@@ -24,6 +24,8 @@ func (m *ConfigManager) resolveProviderModels(name string, pc ProviderConfig) ([
 // GetProviderModels returns the effective model list for a provider.
 // This is used by the Web UI for model selection dropdowns.
 // getProviderConfig returns the ProviderConfig from the active (merged) config.
+// NOTE: llm.providers is the LLM config for the **builtin** backend only; hub-*
+// backends resolve their own LLM and do not consult this map.
 func (m *ConfigManager) getProviderConfig(providerName string) (ProviderConfig, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
