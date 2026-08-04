@@ -82,8 +82,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   验收：封装后 `tests/integration/` 既有全部用例零修改通过。
   ✅ 已完成（提交 fc0552b）：BuiltinHubBackend 实现 HubBackend（写任务复用 AgentLoop，其余单次补全）；integration 零修改通过
 
-- [ ] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
+- [x] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
   Phase 1 中 `hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误（尚无实现）；**`hub-opencode` 例外，保持可用**（见 1.2.5）。未知 backend 必须报错，不得静默回落 builtin。
+  ✅ 已完成（提交 75d481c）：ResolveHubBackend + 注册表（builtin 常驻、hub-opencode 单例）；五入口统一校验；保留名/未知名显式报错
 
 - [x] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
   与 `HubBackend` 接口对齐；**Phase 1 保持 OpenCode 可用**，使接口抽象从两个真实实现（builtin + opencode）反推；保持现有配置兼容或提供迁移说明。
