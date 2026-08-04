@@ -1,6 +1,7 @@
 package gitea
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,4 +43,49 @@ func TestWrapEvent(t *testing.T) {
 	intent := WrapEvent(evt)
 	require.NotNil(t, intent)
 	assert.Same(t, evt, intent.Event)
+}
+
+// TestIntentSourceAndReservedFields verifies the 1.3.2 contract: every
+// ingress-produced Intent is stamped SourceGitea, and the Phase 2 routing
+// fields serialize only when populated.
+func TestIntentSourceAndReservedFields(t *testing.T) {
+	payload := []byte(`{
+		"action": "created",
+		"repository": {"id": 1, "name": "r", "full_name": "o/r", "owner": {"id": 1, "login": "o"}},
+		"issue": {"id": 1, "number": 1, "title": "t", "body": "b", "state": "open", "user": {"id": 1, "login": "o"}, "assignees": [], "labels": []},
+		"comment": {"id": 5, "body": "@matea-coder /dev", "user": {"id": 1, "login": "o"}},
+		"sender": {"id": 1, "login": "o"}
+	}`)
+
+	intent, err := ParseIntent("issue_comment", "delivery-src", payload)
+	require.NoError(t, err)
+	assert.Equal(t, SourceGitea, intent.Source)
+	assert.Empty(t, intent.Channel)
+	assert.Empty(t, intent.ThreadID)
+
+	// WrapEvent stamps the source too.
+	assert.Equal(t, SourceGitea, WrapEvent(&WebhookEvent{}).Source)
+
+	// JSON: source always present; empty routing fields omitted; the parsed
+	// payload itself never serializes (Gitea-specific).
+	data, err := json.Marshal(intent)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "gitea", raw["source"])
+	_, hasChannel := raw["channel"]
+	_, hasThread := raw["thread_id"]
+	_, hasEvent := raw["Event"]
+	assert.False(t, hasChannel, "empty channel should be omitted")
+	assert.False(t, hasThread, "empty thread_id should be omitted")
+	assert.False(t, hasEvent, "webhook payload must not serialize into Intent JSON")
+
+	// Populated routing fields round-trip (Phase 2 producers).
+	data, err = json.Marshal(&Intent{Source: SourceMCP, Channel: "webhook", ThreadID: "th-1"})
+	require.NoError(t, err)
+	var back Intent
+	require.NoError(t, json.Unmarshal(data, &back))
+	assert.Equal(t, SourceMCP, back.Source)
+	assert.Equal(t, "webhook", back.Channel)
+	assert.Equal(t, "th-1", back.ThreadID)
 }
