@@ -15,7 +15,7 @@ import (
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 
@@ -123,21 +123,21 @@ func TestDispatcherHandleEvent(t *testing.T) {
 	d.SetWorkflowComponents(registry, resolver, wfMgr, l1Gate, sessionSvc, nil, nil)
 
 	// Create test event (v2 uses assignee field)
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		DeliveryID: "test-delivery-001",
 		Event:      "issues",
 		Action:     "assigned",
-		Repo: webhook.Repository{
+		Repo: giteaingress.Repository{
 			FullName: "admin/test-repo",
 		},
-		Issue: &webhook.Issue{
+		Issue: &giteaingress.Issue{
 			Number: 1,
 			Title:  "Test Issue",
 			Body:   "This is a test issue",
-			User:   webhook.User{Login: "admin"},
+			User:   giteaingress.User{Login: "admin"},
 		},
-		Assignee: &webhook.User{Login: "ai-agent"},
-		Sender:   webhook.User{Login: "admin"},
+		Assignee: &giteaingress.User{Login: "ai-agent"},
+		Sender:   giteaingress.User{Login: "admin"},
 	}
 
 	// Test HandleEvent
@@ -193,18 +193,18 @@ func TestDispatcherDuplicateDelivery(t *testing.T) {
 	resolver := workflow.NewResolver(registry)
 	d.SetWorkflowComponents(registry, resolver, nil, nil, nil, nil, nil)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		DeliveryID: "test-delivery-dup",
 		Event:      "issues",
 		Action:     "assigned",
-		Repo:       webhook.Repository{FullName: "admin/test-repo"},
-		Issue: &webhook.Issue{
+		Repo:       giteaingress.Repository{FullName: "admin/test-repo"},
+		Issue: &giteaingress.Issue{
 			Number: 1,
 			Title:  "Test",
-			User:   webhook.User{Login: "admin"},
+			User:   giteaingress.User{Login: "admin"},
 		},
-		Assignee: &webhook.User{Login: "ai-agent"},
-		Sender:   webhook.User{Login: "admin"},
+		Assignee: &giteaingress.User{Login: "ai-agent"},
+		Sender:   giteaingress.User{Login: "admin"},
 	}
 
 	// First call should succeed
@@ -262,15 +262,15 @@ func TestPurePRCommentsUseDistinctEffectiveKeys(t *testing.T) {
 		nil, nil,
 	)
 
-	mkEvt := func(delivery string, prNum int) *webhook.WebhookEvent {
-		return &webhook.WebhookEvent{
+	mkEvt := func(delivery string, prNum int) *giteaingress.WebhookEvent {
+		return &giteaingress.WebhookEvent{
 			DeliveryID: delivery,
 			Event:      "pull_request_comment",
 			Action:     "created",
-			Repo:       webhook.Repository{FullName: "owner/repo"},
-			PR:         &webhook.PullRequest{Number: prNum, Body: "no linked issue"},
-			Comment:    &webhook.Comment{Body: "@coder-ds please continue", User: webhook.User{Login: "human"}},
-			Sender:     webhook.User{Login: "human"},
+			Repo:       giteaingress.Repository{FullName: "owner/repo"},
+			PR:         &giteaingress.PullRequest{Number: prNum, Body: "no linked issue"},
+			Comment:    &giteaingress.Comment{Body: "@coder-ds please continue", User: giteaingress.User{Login: "human"}},
+			Sender:     giteaingress.User{Login: "human"},
 		}
 	}
 

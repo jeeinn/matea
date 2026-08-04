@@ -13,7 +13,7 @@ import (
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 
@@ -240,10 +240,10 @@ func (d *Dispatcher) Start() error {
 }
 
 // HandleEvent processes a webhook event through the v2 pipeline.
-// This is the callback function passed to webhook.Handler.
+// This is the callback function passed to giteaingress.Handler.
 // Returns true for terminal outcomes (enqueued or intentionally skipped);
 // false for transient failures that should remain accepted for ReplayAccepted.
-func (d *Dispatcher) HandleEvent(evt *webhook.WebhookEvent) bool {
+func (d *Dispatcher) HandleEvent(evt *giteaingress.WebhookEvent) bool {
 	log.Printf("[INFO] Processing event: %s/%s repo=%s sender=%s",
 		evt.Event, evt.Action, evt.Repo.FullName, evt.Sender.Login)
 

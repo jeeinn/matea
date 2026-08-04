@@ -3,7 +3,7 @@ package dispatcher
 import (
 	"testing"
 
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 func TestRenderTemplateIssue(t *testing.T) {
@@ -12,11 +12,11 @@ func TestRenderTemplateIssue(t *testing.T) {
 内容: {{.Issue.Body}}`
 
 	data := &TemplateData{
-		Issue: &webhook.Issue{
+		Issue: &giteaingress.Issue{
 			Number: 42,
 			Title:  "Bug: 程序崩溃",
 			Body:   "点击按钮后程序崩溃",
-			User:   webhook.User{Login: "user1"},
+			User:   giteaingress.User{Login: "user1"},
 		},
 	}
 
@@ -39,11 +39,11 @@ func TestRenderTemplatePR(t *testing.T) {
 分支: {{.PR.Head.Ref}} → {{.PR.Base.Ref}}`
 
 	data := &TemplateData{
-		PR: &webhook.PullRequest{
+		PR: &giteaingress.PullRequest{
 			Number: 10,
 			Title:  "Add feature",
-			Head:   webhook.Branch{Ref: "feature"},
-			Base:   webhook.Branch{Ref: "main"},
+			Head:   giteaingress.Branch{Ref: "feature"},
+			Base:   giteaingress.Branch{Ref: "main"},
 		},
 	}
 
@@ -64,9 +64,9 @@ func TestRenderTemplateComment(t *testing.T) {
 内容: {{.Comment.Body}}`
 
 	data := &TemplateData{
-		Comment: &webhook.Comment{
+		Comment: &giteaingress.Comment{
 			Body: "这个 bug 需要修复",
-			User: webhook.User{Login: "reviewer"},
+			User: giteaingress.User{Login: "reviewer"},
 		},
 	}
 
@@ -103,17 +103,17 @@ func TestRenderTemplateInvalid(t *testing.T) {
 }
 
 func TestBuildTemplateData(t *testing.T) {
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issues",
 		Action: "assigned",
-		Repo: webhook.Repository{
+		Repo: giteaingress.Repository{
 			FullName: "owner/repo",
 		},
-		Issue: &webhook.Issue{
+		Issue: &giteaingress.Issue{
 			Number: 1,
 			Title:  "Test Issue",
 		},
-		Sender: webhook.User{Login: "user1"},
+		Sender: giteaingress.User{Login: "user1"},
 	}
 
 	data := BuildTemplateData(evt)
@@ -139,7 +139,7 @@ func TestRenderTemplateRepo(t *testing.T) {
 	tmpl := `仓库: {{.Repo.FullName}}`
 
 	data := &TemplateData{
-		Repo: &webhook.Repository{
+		Repo: &giteaingress.Repository{
 			FullName: "owner/repo",
 		},
 	}

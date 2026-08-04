@@ -7,7 +7,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // ResolveResult holds the resolution of a webhook event.
@@ -75,7 +75,7 @@ func stripCodeBlocks(text string) string {
 
 // Resolve determines what to do with a webhook event.
 // Returns nil if the event should be ignored.
-func (r *Resolver) Resolve(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) Resolve(evt *giteaingress.WebhookEvent) *ResolveResult {
 	switch evt.Event {
 	case "issues":
 		return r.resolveIssue(evt)
@@ -89,7 +89,7 @@ func (r *Resolver) Resolve(evt *webhook.WebhookEvent) *ResolveResult {
 }
 
 // resolveIssue handles issue events.
-func (r *Resolver) resolveIssue(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveIssue(evt *giteaingress.WebhookEvent) *ResolveResult {
 	switch evt.Action {
 	case "assigned":
 		return r.resolveAssigned(evt)
@@ -107,7 +107,7 @@ func (r *Resolver) resolveIssue(evt *webhook.WebhookEvent) *ResolveResult {
 }
 
 // resolveIssueClosed handles issues.closed events — archive sessions, set context to done.
-func (r *Resolver) resolveIssueClosed(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveIssueClosed(evt *giteaingress.WebhookEvent) *ResolveResult {
 	issueID := 0
 	if evt.Issue != nil {
 		issueID = evt.Issue.Number
@@ -120,7 +120,7 @@ func (r *Resolver) resolveIssueClosed(evt *webhook.WebhookEvent) *ResolveResult 
 
 // resolveAssigned handles issues.assigned events — pulls the assigned agent into the issue conversation.
 // Uses ONLY the single assignee from the webhook payload (not the full assignees list).
-func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveAssigned(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.Assignee == nil {
 		log.Printf("[DEBUG] issues.assigned event with no assignee field, ignoring")
 		return nil
@@ -166,7 +166,7 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 }
 
 // resolvePullRequest handles pull_request events.
-func (r *Resolver) resolvePullRequest(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolvePullRequest(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.PR == nil {
 		return nil
 	}
@@ -182,7 +182,7 @@ func (r *Resolver) resolvePullRequest(evt *webhook.WebhookEvent) *ResolveResult 
 }
 
 // resolveReviewRequested handles pull_request review_requested events — pulls the review agent into the PR conversation.
-func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveReviewRequested(evt *giteaingress.WebhookEvent) *ResolveResult {
 	// Find a review agent among requested reviewers
 	if evt.PR.RequestedReviewers == nil || len(evt.PR.RequestedReviewers) == 0 {
 		return nil
@@ -215,7 +215,7 @@ func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveRes
 
 // resolvePRClosed handles pull_request.closed events.
 // Merged PR → archive sessions; closed without merge → retain for pr_closed_retention.
-func (r *Resolver) resolvePRClosed(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolvePRClosed(evt *giteaingress.WebhookEvent) *ResolveResult {
 	// Gitea sends state="closed" with merged=true when a PR is merged.
 	// The state field is NEVER "merged" — that was the old bug.
 	merged := evt.PR != nil && evt.PR.Merged
@@ -232,7 +232,7 @@ func (r *Resolver) resolvePRClosed(evt *webhook.WebhookEvent) *ResolveResult {
 
 // resolveLinkedIssue extracts the linked issue number from PR / PR-as-issue body
 // (Fixes/Closes/Resolves #N). Returns 0 if none found.
-func (r *Resolver) resolveLinkedIssue(evt *webhook.WebhookEvent) int {
+func (r *Resolver) resolveLinkedIssue(evt *giteaingress.WebhookEvent) int {
 	for _, body := range linkedIssueBodies(evt) {
 		if n := extractLinkedIssue(body); n > 0 {
 			return n
@@ -241,7 +241,7 @@ func (r *Resolver) resolveLinkedIssue(evt *webhook.WebhookEvent) int {
 	return 0
 }
 
-func linkedIssueBodies(evt *webhook.WebhookEvent) []string {
+func linkedIssueBodies(evt *giteaingress.WebhookEvent) []string {
 	if evt == nil {
 		return nil
 	}
@@ -269,7 +269,7 @@ func extractLinkedIssue(body string) int {
 }
 
 // isPRConversation reports whether the event is about a pull request thread.
-func isPRConversation(evt *webhook.WebhookEvent) bool {
+func isPRConversation(evt *giteaingress.WebhookEvent) bool {
 	if evt == nil {
 		return false
 	}
@@ -286,7 +286,7 @@ func isPRConversation(evt *webhook.WebhookEvent) bool {
 // Pure PR with no linked issue: issueID=0, prID=P. Downstream must map this
 // via effectiveIssueKey (prID) for session/lock/workflow/writeback — do not
 // key storage on raw 0.
-func (r *Resolver) ResolveLogicIssueAndPR(evt *webhook.WebhookEvent) (issueID, prID int) {
+func (r *Resolver) ResolveLogicIssueAndPR(evt *giteaingress.WebhookEvent) (issueID, prID int) {
 	if isPRConversation(evt) {
 		if evt.PR != nil {
 			prID = evt.PR.Number
@@ -303,12 +303,12 @@ func (r *Resolver) ResolveLogicIssueAndPR(evt *webhook.WebhookEvent) (issueID, p
 }
 
 // IsAgentSender checks if the event sender is any active agent (to prevent self-trigger loops).
-func (r *Resolver) IsAgentSender(evt *webhook.WebhookEvent) bool {
+func (r *Resolver) IsAgentSender(evt *giteaingress.WebhookEvent) bool {
 	return r.registry.GetByGiteaUsername(evt.Sender.Login) != nil
 }
 
 // resolveComment handles issue_comment / pull_request_comment events — pulls @mentioned agent into the conversation.
-func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveComment(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.Comment == nil {
 		return nil
 	}

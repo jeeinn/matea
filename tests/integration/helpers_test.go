@@ -23,7 +23,7 @@ import (
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 
 	_ "modernc.org/sqlite"
@@ -101,7 +101,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	apiHandler.RegisterRoutes(mux)
 
 	// Create webhook handler
-	webhookHandler := webhook.NewHandler(&cfg.Gitea, db.DB, d.HandleEvent)
+	webhookHandler := giteaingress.NewHandler(&cfg.Gitea, db.DB, d.HandleEvent)
 	mux.Handle("POST /webhook/gitea", webhookHandler)
 
 	// Create test server

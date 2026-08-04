@@ -8,7 +8,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // setupRegistry creates a registry with test agents for all roles.
@@ -21,40 +21,40 @@ func setupRegistry() *agents.Registry {
 	return reg
 }
 
-func buildIssueAssignedEvent(assignee string, labels []string) *webhook.WebhookEvent {
-	var lbls []webhook.Label
+func buildIssueAssignedEvent(assignee string, labels []string) *giteaingress.WebhookEvent {
+	var lbls []giteaingress.Label
 	for i, l := range labels {
-		lbls = append(lbls, webhook.Label{ID: i + 1, Name: l})
+		lbls = append(lbls, giteaingress.Label{ID: i + 1, Name: l})
 	}
-	assigneeUser := &webhook.User{ID: 100, Login: assignee}
-	return &webhook.WebhookEvent{
+	assigneeUser := &giteaingress.User{ID: 100, Login: assignee}
+	return &giteaingress.WebhookEvent{
 		Event:    "issues",
 		Action:   "assigned",
 		Assignee: assigneeUser,
-		Repo:     webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{
+		Repo:     giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{
 			Number: 42,
 			Labels: lbls,
 		},
-		Sender: webhook.User{ID: 1, Login: "human"},
+		Sender: giteaingress.User{ID: 1, Login: "human"},
 	}
 }
 
-func buildPRReviewRequestedEvent(reviewers []string) *webhook.WebhookEvent {
-	var revs []webhook.User
+func buildPRReviewRequestedEvent(reviewers []string) *giteaingress.WebhookEvent {
+	var revs []giteaingress.User
 	for i, r := range reviewers {
-		revs = append(revs, webhook.User{ID: 200 + i, Login: r})
+		revs = append(revs, giteaingress.User{ID: 200 + i, Login: r})
 	}
-	return &webhook.WebhookEvent{
+	return &giteaingress.WebhookEvent{
 		Event:  "pull_request",
 		Action: "review_requested",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		PR: &webhook.PullRequest{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		PR: &giteaingress.PullRequest{
 			Number:             10,
 			Body:               "Fixes #5",
 			RequestedReviewers: revs,
 		},
-		Sender: webhook.User{ID: 1, Login: "coder-ds"},
+		Sender: giteaingress.User{ID: 1, Login: "coder-ds"},
 	}
 }
 
@@ -125,7 +125,7 @@ func TestResolveAssignedFromIssueAssigneeField(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt, err := webhook.ParseEvent("issues", "del-1", []byte(`{
+	evt, err := giteaingress.ParseEvent("issues", "del-1", []byte(`{
 		"action": "assigned",
 		"repository": {"id": 1, "name": "repo", "full_name": "owner/repo"},
 		"issue": {
@@ -146,12 +146,12 @@ func TestResolveAssignedNoAssigneeField(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issues",
 		Action: "assigned",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 1},
-		Sender: webhook.User{Login: "human"},
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 1},
+		Sender: giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	assert.Nil(t, result)
@@ -220,13 +220,13 @@ func TestResolveUnassignedIgnored(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:    "issues",
 		Action:   "unassigned",
-		Assignee: &webhook.User{Login: "analyze-007"},
-		Repo:     webhook.Repository{FullName: "owner/repo"},
-		Issue:    &webhook.Issue{Number: 1},
-		Sender:   webhook.User{Login: "human"},
+		Assignee: &giteaingress.User{Login: "analyze-007"},
+		Repo:     giteaingress.Repository{FullName: "owner/repo"},
+		Issue:    &giteaingress.Issue{Number: 1},
+		Sender:   giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	assert.Nil(t, result)
@@ -236,12 +236,12 @@ func TestResolveLabeledIgnored(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issues",
 		Action: "labeled",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 1},
-		Sender: webhook.User{Login: "human"},
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 1},
+		Sender: giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	assert.Nil(t, result)
@@ -251,13 +251,13 @@ func TestResolveCommentWithMention(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:   "issue_comment",
 		Action:  "created",
-		Repo:    webhook.Repository{FullName: "owner/repo"},
-		Issue:   &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{Body: "@coder-ds please fix this"},
-		Sender:  webhook.User{Login: "human"},
+		Repo:    giteaingress.Repository{FullName: "owner/repo"},
+		Issue:   &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{Body: "@coder-ds please fix this"},
+		Sender:  giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	require.NotNil(t, result)
@@ -269,13 +269,13 @@ func TestResolveCommentNoMention(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:   "issue_comment",
 		Action:  "created",
-		Repo:    webhook.Repository{FullName: "owner/repo"},
-		Issue:   &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{Body: "just a regular comment"},
-		Sender:  webhook.User{Login: "human"},
+		Repo:    giteaingress.Repository{FullName: "owner/repo"},
+		Issue:   &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{Body: "just a regular comment"},
+		Sender:  giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	assert.Nil(t, result) // No @mention → ignore
@@ -311,8 +311,8 @@ func TestIsAgentSender(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
-		Sender: webhook.User{Login: "coder-ds"},
+	evt := &giteaingress.WebhookEvent{
+		Sender: giteaingress.User{Login: "coder-ds"},
 	}
 	assert.True(t, resolver.IsAgentSender(evt))
 
@@ -334,18 +334,18 @@ func TestResolveMultipleReviewersFirstMatch(t *testing.T) {
 
 // --- P0: PR close / merge detection tests ---
 
-func buildPRClosedEvent(merged bool, prNumber int, body string) *webhook.WebhookEvent {
-	return &webhook.WebhookEvent{
+func buildPRClosedEvent(merged bool, prNumber int, body string) *giteaingress.WebhookEvent {
+	return &giteaingress.WebhookEvent{
 		Event:  "pull_request",
 		Action: "closed",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		PR: &webhook.PullRequest{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		PR: &giteaingress.PullRequest{
 			Number: prNumber,
 			State:  "closed",
 			Merged: merged,
 			Body:   body,
 		},
-		Sender: webhook.User{ID: 1, Login: "coder-ds"},
+		Sender: giteaingress.User{ID: 1, Login: "coder-ds"},
 	}
 }
 
@@ -382,17 +382,17 @@ func TestResolvePRClosedStateClosedMergedTrue(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "pull_request",
 		Action: "closed",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		PR: &webhook.PullRequest{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		PR: &giteaingress.PullRequest{
 			Number: 15,
 			State:  "closed", // Gitea sends "closed", never "merged"
 			Merged: true,     // This is the correct field
 			Body:   "Fixes #8",
 		},
-		Sender: webhook.User{ID: 1, Login: "coder-ds"},
+		Sender: giteaingress.User{ID: 1, Login: "coder-ds"},
 	}
 	result := resolver.Resolve(evt)
 
@@ -407,18 +407,18 @@ func TestPRCommentUsesLinkedLogicIssue(t *testing.T) {
 	resolver := NewResolver(reg)
 
 	// Real-world shape: issue_comment on a PR — issue.number is PR#, body has Fixes #1.
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{
 			Number:      2,
 			Body:        "Fixes #1\n\nImplement feature",
 			HTMLURL:     "http://gitea/owner/repo/pulls/2",
 			PullRequest: []byte("{}"),
 		},
-		Comment: &webhook.Comment{Body: "@coder-ds please address review"},
-		Sender:  webhook.User{Login: "human"},
+		Comment: &giteaingress.Comment{Body: "@coder-ds please address review"},
+		Sender:  giteaingress.User{Login: "human"},
 	}
 	result := resolver.Resolve(evt)
 	require.NotNil(t, result)
@@ -437,13 +437,13 @@ func TestPRCommentAndReviewShareLogicIssue(t *testing.T) {
 	review := resolver.Resolve(reviewEvt)
 	require.NotNil(t, review)
 
-	commentEvt := &webhook.WebhookEvent{
+	commentEvt := &giteaingress.WebhookEvent{
 		Event:   "pull_request_comment",
 		Action:  "created",
-		Repo:    webhook.Repository{FullName: "owner/repo"},
-		PR:      &webhook.PullRequest{Number: 2, Body: "Fixes #1"},
-		Comment: &webhook.Comment{Body: "@coder-ds continue"},
-		Sender:  webhook.User{Login: "human"},
+		Repo:    giteaingress.Repository{FullName: "owner/repo"},
+		PR:      &giteaingress.PullRequest{Number: 2, Body: "Fixes #1"},
+		Comment: &giteaingress.Comment{Body: "@coder-ds continue"},
+		Sender:  giteaingress.User{Login: "human"},
 	}
 	comment := resolver.Resolve(commentEvt)
 	require.NotNil(t, comment)
@@ -457,13 +457,13 @@ func TestPurePRCommentIssueIDZero(t *testing.T) {
 	reg := setupRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:   "pull_request_comment",
 		Action:  "created",
-		Repo:    webhook.Repository{FullName: "owner/repo"},
-		PR:      &webhook.PullRequest{Number: 20, Body: "no linked issue"},
-		Comment: &webhook.Comment{Body: "@coder-ds rename please"},
-		Sender:  webhook.User{Login: "reviewer"},
+		Repo:    giteaingress.Repository{FullName: "owner/repo"},
+		PR:      &giteaingress.PullRequest{Number: 20, Body: "no linked issue"},
+		Comment: &giteaingress.Comment{Body: "@coder-ds rename please"},
+		Sender:  giteaingress.User{Login: "reviewer"},
 	}
 	result := resolver.Resolve(evt)
 	require.NotNil(t, result)

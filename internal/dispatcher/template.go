@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"text/template"
 
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // TemplateData is the data available for prompt template rendering.
 type TemplateData struct {
-	Event   *webhook.WebhookEvent
-	Issue   *webhook.Issue
-	PR      *webhook.PullRequest
-	Comment *webhook.Comment
-	Repo    *webhook.Repository
-	Sender  *webhook.User
+	Event   *giteaingress.WebhookEvent
+	Issue   *giteaingress.Issue
+	PR      *giteaingress.PullRequest
+	Comment *giteaingress.Comment
+	Repo    *giteaingress.Repository
+	Sender  *giteaingress.User
 	Task    *TaskData
 }
 
@@ -45,7 +45,7 @@ func RenderTemplate(tmplStr string, data *TemplateData) (string, error) {
 }
 
 // BuildTemplateData creates TemplateData from a webhook event.
-func BuildTemplateData(evt *webhook.WebhookEvent) *TemplateData {
+func BuildTemplateData(evt *giteaingress.WebhookEvent) *TemplateData {
 	data := &TemplateData{
 		Event:  evt,
 		Repo:   &evt.Repo,

@@ -7,7 +7,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // GateResult is the outcome of a gate check.
@@ -30,7 +30,7 @@ func NewL1Gate(db *store.DB) *L1Gate {
 
 // CheckL1 runs all L1 structural checks.
 // Returns a GateResult. If Allowed is false, the task should not be enqueued.
-func (g *L1Gate) CheckL1(evt *webhook.WebhookEvent, role string, agent *store.Agent) GateResult {
+func (g *L1Gate) CheckL1(evt *giteaingress.WebhookEvent, role string, agent *store.Agent) GateResult {
 	switch role {
 	case store.RoleReview:
 		return g.checkReviewRequiresPR(evt)
@@ -41,7 +41,7 @@ func (g *L1Gate) CheckL1(evt *webhook.WebhookEvent, role string, agent *store.Ag
 }
 
 // checkReviewRequiresPR verifies that a review agent has an open PR to review.
-func (g *L1Gate) checkReviewRequiresPR(evt *webhook.WebhookEvent) GateResult {
+func (g *L1Gate) checkReviewRequiresPR(evt *giteaingress.WebhookEvent) GateResult {
 	// For PR events, the PR itself is available
 	if evt.PR != nil {
 		// PR exists — check if it's open

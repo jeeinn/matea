@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -135,10 +135,10 @@ func TestResolveTaskType_CoderRole(t *testing.T) {
 
 // TestResolveTaskType_CoderRole_BugLabel verifies bug label special case.
 func TestResolveTaskType_CoderRole_BugLabel(t *testing.T) {
-	evt := &webhook.WebhookEvent{
-		Issue: &webhook.Issue{
+	evt := &giteaingress.WebhookEvent{
+		Issue: &giteaingress.Issue{
 			Number: 1,
-			Labels: []webhook.Label{
+			Labels: []giteaingress.Label{
 				{Name: "bug"},
 			},
 		},
@@ -148,10 +148,10 @@ func TestResolveTaskType_CoderRole_BugLabel(t *testing.T) {
 	assert.Equal(t, "fix_bug", taskType, "Coder + assign + bug label should return fix_bug")
 
 	// Without bug label
-	evtNoBug := &webhook.WebhookEvent{
-		Issue: &webhook.Issue{
+	evtNoBug := &giteaingress.WebhookEvent{
+		Issue: &giteaingress.Issue{
 			Number: 1,
-			Labels: []webhook.Label{
+			Labels: []giteaingress.Label{
 				{Name: "enhancement"},
 			},
 		},
@@ -214,24 +214,24 @@ func TestDetermineSurface(t *testing.T) {
 	})
 
 	t.Run("IssueEvent", func(t *testing.T) {
-		evt := &webhook.WebhookEvent{
-			Issue: &webhook.Issue{Number: 1},
+		evt := &giteaingress.WebhookEvent{
+			Issue: &giteaingress.Issue{Number: 1},
 		}
 		surface := DetermineSurface(evt)
 		assert.Equal(t, SurfaceIssue, surface)
 	})
 
 	t.Run("PREvent", func(t *testing.T) {
-		evt := &webhook.WebhookEvent{
-			PR: &webhook.PullRequest{Number: 1},
+		evt := &giteaingress.WebhookEvent{
+			PR: &giteaingress.PullRequest{Number: 1},
 		}
 		surface := DetermineSurface(evt)
 		assert.Equal(t, SurfacePR, surface)
 	})
 
 	t.Run("IssueAsPR", func(t *testing.T) {
-		evt := &webhook.WebhookEvent{
-			Issue: &webhook.Issue{
+		evt := &giteaingress.WebhookEvent{
+			Issue: &giteaingress.Issue{
 				Number:      1,
 				PullRequest: []byte(`{}`), // IsPullRequest() will return true
 			},

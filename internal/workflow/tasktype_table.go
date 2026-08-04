@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // Surface represents the event surface (issue or PR).
@@ -64,7 +64,7 @@ var TaskTypeTable = map[ResolveKey]string{
 
 // ResolveTaskType looks up the task type from the resolve table.
 // Returns the task type, or empty string if no mapping exists.
-func ResolveTaskType(role string, surface Surface, intent Intent, evt *webhook.WebhookEvent) string {
+func ResolveTaskType(role string, surface Surface, intent Intent, evt *giteaingress.WebhookEvent) string {
 	key := ResolveKey{Role: role, Surface: surface, Intent: intent}
 	taskType, ok := TaskTypeTable[key]
 	if !ok {
@@ -86,7 +86,7 @@ func ResolveTaskType(role string, surface Surface, intent Intent, evt *webhook.W
 }
 
 // DetermineSurface determines the surface (issue or PR) from the event.
-func DetermineSurface(evt *webhook.WebhookEvent) Surface {
+func DetermineSurface(evt *giteaingress.WebhookEvent) Surface {
 	if evt == nil {
 		return SurfaceIssue
 	}
