@@ -67,13 +67,15 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 1.2 抽象：HubBackend 接口
 
-- [ ] 1.2.1 在 `internal/agents` 定义 `HubBackend` 接口  
+- [x] 1.2.1 在 `internal/agents` 定义 `HubBackend` 接口  
   `Name() / Submit(ctx, TaskContext) → Handle / Poll(ctx, Handle) / Cancel(ctx, Handle) / Capabilities() / HealthCheck()`。  
   **异步句柄形态**（决策 #12）：`Handle`（含 RemoteID + IdempotencyKey）随任务持久化到 SQLite，支持重启后恢复长任务、防重复提交。  
   ⚠️ **接口异步 ≠ 重启恢复**：避免仅做 Runner 内串行 `Poll` 至完成的「伪异步」——那仍是同步阻塞一个 Executor worker，进程重启即丢任务、Hub 侧留孤儿会话。真正的重启恢复须满足：(a) `Submit` 返回 `Handle` 后**立即落库**到任务队列；(b) `Executor` 启动时扫描「非终态 Handle」重新拾取轮询/重放（可复用现有崩溃重放能力）。本项为验收强制点。
+  ✅ 已完成（提交 ede10da）：已定义 HubBackend 接口与 HubBackendRegistry（未知 backend 显式报错）
 
-- [ ] 1.2.2 定义 `TaskContext` / `BackendResult` / `GiteaAction` / `DeliverRequest` 类型  
+- [x] 1.2.2 定义 `TaskContext` / `BackendResult` / `GiteaAction` / `DeliverRequest` 类型  
   覆盖全 task_type；预留 `MemoryKeys`、`Channel`、`ThreadID`。
+  ✅ 已完成（提交 ede10da）：已定义全部交换类型（含 ToolAccessGrant、State、Handle）
 
 - [ ] 1.2.3 把现有 `internal/agent` 的 loop 封装为 `builtin` backend  
   不废弃 `internal/llm` 和内置 Agent Loop；`RunnerFactory` 通过 `backend` 名选择。  
@@ -89,6 +91,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   注意：`BackendTypeBuiltin = "builtin"` 常量**值已是 `builtin`**（schema.go:275），双轨根源是运行时默认名 / `InternalCodingBackend.Name()` / store 兜底仍写字面量 `"internal"`。本项把源码、配置、测试、DB、UI 全部收敛到 `builtin`/`hub-opencode`，使 1.1.2 直接写 `builtin` 无顺序依赖。
 
   **(a) 归一化函数（先落地，消除顺序依赖）**：新增 `normalizeBackend(name)`：`internal`→`builtin`、`opencode_http`→`hub-opencode`、其余原样；在 config 加载与 agent 加载处调用。落库后 `builtin`/`internal` 均被接受。
+  ✅ 已完成（提交 64a8b42）：`config.NormalizeBackend` + 加载期/解析期双重归一化，旧标识符全部兼容路由
 
   **(b) 源码标识符改写（精确位置，改完 `go build ./...` + 全量测试 PASS）**：
   - `internal/agents/coding_backend.go`：struct `InternalCodingBackend`→`BuiltinCodingBackend`；`NewInternalCodingBackend`→`NewBuiltinCodingBackend`；`Name()` 返回 `"builtin"`(L100)；局部 `name = "internal"`(L237)→`"builtin"`、`if name == "internal"`(L240)→`"builtin"`；注释 L88/99/222/224/239/264 中的后端值 "internal" 改 "builtin"。
