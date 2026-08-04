@@ -35,7 +35,7 @@ type Agent struct {
 	Repos           []string         `json:"repos,omitempty"`
 	Role            string           `json:"role"` // analyze | coder | review
 	Status          string           `json:"status"`
-	Backend         string           `json:"backend"`                   // coding backend name; default "internal" (OpenCode Path A)
+	Backend         string           `json:"backend"`                   // coding backend name; default "builtin" (OpenCode Path A)
 	BackendOptions  map[string]any   `json:"backend_options,omitempty"` // backend-specific options (JSON)
 	ToolPack        string           `json:"tool_pack"`                 // ToolPack name; empty = use role-based default
 	McpServers      []string         `json:"mcp_servers,omitempty"`     // Enabled MCP server names; empty = none
@@ -76,7 +76,7 @@ func scanAgent(scanner interface {
 		json.Unmarshal([]byte(mcpServersJSON), &a.McpServers)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 	return &a, nil
 }
@@ -104,7 +104,7 @@ func (db *DB) CreateAgent(a *Agent) error {
 		mcpServersJSON = string(data)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 
 	result, err := db.Exec(`INSERT INTO agents
@@ -183,7 +183,7 @@ func (db *DB) UpdateAgent(a *Agent) error {
 		mcpServersJSON = string(data)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 
 	_, err := db.Exec(`UPDATE agents SET name=?, provider=?, model=?,

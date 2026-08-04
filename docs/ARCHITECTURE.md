@@ -690,9 +690,9 @@ web/src/                             # Vue 3 前端
 
 | Backend | 说明 |
 |---------|------|
-| `internal`（默认） | 内置 `AgentLoop` + 沙箱工具 |
-| `opencode_http` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR |
+| `builtin`（默认） | 内置 `AgentLoop` + 沙箱工具 |
+| `hub-opencode` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR |
 
-约束：Analyze / Review **永不**走 OpenCode。Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_internal: true` 才降级 internal。
+约束：Analyze / Review **永不**走 OpenCode。Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_builtin: true` 才降级 builtin。
 
 Session 工作目录通过 `?directory=` + `X-Opencode-Directory` 绑定到 Gateway workspace（[archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。运维步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#opencode-sidecar可选-path-a)。

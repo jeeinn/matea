@@ -46,6 +46,6 @@ func TestApplyBackendDefaultsNormalizesLegacyYAML(t *testing.T) {
 	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
 	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
 	assert.NotContains(t, cfg.Agents.Backends.Backends, "internal")
-	assert.Equal(t, BackendNameHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
+	assert.Equal(t, BackendTypeHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
 	assert.Equal(t, "http://127.0.0.1:4096", cfg.Agents.Backends.Backends["opencode-local"].BaseURL)
 }

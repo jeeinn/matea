@@ -111,7 +111,7 @@ func defaultSessionSubHandler() http.HandlerFunc {
 func newTestBackend(t *testing.T, baseURL string) *OpenCodeHTTPBackend {
 	t.Helper()
 	cfg := config.BackendConfig{
-		Type:    config.BackendTypeOpenCodeHTTP,
+		Type:    config.BackendTypeHubOpenCode,
 		BaseURL: baseURL,
 		Timeout: "10s",
 		Auth: config.BackendAuthConfig{
@@ -150,7 +150,7 @@ func TestOpenCodeHTTPHealthCheckNotFound(t *testing.T) {
 
 func TestOpenCodeHTTPHealthCheckConnectionRefused(t *testing.T) {
 	cfg := config.BackendConfig{
-		Type:    config.BackendTypeOpenCodeHTTP,
+		Type:    config.BackendTypeHubOpenCode,
 		BaseURL: "http://127.0.0.1:1", // nothing listening
 		Timeout: "100ms",
 	}
@@ -287,7 +287,7 @@ func TestOpenCodeHTTPRunEndToEnd(t *testing.T) {
 
 func TestNewOpenCodeHTTPBackendRequiresBaseURL(t *testing.T) {
 	_, err := NewOpenCodeHTTPBackend("test", config.BackendConfig{
-		Type: config.BackendTypeOpenCodeHTTP,
+		Type: config.BackendTypeHubOpenCode,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "base_url")
@@ -295,7 +295,7 @@ func TestNewOpenCodeHTTPBackendRequiresBaseURL(t *testing.T) {
 
 func TestNewOpenCodeHTTPBackendRejectsUnsupportedWorkspaceMode(t *testing.T) {
 	_, err := NewOpenCodeHTTPBackend("test", config.BackendConfig{
-		Type:          config.BackendTypeOpenCodeHTTP,
+		Type:          config.BackendTypeHubOpenCode,
 		BaseURL:       "http://localhost:8080",
 		WorkspaceMode: "volume",
 	})
@@ -305,22 +305,22 @@ func TestNewOpenCodeHTTPBackendRejectsUnsupportedWorkspaceMode(t *testing.T) {
 
 // --- ResolveCodingBackend tests -------------------------------------------
 
-func TestResolveCodingBackendInternal(t *testing.T) {
+func TestResolveCodingBackendBuiltin(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, nil, nil, sandbox.DefaultConfig(), nil, "")
 	agent := &store.Agent{Backend: ""} // default
 
 	backend, err := factory.ResolveCodingBackend(agent)
 	require.NoError(t, err)
-	assert.Equal(t, "internal", backend.Name())
+	assert.Equal(t, "builtin", backend.Name())
 }
 
-func TestResolveCodingBackendExplicitInternal(t *testing.T) {
+func TestResolveCodingBackendExplicitBuiltin(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, nil, nil, sandbox.DefaultConfig(), nil, "")
-	agent := &store.Agent{Backend: "internal"}
+	agent := &store.Agent{Backend: "builtin"}
 
 	backend, err := factory.ResolveCodingBackend(agent)
 	require.NoError(t, err)
-	assert.Equal(t, "internal", backend.Name())
+	assert.Equal(t, "builtin", backend.Name())
 }
 
 func TestResolveCodingBackendOpenCodeHTTP(t *testing.T) {
@@ -329,7 +329,7 @@ func TestResolveCodingBackendOpenCodeHTTP(t *testing.T) {
 		Default: "opencode-local",
 		Backends: map[string]config.BackendConfig{
 			"opencode-local": {
-				Type:    config.BackendTypeOpenCodeHTTP,
+				Type:    config.BackendTypeHubOpenCode,
 				BaseURL: srv.URL,
 				Timeout: "10s",
 			},
@@ -362,7 +362,7 @@ func TestResolveCodingBackendUsesDefault(t *testing.T) {
 		Default: "opencode-local",
 		Backends: map[string]config.BackendConfig{
 			"opencode-local": {
-				Type:    config.BackendTypeOpenCodeHTTP,
+				Type:    config.BackendTypeHubOpenCode,
 				BaseURL: srv.URL,
 			},
 		},
@@ -383,7 +383,7 @@ func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, nil, nil, sandbox.DefaultConfig(), nil, "")
 	backend, err := factory.ResolveCodingBackend(&store.Agent{Backend: "internal"})
 	require.NoError(t, err)
-	assert.Equal(t, "internal", backend.Name(), "legacy internal should resolve to the builtin backend (Name() unchanged until 1.2.6b)")
+	assert.Equal(t, "builtin", backend.Name(), "legacy internal should resolve to the builtin backend")
 
 	// Canonical agent.Backend="builtin" resolves identically.
 	backend2, err := factory.ResolveCodingBackend(&store.Agent{Backend: "builtin"})
@@ -405,7 +405,7 @@ func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
 	// Canonical type "hub-opencode" works the same way.
 	canonicalBackends := &config.AgentBackendsConfig{
 		Backends: map[string]config.BackendConfig{
-			"my-opencode": {Type: config.BackendNameHubOpenCode, BaseURL: srv.URL},
+			"my-opencode": {Type: config.BackendTypeHubOpenCode, BaseURL: srv.URL},
 		},
 	}
 	factory3 := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, canonicalBackends, nil, sandbox.DefaultConfig(), nil, "")
@@ -414,7 +414,7 @@ func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
 	assert.Equal(t, "my-opencode", ocBackend2.Name())
 }
 
-// --- Health check (runWriteTask: fail before prepare unless allow_fallback_internal) ---
+// --- Health check (runWriteTask: fail before prepare unless allow_fallback_builtin) ---
 
 func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {
 	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
@@ -423,7 +423,7 @@ func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {
 		},
 	})
 	cfg := config.BackendConfig{
-		Type:    config.BackendTypeOpenCodeHTTP,
+		Type:    config.BackendTypeHubOpenCode,
 		BaseURL: srv.URL,
 		Timeout: "10s",
 	}
@@ -437,15 +437,15 @@ func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {
 	assert.Contains(t, err.Error(), "503")
 	assert.Contains(t, err.Error(), "health check")
 	// Default: no silent fallback — Executor must mark failed, not success.
-	assert.False(t, allowsInternalFallback(b))
+	assert.False(t, allowsBuiltinFallback(b))
 }
 
-func TestAllowsInternalFallbackFlag(t *testing.T) {
+func TestAllowsBuiltinFallbackFlag(t *testing.T) {
 	b, err := NewOpenCodeHTTPBackend("opencode-local", config.BackendConfig{
-		Type:                  config.BackendTypeOpenCodeHTTP,
+		Type:                  config.BackendTypeHubOpenCode,
 		BaseURL:               "http://127.0.0.1:9",
-		AllowFallbackInternal: true,
+		AllowFallbackBuiltin: true,
 	})
 	require.NoError(t, err)
-	assert.True(t, allowsInternalFallback(b))
+	assert.True(t, allowsBuiltinFallback(b))
 }

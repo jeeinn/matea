@@ -26,8 +26,8 @@ import (
 type CodingBackend interface {
 	Name() string
 	Run(ctx context.Context, req CodingRequest) (*CodingResult, error)
-	// Abort cancels a running coding session. For internal backend this is a
-	// no-op (cancellation is via the ctx passed to Run). For opencode it
+	// Abort cancels a running coding session. For the builtin backend this is a
+	// no-op (cancellation is via the ctx passed to Run). For hub-opencode it
 	// issues POST /session/:id/abort.
 	Abort(ctx context.Context, handle string) error
 }
@@ -35,7 +35,7 @@ type CodingBackend interface {
 // HealthCheckableBackend is an optional interface for backends that support
 // an up-front health probe. When implemented, runWriteTask calls HealthCheck
 // BEFORE prepareWriteWorkspace. Failure returns an error (task → failed) unless
-// allow_fallback_internal is set on the backend config.
+// allow_fallback_builtin is set on the backend config.
 type HealthCheckableBackend interface {
 	HealthCheck(ctx context.Context) error
 }
@@ -45,11 +45,11 @@ type HealthCheckableBackend interface {
 // Prompts (Prompt / SystemPrompt) are pre-built by runWriteTask so that all
 // backends share the same prompt pipeline (BuildDevPrompt/BuildBugfixPrompt +
 // MergeAgentSystemPrompt + code context). Backends just consume them as
-// user/system messages (internal) or as the message body (opencode).
+// user/system messages (builtin) or as the message body (hub-opencode).
 type CodingRequest struct {
 	// Workspace
 	WorkDir string           // absolute path to the prepared repo working tree
-	Sandbox *sandbox.Sandbox // sandbox for tool execution / audit (internal backend)
+	Sandbox *sandbox.Sandbox // sandbox for tool execution / audit (builtin backend)
 
 	// Task context
 	Task        *store.Task
@@ -83,21 +83,21 @@ type CodingResult struct {
 	Provider        llm.Provider // LLM provider used (reused by finalize for commit message)
 }
 
-// InternalCodingBackend wraps the existing AgentLoop + DefaultTools as the
+// BuiltinCodingBackend wraps the existing AgentLoop + DefaultTools as the
 // default coding backend. Used by all non-write tasks (forced) and by write
-// tasks whose agent.backend resolves to "internal".
-type InternalCodingBackend struct {
+// tasks whose agent.backend resolves to "builtin".
+type BuiltinCodingBackend struct {
 	factory *RunnerFactory
 }
 
-// NewInternalCodingBackend constructs an InternalCodingBackend bound to a
+// NewBuiltinCodingBackend constructs a BuiltinCodingBackend bound to a
 // RunnerFactory (for LLM registry, token resolution, usage recording, debug).
-func NewInternalCodingBackend(factory *RunnerFactory) *InternalCodingBackend {
-	return &InternalCodingBackend{factory: factory}
+func NewBuiltinCodingBackend(factory *RunnerFactory) *BuiltinCodingBackend {
+	return &BuiltinCodingBackend{factory: factory}
 }
 
-// Name returns "internal".
-func (b *InternalCodingBackend) Name() string { return "internal" }
+// Name returns "builtin".
+func (b *BuiltinCodingBackend) Name() string { return config.BackendNameBuiltin }
 
 // Run executes the AgentLoop with DefaultTools on the prepared workspace.
 //
@@ -106,7 +106,7 @@ func (b *InternalCodingBackend) Name() string { return "internal" }
 // and the LLM message loop. Behavior matches the pre-A3.1 inline coding phase:
 // identical provider lookup, token resolution, tool registry, loop config merge,
 // and recorder wiring.
-func (b *InternalCodingBackend) Run(ctx context.Context, req CodingRequest) (*CodingResult, error) {
+func (b *BuiltinCodingBackend) Run(ctx context.Context, req CodingRequest) (*CodingResult, error) {
 	factory := b.factory
 	agentCfg := req.Agent
 	task := req.Task
@@ -197,7 +197,7 @@ func (b *InternalCodingBackend) Run(ctx context.Context, req CodingRequest) (*Co
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
-	log.Printf("[INFO] Task %d internal coding backend completed", task.ID)
+	log.Printf("[INFO] Task %d builtin coding backend completed", task.ID)
 
 	return &CodingResult{
 		Summary:  result,
@@ -206,9 +206,9 @@ func (b *InternalCodingBackend) Run(ctx context.Context, req CodingRequest) (*Co
 	}, nil
 }
 
-// Abort is a no-op for the internal backend; cancellation is done via the
+// Abort is a no-op for the builtin backend; cancellation is done via the
 // context passed to Run. The handle argument is unused.
-func (b *InternalCodingBackend) Abort(ctx context.Context, handle string) error {
+func (b *BuiltinCodingBackend) Abort(ctx context.Context, handle string) error {
 	_ = ctx
 	_ = handle
 	return nil
@@ -219,15 +219,15 @@ func (b *InternalCodingBackend) Abort(ctx context.Context, handle string) error 
 // ResolveCodingBackend determines which CodingBackend to use for a write task.
 //
 // Resolution order (server-runtime-design-v4.md §3.2):
-//  1. Non-write tasks → always "internal" (enforced by caller, not here)
+//  1. Non-write tasks → always "builtin" (enforced by caller, not here)
 //  2. Write tasks: agent.Backend != "" → use that name
-//  3. Otherwise → agents.backends.default (default: "internal")
+//  3. Otherwise → agents.backends.default (default: "builtin")
 //  4. If the named backend is not found in config → error
 //  5. If the backend type is unknown → error
 //
-// The returned backend is ready to call Run. For opencode_http backends, the
+// The returned backend is ready to call Run. For hub-opencode backends, the
 // instance is constructed fresh each call (they hold no state between calls);
-// the internal backend is reused (it has no state).
+// the builtin backend is reused (it has no state).
 func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend, error) {
 	// Normalize legacy identifiers (internal → builtin, opencode_http →
 	// hub-opencode) so DB rows and configs written before 1.2.6 keep working.
@@ -240,7 +240,7 @@ func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend,
 	}
 	// The builtin backend is always available, even if missing from config
 	if name == config.BackendNameBuiltin {
-		return f.internalBackend, nil
+		return f.builtinBackend, nil
 	}
 
 	cfg, ok := f.backends.Backends[name]
@@ -253,8 +253,8 @@ func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend,
 	// directly (e.g. in tests).
 	switch config.NormalizeBackend(cfg.Type) {
 	case config.BackendTypeBuiltin:
-		return f.internalBackend, nil
-	case config.BackendNameHubOpenCode:
+		return f.builtinBackend, nil
+	case config.BackendTypeHubOpenCode:
 		backend, err := NewOpenCodeHTTPBackend(name, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("create opencode backend %q: %w", name, err)
@@ -265,12 +265,12 @@ func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend,
 	}
 }
 
-// allowsInternalFallback reports whether a backend may silently switch to the
-// builtin InternalCodingBackend when its health check fails.
-// Only OpenCodeHTTPBackend currently exposes allow_fallback_internal.
-func allowsInternalFallback(backend CodingBackend) bool {
+// allowsBuiltinFallback reports whether a backend may silently switch to the
+// builtin BuiltinCodingBackend when its health check fails.
+// Only OpenCodeHTTPBackend currently exposes allow_fallback_builtin.
+func allowsBuiltinFallback(backend CodingBackend) bool {
 	if b, ok := backend.(*OpenCodeHTTPBackend); ok {
-		return b.cfg.AllowFallbackInternal
+		return b.cfg.AllowFallbackBuiltin
 	}
 	return false
 }

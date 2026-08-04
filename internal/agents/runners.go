@@ -80,7 +80,7 @@ type RunnerFactory struct {
 	getDebugConfig   func() config.DebugConfig
 	modelMeta        ModelMetaProvider
 	backends         config.AgentBackendsConfig // coding backends (Path A)
-	internalBackend  *InternalCodingBackend     // always available, built from this factory
+	builtinBackend   *BuiltinCodingBackend      // always available, built from this factory
 	toolPacks        config.ToolPacksConfig     // built-in + user-defined tool packs
 	mcpRegistry      *mcp.Registry              // MCP server registry (nil = no MCP)
 	gatewayDir       string                     // gateway root directory for SKILL.md scanning
@@ -137,7 +137,7 @@ func NewRunnerFactory(llmRegistry *llm.Registry, giteaFactory GiteaClientFactory
 		mcpRegistry:      mcpReg,
 		gatewayDir:       gatewayDir,
 	}
-	factory.internalBackend = NewInternalCodingBackend(factory)
+	factory.builtinBackend = NewBuiltinCodingBackend(factory)
 	return factory
 }
 

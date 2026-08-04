@@ -51,7 +51,7 @@ type CreateAgentRequest struct {
 	LoopConfig      *store.AgentLoopConfig `json:"loop_config,omitempty"`
 	Repos           []string               `json:"repos,omitempty"`           // Repos to add as collaborator (e.g. ["owner/repo"])
 	Role            string                 `json:"role"`                      // analyze | coder | review
-	Backend         string                 `json:"backend"`                   // coding backend; default "internal"
+	Backend         string                 `json:"backend"`                   // coding backend; default "builtin"
 	BackendOptions  map[string]any         `json:"backend_options,omitempty"` // backend-specific options
 	ToolPack        string                 `json:"tool_pack"`                 // ToolPack name; empty = use role-based default
 	McpServers      []string               `json:"mcp_servers,omitempty"`     // Enabled MCP server names

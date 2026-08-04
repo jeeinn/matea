@@ -53,8 +53,8 @@ func (r *BugfixRunner) Run(ctx context.Context, task *store.Task, agent *store.A
 //
 // The coding backend is resolved from agent.Backend (or agents.backends.default).
 // Non-write runners (Analyze/Review/Reply) never call this function — they
-// always use internal LLM directly, which matches the "Analyze forced internal"
-// constraint from server-runtime-design-v4.md §3.2.
+// always use the builtin LLM loop directly, which matches the "Analyze forced
+// builtin" constraint from server-runtime-design-v4.md §3.2.
 func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	factory *RunnerFactory, taskSubType string) (*Result, error) {
 
@@ -71,10 +71,10 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 		hcErr := hc.HealthCheck(hcCtx)
 		hcCancel()
 		if hcErr != nil {
-			if allowsInternalFallback(backend) {
-				log.Printf("[WARN] Task %d coding backend %s unhealthy (%v); allow_fallback_internal=true → switching to internal",
+			if allowsBuiltinFallback(backend) {
+				log.Printf("[WARN] Task %d coding backend %s unhealthy (%v); allow_fallback_builtin=true → switching to builtin",
 					task.ID, backend.Name(), hcErr)
-				backend = factory.internalBackend
+				backend = factory.builtinBackend
 			} else {
 				// Return error so Executor marks failed (not success) and posts
 				// a failure comment via writeFailureToGitea.
@@ -166,7 +166,7 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 
 	// Phase 3: finalize (commit / push / PR)
 	//
-	// For the internal backend, codingResult.Provider is the LLM provider
+	// For the builtin backend, codingResult.Provider is the LLM provider
 	// used during coding, which we reuse for the commit message LLM call.
 	// For opencode backend, Provider is nil (LLM runs server-side), so
 	// finalize will look up the provider again from the registry — a minor

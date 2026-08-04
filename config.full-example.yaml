@@ -131,15 +131,15 @@ agents:
     #   - "npm test"
 
   # 编码后端配置（OpenCode Path A）
-  # 默认 internal（内置 AgentLoop）；非写任务（analyze/review/reply）始终 internal
+  # 默认 builtin（内置 AgentLoop）；非写任务（analyze/review/reply）始终 builtin
   # opencode-local 为可选 sidecar，需本机启动 opencode serve
   backends:
-    default: internal
+    default: builtin
     backends:
-      internal:
+      builtin:
         type: builtin
       # opencode-local:
-      #   type: opencode_http
+      #   type: hub-opencode
       #   base_url: "http://127.0.0.1:4096"
       #   auth:
       #     username: opencode
@@ -149,7 +149,7 @@ agents:
       #   health_check:
       #     path: /global/health
       #     interval: 30s
-      #   allow_fallback_internal: false  # false=探活失败任务 failed；true=降级到 internal Loop
+      #   allow_fallback_builtin: false  # false=探活失败任务 failed；true=降级到 builtin Loop
 
   templates:
     analyze:

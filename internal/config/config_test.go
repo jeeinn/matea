@@ -105,7 +105,7 @@ auth:
 	assert.Contains(t, cfg.LLM.Providers, "deepseek")
 }
 
-func TestApplyBackendDefaultsSetsInternal(t *testing.T) {
+func TestApplyBackendDefaultsSetsBuiltin(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
 
@@ -120,7 +120,7 @@ func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
 			Backends: AgentBackendsConfig{
 				Default: "opencode-local",
 				Backends: map[string]BackendConfig{
-					"opencode-local": {Type: BackendTypeOpenCodeHTTP, BaseURL: "http://127.0.0.1:4096"},
+					"opencode-local": {Type: BackendTypeHubOpenCode, BaseURL: "http://127.0.0.1:4096"},
 				},
 			},
 		},
@@ -131,10 +131,10 @@ func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
 	assert.Equal(t, "opencode-local", cfg.Agents.Backends.Default)
 	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
 	assert.Contains(t, cfg.Agents.Backends.Backends, "opencode-local")
-	assert.Equal(t, BackendNameHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
+	assert.Equal(t, BackendTypeHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
 }
 
-func TestApplyBackendDefaultsBackfillsInternalType(t *testing.T) {
+func TestApplyBackendDefaultsBackfillsBuiltinType(t *testing.T) {
 	cfg := &Config{
 		Agents: AgentsConfig{
 			Backends: AgentBackendsConfig{

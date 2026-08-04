@@ -31,8 +31,8 @@
         <el-table-column prop="model" label="模型" />
         <el-table-column prop="backend" label="Backend" width="120">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.backend === 'internal' ? 'info' : 'primary'">
-              {{ row.backend || 'internal' }}
+            <el-tag size="small" :type="row.backend === 'builtin' ? 'info' : 'primary'">
+              {{ row.backend || 'builtin' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -102,7 +102,7 @@
             />
           </el-select>
           <div class="form-tip">
-            编码阶段的执行后端。internal 为内置 AgentLoop，opencode_http 为远程 OpenCode 服务
+            编码阶段的执行后端。builtin 为内置 AgentLoop，hub-opencode 为远程 OpenCode 服务
           </div>
         </el-form-item>
         <el-form-item label="关联仓库">
@@ -379,7 +379,7 @@ const formatContextWindow = (n) => {
 
 const backendTypeLabel = (type) => {
   if (type === 'builtin') return '内置'
-  if (type === 'opencode_http') return 'OpenCode'
+  if (type === 'hub-opencode') return 'OpenCode'
   return type
 }
 

@@ -59,7 +59,7 @@ function parseLoopDefaults(data) {
 export function useAgentDefaults() {
   const providers = ref({})
   const backends = ref([])
-  const backendDefault = ref('internal')
+  const backendDefault = ref('builtin')
   const agentDefaults = ref({
     provider: 'deepseek',
     model: 'deepseek-v4-flash',
@@ -93,13 +93,13 @@ export function useAgentDefaults() {
       if (data?._meta?.backends && Array.isArray(data._meta.backends)) {
         backends.value = data._meta.backends
       } else {
-        backends.value = [{ name: 'internal', type: 'builtin' }]
+        backends.value = [{ name: 'builtin', type: 'builtin' }]
       }
-      backendDefault.value = data?._meta?.backends_default || 'internal'
+      backendDefault.value = data?._meta?.backends_default || 'builtin'
     } catch {
       providers.value = {}
-      backends.value = [{ name: 'internal', type: 'builtin' }]
-      backendDefault.value = 'internal'
+      backends.value = [{ name: 'builtin', type: 'builtin' }]
+      backendDefault.value = 'builtin'
     }
   }
 
@@ -124,7 +124,7 @@ export function useAgentDefaults() {
       role: 'analyze',
       provider: agentDefaults.value.provider,
       model: agentDefaults.value.model,
-      backend: backendDefault.value || 'internal',
+      backend: backendDefault.value || 'builtin',
       // 0 = optional override off → resolve from model meta at runtime
       max_output_tokens: 0,
       max_input_tokens: 0,
