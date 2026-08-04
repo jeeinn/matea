@@ -1,6 +1,6 @@
 # 任务清单
 
-> 更新：2026-08-03（Hub 后端演进规划）  
+> 更新：2026-08-03（Hub 后端演进规划；已按 [规划评审](20260803-规划评审-Hub演进与Agent简化方案.md) 修正 P0/P1 项）  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · 可插拔 Hub 后端（OpenCode / Hermes / OpenClaw / 自定义） · 不自研 IM SDK  
 > 决策：  
 > - [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md)  
@@ -30,36 +30,87 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 目标：不改动业务行为，为 Hub 后端演进打好接口；默认体验仍是「下载二进制 → 3 步可用 → Gitea @ 三 Agent」。
 
-### 1.1 Agent 配置简化：固定 role，默认三 Agent 模板
+### 1.1 Agent 配置简化：role 闭集 + 三 Agent 默认模板
 
-- [ ] 1.1.1 Agent 模型兼容 `role` 字段，不做多 capabilities  
-  DB 不变，UI 用 `capabilities` 仅作别名显示；内部按 `role` 映射 task_type。
+> 边界：**`role` 为闭集** `analyze|coder|review`（创建任何 Agent 三选一）；**Agent 实例数不限**——同一 role 可创建多个实例按仓库/技术栈特化（如 `matea-coder-go` / `matea-coder-fe`）；三个模板仅是开箱默认值，不是数量上限。
 
-- [ ] 1.1.2 UI 创建 Agent 时提供默认模板：`matea` / `matea-coder` / `matea-review`  
-  每个模板预设 role、system_prompt、默认 backend。
+- [ ] 1.1.1 明确 `role` 为 Agent 职责的唯一真相（现状已满足，仅补文档）  
+  在 AGENTS.md / ARCHITECTURE.md 显式声明：`role` 为闭集 `analyze|coder|review`，同一 role 允许多 Agent 实例（按仓库/技术栈特化）；**不引入 capabilities 概念**（代码库中从不存在，引入别名是净负债）。无代码改动。
 
-- [ ] 1.1.3 Agent 名自动映射 Gitea username  
-  `matea` → `@matea`，`matea-coder` → `@matea-coder`；可覆盖。
+- [ ] 1.1.2 改造现有 `applyRoleWizard` 向导为默认模板：`matea-analyst` / `matea-coder` / `matea-review`  
+  现状：向导已预设 name + system_prompt + user_template（`web/src/views/Agents.vue`）。差距仅三点：命名 `code-*` → `matea-*`、补默认 backend（`builtin`）、配合 1.1.3 填 gitea_username。命名迁移需同步 README / AGENTS.md / E2E 示例与存量用户引导。  
+  默认 backend 标识符统一为 `builtin`（决策 #13，与 §九 `hub-` 前缀分流规则一致）：本项**直接写 `builtin`**，无需回退到 `internal`；源码侧 `internal`→`builtin` 的改写与读取期归一化由 1.2.6 负责，二者无顺序依赖（1.2.6 落库后 `builtin`/`internal` 均被接受）。  
+  注：分析 Agent 用 `matea-analyst` 而非 `matea`，避免产品名的「总入口」误解。
 
-- [ ] 1.1.4 合并 Assign 与 @mention 触发语义  
-  统一视为「拉 Agent 进入会话」；根据 `role` 决定 task_type。
+- [ ] 1.1.3 Agent 名自动映射 Gitea username（含账号保护）  
+  `matea-analyst` → `@matea-analyst`，`matea-coder` → `@matea-coder`；可覆盖。  
+  **安全前置**：`EnsureGiteaAccount` 的 else 分支会对已存在账号静默重置密码并签发 token（`internal/agents/manager.go`），自动映射必须把触发面从「手工输入」扩大到「自动」之前堵住：
+  - 托管标记：仅对「由 Matea 创建」的账号允许重置密码 / 签发 token
+  - 冲突即报错：命中已存在且非 Matea 托管的账号时创建失败并提示改名，绝不静默接管
+  - 确需接管既有账号时走单独的显式确认流程
+  - `gitea.auto_provision: false` 时只做名称建议，不触碰 Gitea  
+  验收：同名真人账号存在时创建 Agent → 报错且**不调用** `AdminUpdateUserPassword`。
+
+- [ ] 1.1.4 合并 Assign 与 @mention 触发语义（保留 surface 维度，拆三步）  
+  用户心智层统一为「拉 Agent 进入会话」，但 task_type 由 `(role, surface, intent)` 三元组解析表决定，**不能只看 role**——否则 @matea-review 在 Issue 评论会被推成 `review_pr`（无关联 PR 时被 L1 门禁拒绝，有关联 PR 时在 Issue 里错跑完整审查），@analyze 的轻量回话会放大成完整分析。
+  - [ ] 1.1.4a 抽取 `(role, surface, intent)` 解析表，行为与现状**完全等价**（纯重构）  
+    验收：表驱动单测覆盖 3 role × 2 surface × 全 intent 组合，逐条断言与重构前等价。
+  - [ ] 1.1.4b 统一 Intent 命名与用户可见文案为「拉 Agent 进入会话」（只改文案与日志，不改路由）
+  - [ ] 1.1.4c 补齐 Assign 分支能力缺口：`ResolveLogicIssueAndPR`（PRID / `Fixes #N` 解析）与 `/force` 支持；顺手修复斜杠命令裸匹配（`strings.Contains(body, "/dev")` 会误中 `/development`、URL、代码块），改为行首锚定 + 剥离代码块 + 词边界
 
 ### 1.2 抽象：HubBackend 接口
 
 - [ ] 1.2.1 在 `internal/agents` 定义 `HubBackend` 接口  
-  `Name() / Execute(ctx, TaskContext) / Capabilities() / HealthCheck()`。
+  `Name() / Submit(ctx, TaskContext) → Handle / Poll(ctx, Handle) / Cancel(ctx, Handle) / Capabilities() / HealthCheck()`。  
+  **异步句柄形态**（决策 #12）：`Handle`（含 RemoteID + IdempotencyKey）随任务持久化到 SQLite，支持重启后恢复长任务、防重复提交。  
+  ⚠️ **接口异步 ≠ 重启恢复**：避免仅做 Runner 内串行 `Poll` 至完成的「伪异步」——那仍是同步阻塞一个 Executor worker，进程重启即丢任务、Hub 侧留孤儿会话。真正的重启恢复须满足：(a) `Submit` 返回 `Handle` 后**立即落库**到任务队列；(b) `Executor` 启动时扫描「非终态 Handle」重新拾取轮询/重放（可复用现有崩溃重放能力）。本项为验收强制点。
 
 - [ ] 1.2.2 定义 `TaskContext` / `BackendResult` / `GiteaAction` / `DeliverRequest` 类型  
   覆盖全 task_type；预留 `MemoryKeys`、`Channel`、`ThreadID`。
 
 - [ ] 1.2.3 把现有 `internal/agent` 的 loop 封装为 `builtin` backend  
-  不废弃 `internal/llm` 和内置 Agent Loop；`RunnerFactory` 通过 `backend` 名选择。
+  不废弃 `internal/llm` 和内置 Agent Loop；`RunnerFactory` 通过 `backend` 名选择。  
+  验收：封装后 `tests/integration/` 既有全部用例零修改通过。
 
-- [ ] 1.2.4 在四个 Runner 中预留 `if strings.HasPrefix(agent.Backend, "hub-")` 分支  
-  Phase 1 只走 builtin；分支保持空实现或返回明确错误。
+- [ ] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
+  Phase 1 中 `hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误（尚无实现）；**`hub-opencode` 例外，保持可用**（见 1.2.5）。未知 backend 必须报错，不得静默回落 builtin。
 
 - [ ] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
-  与 `HubBackend` 接口对齐；保持现有配置兼容或提供迁移说明。
+  与 `HubBackend` 接口对齐；**Phase 1 保持 OpenCode 可用**，使接口抽象从两个真实实现（builtin + opencode）反推；保持现有配置兼容或提供迁移说明。
+
+- [ ] 1.2.6 backend 标识符迁移：`internal` → `builtin`、`opencode_http` → `hub-opencode`（决策 #13，源码侧统一，非仅 DB/YAML）  
+  注意：`BackendTypeBuiltin = "builtin"` 常量**值已是 `builtin`**（schema.go:275），双轨根源是运行时默认名 / `InternalCodingBackend.Name()` / store 兜底仍写字面量 `"internal"`。本项把源码、配置、测试、DB、UI 全部收敛到 `builtin`/`hub-opencode`，使 1.1.2 直接写 `builtin` 无顺序依赖。
+
+  **(a) 归一化函数（先落地，消除顺序依赖）**：新增 `normalizeBackend(name)`：`internal`→`builtin`、`opencode_http`→`hub-opencode`、其余原样；在 config 加载与 agent 加载处调用。落库后 `builtin`/`internal` 均被接受。
+
+  **(b) 源码标识符改写（精确位置，改完 `go build ./...` + 全量测试 PASS）**：
+  - `internal/agents/coding_backend.go`：struct `InternalCodingBackend`→`BuiltinCodingBackend`；`NewInternalCodingBackend`→`NewBuiltinCodingBackend`；`Name()` 返回 `"builtin"`(L100)；局部 `name = "internal"`(L237)→`"builtin"`、`if name == "internal"`(L240)→`"builtin"`；注释 L88/99/222/224/239/264 中的后端值 "internal" 改 "builtin"。
+  - `internal/agents/runners.go`：`factory.internalBackend` 字段(L83)→`factory.builtinBackend`；赋值处 `NewInternalCodingBackend`(L140)→`NewBuiltinCodingBackend`。
+  - `internal/store/agent.go`：`a.Backend = "internal"`(L76/104/183)→`"builtin"`；注释 L38。
+  - `internal/agents/manager.go`：注释 L54。
+  - `internal/config/config.go`：默认 `backends.Default = "internal"`(L249)→`"builtin"`；`backends.Backends["internal"]`(L254-259)→`["builtin"]`。
+  - `internal/config/schema.go`：注释 L246/247；`Default: "internal"`(L282)→`"builtin"`；`"internal": {Type: BackendTypeBuiltin}`(L284)→`"builtin"`；常量 `BackendTypeOpenCodeHTTP = "opencode_http"`(L276) **确定改名** `BackendTypeHubOpenCode = "hub-opencode"`（值同步改），同步改所有引用（coding_backend.go:252、config_test.go:123、opencode_http_test.go:114/153/290/298/332/365/387/406）；字段 `AllowFallbackInternal bool yaml:"allow_fallback_internal"`(L258) **改名** `AllowFallbackBuiltin bool yaml:"allow_fallback_builtin"`（当前无真实用户，不做向后兼容）。
+  - `internal/config/manager_display.go`：`"name": "internal"`(L58)→`"builtin"`；`name == "internal"`(L62)→`"builtin"`。
+  - `internal/agents/coding_backend.go`：除 L100/237/240 的 backend 值改写外，字段读取 `b.cfg.AllowFallbackInternal`(L268)→`b.cfg.AllowFallbackBuiltin`；注释 L38/265 中 `allow_fallback_internal`→`allow_fallback_builtin`。
+  - `internal/agents/runner_write.go`：日志 `allow_fallback_internal=true → switching to internal`(L75)→`allow_fallback_builtin=true → switching to builtin`。
+  - **排除**：`internal/agents/commit_message.go:137 parts[0]=="internal"` 是 conventional-commit 类型判断，**严禁改动**。
+
+  **(c) 测试同步改写（必须零回退 PASS）**：
+  - `internal/config/config_test.go`：L73/112/113/114/132/141/148/149 的 `"internal"`→`"builtin"`；L123 `BackendTypeOpenCodeHTTP`→`BackendTypeHubOpenCode`。
+  - `internal/store/backend_test.go`：L27/77/83/105 `"internal"`→`"builtin"`。
+  - `internal/agents/coding_backend_test.go`：`InternalCodingBackend`→`BuiltinCodingBackend`、构造器、mock 注释、各 `Name()` 断言（L18/46-154）。
+  - `internal/agents/opencode_http_test.go`：L314/319/323 `"internal"`→`"builtin"`；`BackendTypeOpenCodeHTTP`(L114/153/290/298/332/365/387/406)→`BackendTypeHubOpenCode`；`AllowFallbackInternal: true`(L408)→`AllowFallbackBuiltin: true`；注释 L378 `allow_fallback_internal`→`allow_fallback_builtin`。
+
+  **(d) DB 一次性迁移（幂等）**：`UPDATE agents SET backend='builtin' WHERE backend IN ('internal','')`；`UPDATE agents SET backend='hub-opencode' WHERE backend='opencode_http'`；放入 store 迁移段。
+
+  **(e) YAML 示例**：`config.full-example.yaml`：L134/137 `internal`→`builtin`、L139 块名 `internal:`→`builtin:`、L142 `type: opencode_http`→`hub-opencode`、L152 `allow_fallback_internal`→`allow_fallback_builtin`（注释中 "降级到 internal Loop"→"降级到 builtin Loop"）；`config.example.yaml` 同步（若有）。
+
+  **(f) 前端**：`web/src/views/Agents.vue`：注释 L105 "internal 为内置"→"builtin 为内置"；`backendTypeLabel`(L380) `opencode_http`→`hub-opencode`（返回 'OpenCode'）；创建 Agent 默认 backend 若写死 `internal` 改为 `builtin`。
+
+  验收：存量 `backend='internal'` 行经迁移 + 归一化后正确路由；全部现有测试零回退通过；`BackendTypeBuiltin` 值保持 `"builtin"`。
+
+- [ ] 1.2.7 Mock Hub 测试地基  
+  TestEnv 增加 Mock Hub（模拟正常返回 / 超时 / 502 / 鉴权失败 / 异步长任务）；接口定完立刻以其验证可测性，为 Phase 2 测试铺路。
 
 ### 1.3 触发入口整理：`internal/ingress/gitea`
 
@@ -90,14 +141,15 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   但将 gate 评估拆成独立函数，便于 Phase 3 配置化。
 
 - [ ] 1.5.2 隐藏 WorkflowContext stage 的用户可见面  
-  用户只感知「Agent 正在处理 / 已回复 / 已创建 PR」。
+  用户只感知「Agent 正在处理 / 已回复 / 已创建 PR」。  
+  顺带修复既有缺陷：mention 路径会 `Transition(ctx, role)` 推进 stage，但 `OnTaskComplete("reply_comment"/"solve_comment")` 不回落 stage，导致 stage 滞留（如 `analyzing`）。
 
 - [ ] 1.5.3 保留 `EnsureGiteaAccount`，默认开启，可配置关闭  
   `gitea.auto_provision: false` 时仅校验/提示手动创建。
 
 ### 1.6 文档与引导
 
-- [ ] 1.6.1 更新 README / 快速开始：默认体验仍是「下载二进制 → 配 Gitea/LLM → Gitea @matea」
+- [ ] 1.6.1 更新 README / 快速开始：默认体验仍是「下载二进制 → 配 Gitea/LLM → Gitea @matea-analyst」
 - [ ] 1.6.2 新增「接入 Hub 后端」进阶章节，不放在快速开始里
 - [ ] 1.6.3 更新 AGENTS.md 产品叙事：默认 builtin，可选 hub-*
 
@@ -110,7 +162,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 ### 2.1 hub-hermes 实现
 
 - [ ] 2.1.1 实现 `internal/agents/backends/hermes`  
-  `HubBackend.Execute` 按 task_type 分支；HTTP/API 调用 Hermes。
+  `HubBackend.Submit` 按 task_type 分支；HTTP/API 调用 Hermes；Handle 持久化与重启恢复。  
+  重启恢复须满足 1.2.1 的「落库 + Executor 重启拾取」要求，不得仅做 Runner 内串行 Poll。
 
 - [ ] 2.1.2 `analyze_issue` → Hermes  
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
@@ -129,8 +182,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 2.2 hub-opencode 改造
 
-- [ ] 2.2.1 将现有 `CodingBackend` 对齐为 `hub-opencode`  
-  覆盖 analyze/review/code/reply 全 role，而不只是 coder。
+- [ ] 2.2.1 `hub-opencode` 扩展为全 role backend  
+  在 1.2.5 基础上，从仅 coder 扩展到覆盖 analyze/review/reply 全 task_type（原「改造为 hub-opencode」与 1.2.5 重复，已去重）。
 
 - [ ] 2.2.2 验证 OpenCode 作为全 role backend 的接口通用性  
   与 Hermes 并行跑，确保 `HubBackend` 抽象足够通用。

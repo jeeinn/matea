@@ -53,11 +53,13 @@
 
 | Gitea 用户 | role | 典型 task_type |
 |------------|------|----------------|
-| `@matea` | analyze | analyze_issue, reply_comment |
+| `@matea-analyst` | analyze | analyze_issue, reply_comment |
 | `@matea-coder` | coder | solve_issue, fix_bug |
 | `@matea-review` | review | review_pr |
 
-- 仅 **`role`**，不做多 capabilities。
+- 仅 **`role`**，不做多 capabilities；role 为闭集 `analyze|coder|review`。
+- **Agent 实例数不限**：同一 role 可存在多个 Agent，按仓库/技术栈特化（`Agent.Repos`）；三 Agent 是默认模板，非数量上限。
+- 命名用 `matea-analyst` 而非 `matea`：避免产品名造成的「总入口」可供性误解（用户会 @它要求改代码，而 analyze 只会产出分析）；三个名字对称、职责自解释。
 - **每个 Agent 独立配置 `backend`**：`builtin`（默认）、`hub-opencode`、`hub-hermes`、`hub-openclaw`、`hub-api`。
 - 同一 repo 上推荐统一 backend，避免记忆断层。
 
@@ -72,11 +74,19 @@ OpenCode / Hermes / OpenClaw / 自定义 HTTP 中枢**统一视为可插拔 Agen
 ```go
 package agents
 
+// HubBackend 为异步句柄形态：solve_issue 等长任务可能跑数十分钟，
+// 同步调用会在 Matea 重启时丢任务并产生 Hub 侧孤儿会话。
 type HubBackend interface {
     Name() string
 
-    // 执行一次任务
-    Execute(ctx context.Context, task *TaskContext) (*BackendResult, error)
+    // 提交任务，返回可持久化句柄；实现可选择同步完成（State=done）
+    Submit(ctx context.Context, task *TaskContext) (*Handle, error)
+
+    // 按句柄轮询/等待结果；支持 Matea 重启后凭 DB 中的 Handle 恢复
+    Poll(ctx context.Context, h *Handle) (*BackendResult, State, error)
+
+    // 取消远端任务（尽力而为）
+    Cancel(ctx context.Context, h *Handle) error
 
     // 后端能力声明
     Capabilities() HubCapabilities
@@ -84,6 +94,16 @@ type HubBackend interface {
     // 健康检查
     HealthCheck(ctx context.Context) error
 }
+
+// Handle 随任务持久化到 SQLite 任务队列，崩溃重放（ReplayAccepted）时凭它恢复，
+// 避免重复提交与孤儿会话。
+type Handle struct {
+    Backend        string
+    RemoteID       string // Hub 侧 session/job id（吸收现有 CodingResult.RemoteSessionID）
+    IdempotencyKey string // 防重复提交
+}
+
+type State string // pending | running | done | failed | canceled
 
 type HubCapabilities struct {
     SupportsToolUse         bool // 是否支持多轮 tool-use
@@ -163,25 +183,6 @@ Hub 侧可选配合同名 Skill（如 `matea-analyze` / `matea-review` / `matea-
 调用时：`TaskContext.SystemPrompt` = Matea 渲染结果 + Hub 自动 recall 的记忆片段。
 
 ---
-matea.role      = analyze|coder|review
-matea.thread    = <im_thread_id>     # IM 关联（可选）
-```
-
-- **Matea Session**（SQLite）：workflow 门禁、同 issue 锁、任务队列——**短期、结构化**
-- **Hub Memory**：跨 session、跨 role、E-A-A-S——**长期、语义化**
-- Matea **不复制** Hub 记忆存储；只传键，让 Hub 自己 recall
-
-### 5.6 Prompt 谁说了算？
-
-**Matea Prompt 层仍是源真相**（Web UI 可配的 system_prompt / user_template）。
-
-Hub 侧可选配合同名 Skill（`matea-analyze` / `matea-review` / `matea-dev`），用于：
-- 给 Hub E-A-A-S 一个可进化的 Skill 载体
-- 与 Matea 模板内容初始对齐；进化后的 Skill 通过配置同步策略（Phase 2 手动 export/import，不做自动双向写）
-
-调用时：`TaskContext.SystemPrompt` = Matea 渲染结果 + Hub 自动 recall 的记忆片段。
-
----
 
 ## 六、HubBackend 接入：统一接口，分步实现
 
@@ -190,11 +191,11 @@ Hub 侧可选配合同名 Skill（`matea-analyze` / `matea-review` / `matea-dev`
 现有四个 Runner 保留；每个 `Run()` 开头：
 
 ```text
-if agent.Backend starts with "hub-" → HubBackend.Execute(TaskContext)
+if agent.Backend starts with "hub-" → HubBackend.Submit(TaskContext) → 持久化 Handle → Poll 至完成
 else                                  → 现有 builtin 逻辑
 ```
 
-每个 backend 一个实现：`hub-opencode` / `hub-hermes` / `hub-openclaw` / `hub-api`。不合并 Runner，只抽 `HubBackend.Execute`，内部按 `task.TaskType` 分支。改动面可控。
+每个 backend 一个实现：`hub-opencode` / `hub-hermes` / `hub-openclaw` / `hub-api`。不合并 Runner，只抽 `HubBackend` 的 Submit/Poll，内部按 `task.TaskType` 分支。改动面可控。
 
 ### 6.2 TaskContext（Matea 打包给 Hub）
 
@@ -268,7 +269,7 @@ agents:
   defaults:
     backend: hub-hermes
 
-  - name: matea
+  - name: matea-analyst
     role: analyze
     backend: hub-hermes
     hub_hermes:
@@ -298,7 +299,7 @@ agents:
   defaults:
     backend: hub-opencode
 
-  - name: matea
+  - name: matea-analyst
     role: analyze
     backend: hub-opencode
     hub_opencode:
@@ -312,7 +313,7 @@ deliver:
 #### 混合示例（不推荐长期，记忆会断层）
 
 ```yaml
-  - name: matea
+  - name: matea-analyst
     backend: hub-hermes
   - name: matea-coder
     backend: hub-opencode
@@ -413,13 +414,14 @@ Agent 编辑页根据 `backend` 动态显示字段：
 
 ### Phase 1
 
-- 定义 `HubBackend` 接口 + `TaskContext` / `BackendResult` 结构（**覆盖全 task_type 类型定义，但只实现 builtin**）
+- 定义 `HubBackend` 接口 + `TaskContext` / `BackendResult` 结构（**覆盖全 task_type 类型定义**）
 - `internal/ingress/gitea` 整理 → `Intent`
-- 四个 Runner 内部预留 `if strings.HasPrefix(agent.Backend, "hub-")` 分支（Phase 1 不实现 hub 体）
+- 四个 Runner 内部按 `agent.Backend` 分流到 `hub-*` 实现
+- **Phase 1 落地两个真实实现**：`builtin`（内置 Loop 封装）与 `hub-opencode`（现有 OpenCode 改造，保持可用）——接口从两个实现反推，避免单一实现推出错误抽象；`hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误
 
 ### Phase 2
 
-- 实现 `backends/hermes` 与 `backends/opencode`，按 §6.5 顺序接入全 role
+- 新增 `backends/hermes`；`backends/opencode` 由 Phase 1 的 coder-only 扩展到全 role（按 §6.5 顺序）
 - MCP Server + deliver webhook
 
 ### 保留组件
@@ -462,11 +464,12 @@ Agent 编辑页根据 `backend` 动态显示字段：
 - 三 Agent 模板 + `role`
 - `HubBackend` / `TaskContext` / `BackendResult` **类型定义**（含全 task_type）
 - `ingress/gitea` → `Intent`
-- builtin 封装；Runner 预留 `hub-*` 分支
+- builtin 封装；Runner 按 backend 分流；`hub-opencode` 对齐新接口并保持可用
+- backend 标识符迁移（`internal` → `builtin`、`opencode_http` → `hub-opencode`）
 - LLM 配置边界 + UI 动态表单设计
 - 隐藏 workflow stage
 
-**不做**：具体 hub 实现、MCP、deliver
+**不做**：`hub-hermes` / `hub-openclaw` / `hub-api` 实现、MCP、deliver
 
 ### Phase 2（2–3 月）
 
@@ -486,7 +489,7 @@ REST/CLI、策略配置化、拆包评估、`matea gateway serve`
 
 | # | 决策 | 结论 |
 |---|------|------|
-| 1 | capabilities | **仅 role**，三固定 Agent |
+| 1 | capabilities | **仅 role**（闭集 `analyze|coder|review`）；默认三 Agent 模板（`matea-analyst` / `matea-coder` / `matea-review`），同 role 允许多实例 |
 | 2 | 产品本质 | **Gitea 工作流编排器 + 可插拔 Agent 中枢后端** |
 | 3 | Hub scope | **OpenCode / Hermes / OpenClaw 统一抽象为 `HubBackend`**，均可覆盖 analyze/review/code/reply |
 | 4 | 职责切分 | Matea：上下文+Prompt+写回+git；Hub：推理+记忆+自进化 |
@@ -497,6 +500,8 @@ REST/CLI、策略配置化、拆包评估、`matea gateway serve`
 | 9 | LLM / builtin 去留 | **不砍 `internal/llm` 和 builtin**，保留为默认与 fallback |
 | 10 | gateway 形态 | **同二进制 + 子命令** `matea gateway serve`；远期可拆 |
 | 11 | Phase 2 顺序 | analyze/review 先于 code；Hermes 与 OpenCode 并行验证接口通用性 |
+| 12 | HubBackend 接口形态 | **异步句柄**（Submit/Poll/Cancel + 持久化 Handle），支持 Matea 重启后恢复长任务。注意：**接口异步 ≠ 重启恢复**——Handle 须在 `Submit` 后即落库到任务队列，`Executor` 启动时须扫描未终态 Handle 重新拾取/重放；不得仅做 Runner 内的串行 `Poll`（否则仍是阻塞一个 worker，重启即丢） |
+| 13 | 1.2.6 backend 标识符迁移 | **采用改名方案**：`internal`→`builtin`、`opencode_http`→`hub-opencode`，不保留旧名，且**源侧一并重写**（非仅 DB/YAML）。说明：`BackendTypeBuiltin` 常量值已是 `"builtin"`，双轨根源是运行时默认名 / `InternalCodingBackend.Name()` / store 兜底仍写 `"internal"`；本项把源码 struct `InternalCodingBackend`→`BuiltinCodingBackend`、`Name()` 返回 `"builtin"`、默认 backend 名、`store` 兜底、测试、YAML、前端全部收敛。配套两项已确认改名（无真实用户，不做向后兼容）：① 常量 `BackendTypeOpenCodeHTTP`→`BackendTypeHubOpenCode`（值 `"opencode_http"`→`"hub-opencode"`）；② 配置字段 `AllowFallbackInternal`/`allow_fallback_internal`→`AllowFallbackBuiltin`/`allow_fallback_builtin`。配合新增 `normalizeBackend()`（读取期 `internal\|builtin`→`builtin`、`opencode_http\|hub-opencode`→`hub-opencode`）**消除 1.1.2 与 1.2.6 的顺序依赖**——1.1.2 可直接写 `builtin`。理由：配合 §九 `hub-` 前缀分流规则，改名有清晰终点；保留旧名需改注册表查找、等于长期特例分支 |
 
 ---
 
@@ -504,6 +509,6 @@ REST/CLI、策略配置化、拆包评估、`matea gateway serve`
 
 1. v5 审阅通过 → 冻结 Phase 1
 2. Phase 1 产出：`HubBackend` / `TaskContext` / `BackendResult` / `Intent` 接口草案
-3. Phase 2 详设：`HubHermes.Execute` + `HubOpenCode.Execute` 分支 + 记忆键 + 2a/2b 调用协议
+3. Phase 2 详设：`HubHermes` / `HubOpenCode` 的 `Submit`/`Poll` 按 task_type 分支 + Handle 持久化与重启恢复 + 记忆键 + 2a/2b 调用协议
 4. `internal/ingress/gitea` 整理（不改业务逻辑）
 5. 更新 README / AGENTS.md 产品叙事
