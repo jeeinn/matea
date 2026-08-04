@@ -56,8 +56,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [ ] 1.1.4 合并 Assign 与 @mention 触发语义（保留 surface 维度，拆三步）  
   用户心智层统一为「拉 Agent 进入会话」，但 task_type 由 `(role, surface, intent)` 三元组解析表决定，**不能只看 role**——否则 @matea-review 在 Issue 评论会被推成 `review_pr`（无关联 PR 时被 L1 门禁拒绝，有关联 PR 时在 Issue 里错跑完整审查），@analyze 的轻量回话会放大成完整分析。
-  - [ ] 1.1.4a 抽取 `(role, surface, intent)` 解析表，行为与现状**完全等价**（纯重构）  
+  - [x] 1.1.4a 抽取 `(role, surface, intent)` 解析表，行为与现状**完全等价**（纯重构）  
     验收：表驱动单测覆盖 3 role × 2 surface × 全 intent 组合，逐条断言与重构前等价。
+    ✅ 已完成（提交 fa5d498）：已创建解析表和完整测试覆盖
   - [ ] 1.1.4b 统一 Intent 命名与用户可见文案为「拉 Agent 进入会话」（只改文案与日志，不改路由）
   - [ ] 1.1.4c 补齐 Assign 分支能力缺口：`ResolveLogicIssueAndPR`（PRID / `Fixes #N` 解析）与 `/force` 支持；顺手修复斜杠命令裸匹配（`strings.Contains(body, "/dev")` 会误中 `/development`、URL、代码块），改为行首锚定 + 剥离代码块 + 词边界
 
