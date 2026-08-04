@@ -25,7 +25,8 @@ type ResolveResult struct {
 	Merged    bool   // true if PR was merged (not just closed)
 }
 
-// Resolver resolves webhook events to agent + task type via the Assign model.
+// Resolver resolves webhook events to agent + task type.
+// Unified intent: all triggers (Assign / Request Review / @mention) pull an agent into the conversation.
 type Resolver struct {
 	registry *agents.Registry
 }
@@ -86,7 +87,7 @@ func (r *Resolver) resolveIssueClosed(evt *webhook.WebhookEvent) *ResolveResult 
 	}
 }
 
-// resolveAssigned handles issues.assigned events.
+// resolveAssigned handles issues.assigned events — pulls the assigned agent into the issue conversation.
 // Uses ONLY the single assignee from the webhook payload (not the full assignees list).
 func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 	if evt.Assignee == nil {
@@ -97,7 +98,7 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 	username := evt.Assignee.Login
 	agent := r.registry.GetByGiteaUsername(username)
 	if agent == nil {
-		log.Printf("[DEBUG] Assignee %q not in agent registry, ignoring", username)
+		log.Printf("[DEBUG] Assigned agent %q not in registry, ignoring", username)
 		return nil
 	}
 
@@ -142,7 +143,7 @@ func (r *Resolver) resolvePullRequest(evt *webhook.WebhookEvent) *ResolveResult 
 	}
 }
 
-// resolveReviewRequested handles pull_request review_requested events.
+// resolveReviewRequested handles pull_request review_requested events — pulls the review agent into the PR conversation.
 func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveResult {
 	// Find a review agent among requested reviewers
 	if evt.PR.RequestedReviewers == nil || len(evt.PR.RequestedReviewers) == 0 {
@@ -284,7 +285,7 @@ func (r *Resolver) IsAgentSender(evt *webhook.WebhookEvent) bool {
 	return r.registry.GetByGiteaUsername(evt.Sender.Login) != nil
 }
 
-// resolveComment handles issue_comment / pull_request_comment events with @mention resolution.
+// resolveComment handles issue_comment / pull_request_comment events — pulls @mentioned agent into the conversation.
 func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 	if evt.Comment == nil {
 		return nil
@@ -301,10 +302,10 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 	forceDev := strings.Contains(body, "/dev")
 	forceReply := strings.Contains(body, "/reply")
 
-	// Parse @mentions from comment body
+	// Pull agent into conversation via @mention
 	agent := r.findMentionedAgent(body)
 
-	// If no explicit @mention, we can't resolve (Phase 17 doesn't support fallback yet)
+	// If no explicit @mention, we can't resolve
 	if agent == nil {
 		return nil
 	}
