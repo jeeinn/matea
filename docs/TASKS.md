@@ -38,10 +38,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   在 AGENTS.md / ARCHITECTURE.md 显式声明：`role` 为闭集 `analyze|coder|review`，同一 role 允许多 Agent 实例（按仓库/技术栈特化）；**不引入 capabilities 概念**（代码库中从不存在，引入别名是净负债）。无代码改动。
   ✅ 已完成（提交 91251ef）：已在 ARCHITECTURE.md 和 README.md 中补充完整 role 定义
 
-- [ ] 1.1.2 改造现有 `applyRoleWizard` 向导为默认模板：`matea-analyst` / `matea-coder` / `matea-review`  
+- [x] 1.1.2 改造现有 `applyRoleWizard` 向导为默认模板：`matea-analyst` / `matea-coder` / `matea-review`  
   现状：向导已预设 name + system_prompt + user_template（`web/src/views/Agents.vue`）。差距仅三点：命名 `code-*` → `matea-*`、补默认 backend（`builtin`）、配合 1.1.3 填 gitea_username。命名迁移需同步 README / AGENTS.md / E2E 示例与存量用户引导。  
   默认 backend 标识符统一为 `builtin`（决策 #13，与 §九 `hub-` 前缀分流规则一致）：本项**直接写 `builtin`**，无需回退到 `internal`；源码侧 `internal`→`builtin` 的改写与读取期归一化由 1.2.6 负责，二者无顺序依赖（1.2.6 落库后 `builtin`/`internal` 均被接受）。  
   注：分析 Agent 用 `matea-analyst` 而非 `matea`，避免产品名的「总入口」误解。
+  ✅ 已完成（提交 40c7454, 5a49966）：已改造向导并更新文档命名示例
 
 - [ ] 1.1.3 Agent 名自动映射 Gitea username（含账号保护）  
   `matea-analyst` → `@matea-analyst`，`matea-coder` → `@matea-coder`；可覆盖。  
