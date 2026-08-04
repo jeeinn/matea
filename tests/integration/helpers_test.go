@@ -428,6 +428,14 @@ func newGiteaMock() *httptest.Server {
 				"title":  "Comment",
 			})
 
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/users/"):
+			// Users do not exist by default in the mock — return 404 so
+			// EnsureGiteaAccount takes the create-user branch (real Gitea
+			// behavior; the previous fall-through 200 made GetUser always
+			// report the user as existing).
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"message": "user not found"})
+
 		default:
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
