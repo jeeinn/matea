@@ -276,12 +276,42 @@ const (
 	BackendTypeOpenCodeHTTP = "opencode_http"
 )
 
-// DefaultAgentBackends returns the default backends config: a single implicit `internal` builtin.
+// Canonical backend names (task 1.2.6).
+const (
+	// BackendNameBuiltin is the canonical name of the built-in coding backend.
+	BackendNameBuiltin = "builtin"
+	// BackendNameHubOpenCode is the canonical type/name for the OpenCode hub backend.
+	BackendNameHubOpenCode = "hub-opencode"
+)
+
+// Legacy backend identifiers accepted during the 1.2.6 transition.
+const (
+	legacyBackendInternal     = "internal"
+	legacyBackendOpenCodeHTTP = "opencode_http"
+)
+
+// NormalizeBackend maps legacy backend identifiers to canonical names:
+// "internal" → "builtin", "opencode_http" → "hub-opencode". Everything else
+// (including "") passes through unchanged. Applied at config load and at
+// coding-backend resolution so both old and new identifiers are accepted
+// (task 1.2.6a — lands first to remove ordering dependencies).
+func NormalizeBackend(name string) string {
+	switch name {
+	case legacyBackendInternal:
+		return BackendNameBuiltin
+	case legacyBackendOpenCodeHTTP:
+		return BackendNameHubOpenCode
+	default:
+		return name
+	}
+}
+
+// DefaultAgentBackends returns the default backends config: a single implicit builtin.
 func DefaultAgentBackends() AgentBackendsConfig {
 	return AgentBackendsConfig{
-		Default: "internal",
+		Default: BackendNameBuiltin,
 		Backends: map[string]BackendConfig{
-			"internal": {Type: BackendTypeBuiltin},
+			BackendNameBuiltin: {Type: BackendTypeBuiltin},
 		},
 	}
 }

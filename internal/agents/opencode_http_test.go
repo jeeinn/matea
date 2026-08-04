@@ -375,6 +375,45 @@ func TestResolveCodingBackendUsesDefault(t *testing.T) {
 	assert.Equal(t, "opencode-local", backend.Name())
 }
 
+// TestResolveCodingBackendNormalizesLegacyIdentifiers verifies pre-1.2.6
+// identifiers still route correctly (task 1.2.6a acceptance: rows with
+// backend='internal' and configs with type='opencode_http' keep working).
+func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
+	// Legacy agent.Backend="internal" resolves to the builtin backend.
+	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, nil, nil, sandbox.DefaultConfig(), nil, "")
+	backend, err := factory.ResolveCodingBackend(&store.Agent{Backend: "internal"})
+	require.NoError(t, err)
+	assert.Equal(t, "internal", backend.Name(), "legacy internal should resolve to the builtin backend (Name() unchanged until 1.2.6b)")
+
+	// Canonical agent.Backend="builtin" resolves identically.
+	backend2, err := factory.ResolveCodingBackend(&store.Agent{Backend: "builtin"})
+	require.NoError(t, err)
+	assert.Equal(t, backend.Name(), backend2.Name())
+
+	// Legacy type "opencode_http" still selects the OpenCode backend.
+	srv := newTestOpenCodeServer(t, nil)
+	legacyBackends := &config.AgentBackendsConfig{
+		Backends: map[string]config.BackendConfig{
+			"my-opencode": {Type: "opencode_http", BaseURL: srv.URL},
+		},
+	}
+	factory2 := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, legacyBackends, nil, sandbox.DefaultConfig(), nil, "")
+	ocBackend, err := factory2.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
+	require.NoError(t, err)
+	assert.Equal(t, "my-opencode", ocBackend.Name())
+
+	// Canonical type "hub-opencode" works the same way.
+	canonicalBackends := &config.AgentBackendsConfig{
+		Backends: map[string]config.BackendConfig{
+			"my-opencode": {Type: config.BackendNameHubOpenCode, BaseURL: srv.URL},
+		},
+	}
+	factory3 := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, canonicalBackends, nil, sandbox.DefaultConfig(), nil, "")
+	ocBackend2, err := factory3.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
+	require.NoError(t, err)
+	assert.Equal(t, "my-opencode", ocBackend2.Name())
+}
+
 // --- Health check (runWriteTask: fail before prepare unless allow_fallback_internal) ---
 
 func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {

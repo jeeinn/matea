@@ -241,22 +241,40 @@ func ApplyToolPackDefaults(tpc *ToolPacksConfig) {
 	}
 }
 
-// ApplyBackendDefaults ensures the implicit `internal` builtin backend exists and
-// is the default when none is set. Non-write tasks always use internal regardless.
-// Exported for use by runners / other packages that construct backends independently.
+// ApplyBackendDefaults normalizes legacy backend identifiers (internal →
+// builtin, opencode_http → hub-opencode) and ensures the builtin backend
+// exists and is the default when none is set. Non-write tasks always use the
+// builtin backend regardless. Exported for use by runners / other packages
+// that construct backends independently.
 func ApplyBackendDefaults(backends *AgentBackendsConfig) {
+	backends.Default = NormalizeBackend(backends.Default)
 	if backends.Default == "" {
-		backends.Default = "internal"
+		backends.Default = BackendNameBuiltin
 	}
 	if backends.Backends == nil {
 		backends.Backends = map[string]BackendConfig{}
 	}
-	if _, ok := backends.Backends["internal"]; !ok {
-		backends.Backends["internal"] = BackendConfig{Type: BackendTypeBuiltin}
-	} else if backends.Backends["internal"].Type == "" {
-		b := backends.Backends["internal"]
-		b.Type = BackendTypeBuiltin
-		backends.Backends["internal"] = b
+	// Normalize legacy map keys and legacy backend types. If a legacy key and
+	// a canonical key both exist (e.g. user defined both `internal:` and
+	// `builtin:`), whichever the map yields first wins — such configs are
+	// pathological and not supported.
+	normalized := make(map[string]BackendConfig, len(backends.Backends)+1)
+	for name, b := range backends.Backends {
+		b.Type = NormalizeBackend(b.Type)
+		canonical := NormalizeBackend(name)
+		if _, exists := normalized[canonical]; !exists {
+			normalized[canonical] = b
+		}
+	}
+	backends.Backends = normalized
+	// Ensure the builtin backend entry exists and is typed.
+	if b, ok := backends.Backends[BackendNameBuiltin]; ok {
+		if b.Type == "" {
+			b.Type = BackendTypeBuiltin
+			backends.Backends[BackendNameBuiltin] = b
+		}
+	} else {
+		backends.Backends[BackendNameBuiltin] = BackendConfig{Type: BackendTypeBuiltin}
 	}
 }
 

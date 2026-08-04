@@ -70,7 +70,7 @@ func TestLoadEmptyYAMLAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.Logging.Level)
 	assert.Equal(t, "deepseek", cfg.LLM.Defaults.Provider)
 	assert.Equal(t, "deepseek-v4-flash", cfg.LLM.Defaults.Model)
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
 	assert.Equal(t, "./data/work", cfg.Sandbox.BaseDir) // aligned from workspace
 	assert.Equal(t, DefaultAgentLoopConfig().MaxIterations, cfg.Agents.Loop.MaxIterations)
 	assert.Equal(t, DefaultAgentLoopConfig().TotalTimeout, cfg.Agents.Loop.TotalTimeout)
@@ -109,9 +109,9 @@ func TestApplyBackendDefaultsSetsInternal(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
 
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
-	assert.Contains(t, cfg.Agents.Backends.Backends, "internal")
-	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["internal"].Type)
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
+	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
+	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["builtin"].Type)
 }
 
 func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
@@ -127,10 +127,11 @@ func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
 	}
 	applyDefaults(cfg)
 
-	// Explicit default preserved; internal still ensured
+	// Explicit default preserved; builtin still ensured; legacy type normalized
 	assert.Equal(t, "opencode-local", cfg.Agents.Backends.Default)
-	assert.Contains(t, cfg.Agents.Backends.Backends, "internal")
+	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
 	assert.Contains(t, cfg.Agents.Backends.Backends, "opencode-local")
+	assert.Equal(t, BackendNameHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
 }
 
 func TestApplyBackendDefaultsBackfillsInternalType(t *testing.T) {
@@ -138,15 +139,17 @@ func TestApplyBackendDefaultsBackfillsInternalType(t *testing.T) {
 		Agents: AgentsConfig{
 			Backends: AgentBackendsConfig{
 				Backends: map[string]BackendConfig{
-					"internal": {}, // type empty
+					"internal": {}, // legacy key, type empty
 				},
 			},
 		},
 	}
 	applyDefaults(cfg)
 
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
-	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["internal"].Type)
+	// Legacy key normalized to canonical "builtin"; type backfilled
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
+	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["builtin"].Type)
+	assert.NotContains(t, cfg.Agents.Backends.Backends, "internal")
 }
 
 func TestLoadGeneratesBootstrapIfMissing(t *testing.T) {

@@ -229,15 +229,17 @@ func (b *InternalCodingBackend) Abort(ctx context.Context, handle string) error 
 // instance is constructed fresh each call (they hold no state between calls);
 // the internal backend is reused (it has no state).
 func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend, error) {
-	name := agent.Backend
+	// Normalize legacy identifiers (internal → builtin, opencode_http →
+	// hub-opencode) so DB rows and configs written before 1.2.6 keep working.
+	name := config.NormalizeBackend(agent.Backend)
 	if name == "" {
-		name = f.backends.Default
+		name = config.NormalizeBackend(f.backends.Default)
 	}
 	if name == "" {
-		name = "internal"
+		name = config.BackendNameBuiltin
 	}
-	// "internal" is always available, even if missing from config
-	if name == "internal" {
+	// The builtin backend is always available, even if missing from config
+	if name == config.BackendNameBuiltin {
 		return f.internalBackend, nil
 	}
 
@@ -246,10 +248,13 @@ func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend,
 		return nil, fmt.Errorf("coding backend %q not found in agents.backends config", name)
 	}
 
-	switch cfg.Type {
+	// Normalize the backend type too: ApplyBackendDefaults already normalizes
+	// config-loaded values, but normalize again here for configs constructed
+	// directly (e.g. in tests).
+	switch config.NormalizeBackend(cfg.Type) {
 	case config.BackendTypeBuiltin:
 		return f.internalBackend, nil
-	case config.BackendTypeOpenCodeHTTP:
+	case config.BackendNameHubOpenCode:
 		backend, err := NewOpenCodeHTTPBackend(name, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("create opencode backend %q: %w", name, err)
