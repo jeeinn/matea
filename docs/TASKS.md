@@ -44,7 +44,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   注：分析 Agent 用 `matea-analyst` 而非 `matea`，避免产品名的「总入口」误解。
   ✅ 已完成（提交 40c7454, 5a49966）：已改造向导并更新文档命名示例
 
-- [ ] 1.1.3 Agent 名自动映射 Gitea username（含账号保护）  
+- [x] 1.1.3 Agent 名自动映射 Gitea username（含账号保护）  
   `matea-analyst` → `@matea-analyst`，`matea-coder` → `@matea-coder`；可覆盖。  
   **安全前置**：`EnsureGiteaAccount` 的 else 分支会对已存在账号静默重置密码并签发 token（`internal/agents/manager.go`），自动映射必须把触发面从「手工输入」扩大到「自动」之前堵住：
   - 托管标记：仅对「由 Matea 创建」的账号允许重置密码 / 签发 token
@@ -52,6 +52,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   - 确需接管既有账号时走单独的显式确认流程
   - `gitea.auto_provision: false` 时只做名称建议，不触碰 Gitea  
   验收：同名真人账号存在时创建 Agent → 报错且**不调用** `AdminUpdateUserPassword`。
+  ✅ 已完成（提交 f00c998）：已实现账号保护逻辑，测试全部通过
 
 - [ ] 1.1.4 合并 Assign 与 @mention 触发语义（保留 surface 维度，拆三步）  
   用户心智层统一为「拉 Agent 进入会话」，但 task_type 由 `(role, surface, intent)` 三元组解析表决定，**不能只看 role**——否则 @matea-review 在 Issue 评论会被推成 `review_pr`（无关联 PR 时被 L1 门禁拒绝，有关联 PR 时在 Issue 里错跑完整审查），@analyze 的轻量回话会放大成完整分析。
