@@ -87,7 +87,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [ ] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
   与 `HubBackend` 接口对齐；**Phase 1 保持 OpenCode 可用**，使接口抽象从两个真实实现（builtin + opencode）反推；保持现有配置兼容或提供迁移说明。
 
-- [ ] 1.2.6 backend 标识符迁移：`internal` → `builtin`、`opencode_http` → `hub-opencode`（决策 #13，源码侧统一，非仅 DB/YAML）  
+- [x] 1.2.6 backend 标识符迁移：`internal` → `builtin`、`opencode_http` → `hub-opencode`（决策 #13，源码侧统一，非仅 DB/YAML）  
   注意：`BackendTypeBuiltin = "builtin"` 常量**值已是 `builtin`**（schema.go:275），双轨根源是运行时默认名 / `InternalCodingBackend.Name()` / store 兜底仍写字面量 `"internal"`。本项把源码、配置、测试、DB、UI 全部收敛到 `builtin`/`hub-opencode`，使 1.1.2 直接写 `builtin` 无顺序依赖。
 
   **(a) 归一化函数（先落地，消除顺序依赖）**：新增 `normalizeBackend(name)`：`internal`→`builtin`、`opencode_http`→`hub-opencode`、其余原样；在 config 加载与 agent 加载处调用。落库后 `builtin`/`internal` 均被接受。
@@ -118,6 +118,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   **(f) 前端**：`web/src/views/Agents.vue`：注释 L105 "internal 为内置"→"builtin 为内置"；`backendTypeLabel`(L380) `opencode_http`→`hub-opencode`（返回 'OpenCode'）；创建 Agent 默认 backend 若写死 `internal` 改为 `builtin`。
 
   验收：存量 `backend='internal'` 行经迁移 + 归一化后正确路由；全部现有测试零回退通过；`BackendTypeBuiltin` 值保持 `"builtin"`。
+  ✅ 已完成（提交 64a8b42, 3a0f08e）：(a)-(f) 全部落地，全量测试零回退通过；commit_message.go:137 按排除要求未动
 
 - [ ] 1.2.7 Mock Hub 测试地基  
   TestEnv 增加 Mock Hub（模拟正常返回 / 超时 / 502 / 鉴权失败 / 异步长任务）；接口定完立刻以其验证可测性，为 Phase 2 测试铺路。
