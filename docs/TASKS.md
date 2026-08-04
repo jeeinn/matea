@@ -108,7 +108,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   - `internal/agents/coding_backend_test.go`：`InternalCodingBackend`→`BuiltinCodingBackend`、构造器、mock 注释、各 `Name()` 断言（L18/46-154）。
   - `internal/agents/opencode_http_test.go`：L314/319/323 `"internal"`→`"builtin"`；`BackendTypeOpenCodeHTTP`(L114/153/290/298/332/365/387/406)→`BackendTypeHubOpenCode`；`AllowFallbackInternal: true`(L408)→`AllowFallbackBuiltin: true`；注释 L378 `allow_fallback_internal`→`allow_fallback_builtin`。
 
-  **(d) DB 一次性迁移（幂等）**：`UPDATE agents SET backend='builtin' WHERE backend IN ('internal','')`；`UPDATE agents SET backend='hub-opencode' WHERE backend='opencode_http'`；放入 store 迁移段。
+  **(d) DB 一次性迁移（幂等）**：`UPDATE agents SET backend='builtin' WHERE backend IN ('internal','')`；`UPDATE agents SET backend='hub-opencode' WHERE backend='opencode_http'`；放入 store 迁移段。同时回填 1.1.3 的托管标记：`managed_by_matea DEFAULT 0` 对升级前已由 Matea 创建的账号为 0，若有存量需补一次性 UPDATE 置 1（当前无真实用户，仅记录）。
 
   **(e) YAML 示例**：`config.full-example.yaml`：L134/137 `internal`→`builtin`、L139 块名 `internal:`→`builtin:`、L142 `type: opencode_http`→`hub-opencode`、L152 `allow_fallback_internal`→`allow_fallback_builtin`（注释中 "降级到 internal Loop"→"降级到 builtin Loop"）；`config.example.yaml` 同步（若有）。
 
