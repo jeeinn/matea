@@ -143,15 +143,21 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 1.4 LLM 配置边界 + UI 动态表单
 
-- [ ] 1.4.1 明确 `llm.providers` 仅用于 `builtin` backend  
+- [x] 1.4.1 明确 `llm.providers` 仅用于 `builtin` backend  
   Hub backend 的 LLM 配置由 Hub 自己管理。
+  实现：schema.go `LLMConfig.Providers` 注释、builtin_hub_backend.go `resolveProvider` 注释（明确仅 builtin 走此路径）、manager_models.go `getProviderConfig` 注释、config.full-example.yaml `llm.providers` 段注释。纯文档澄清，无逻辑变更；消费点（GetProviderModels / resolveProvider）本就仅 builtin 触达。
 
-- [ ] 1.4.2 Agent 编辑页按 `backend` 动态显示字段  
-  - `builtin`：Provider / Model / Temperature / System Prompt / Loop Config  
-  - `hub-opencode`：URL / API Key / Workspace Mode  
-  - `hub-hermes`：URL / Skill / API Key / Memory Keys（高级）
+- [x] 1.4.2 Agent 编辑页按 `backend` 动态显示字段  
+  - 新增 `selectedBackendType`/`isBuiltinBackend`/`isHubOpenCode`/`isHubHermes` 计算属性（按 `_meta.backends` 的 `type`）。
+  - `builtin`：Provider / Model / Temperature / Loop Config（均加 `v-if="isBuiltinBackend"`；Loop Config 再叠加 `role==='coder'`）。
+  - `hub-opencode`：仅覆盖 `opencode_model` / `opencode_provider` / `opencode_agent`（绑定 `backend_options`，`v-if="isHubOpenCode"`）；连接参数 URL/鉴权/工作区模式由服务端命名后端 `agents.backends.<name>` 统一配置，**不在** Agent 页收集。
+    📌 评审修正（20260804-1.4 评审）：原拟定收集 `backend_options.url/api_key/workspace_mode`，经核对全仓无服务端消费者（opencode_http.go 仅消费 `opencode_model/opencode_provider/opencode_agent`），且 `workspace_mode` 前端选项 `container/local` 与服务端唯一接受值 `matea_path` 不符；已改为仅暴露服务端实际消费的覆盖键，并在表单内提示连接参数来源。
+  - `hub-hermes`：URL / Skill / API Key / Memory Keys（绑定 `backend_options`，`v-if="isHubHermes"`，置于高级折叠；type 由前端防御性识别，Phase 2 服务端落地）。
+  - **决策**：System Prompt / User Template 为 Agent 级人设，**所有后端均显示**（未按任务字面归入 builtin），避免 hub Agent 丢失人设。
+  - `backend_options` 接入：create 表单默认 `{}`；edit 用 `agent.backend_options` 初始化；切换 backend 经 `onBackendChange` 清空（键集不同）；`saveAgent` 仅 hub 后端发送 `backend_options`，builtin 省略以避免清空既有值。后端 API（`handlers_agents.go`）已原生支持 `backend_options`。
 
-- [ ] 1.4.3 系统配置页提示「LLM Providers 仅用于 builtin Agent」
+- [x] 1.4.3 系统配置页提示「LLM Providers 仅用于 builtin Agent」  
+  SystemConfig.vue LLM 配置 Tab 顶部 alert 改为明确：Provider 仅对 builtin Agent 生效；hub-* 由 Hub 自管、连接参数（URL/鉴权/工作区模式）在服务器端 `agents.backends.<后端名>` 按命名后端统一设置，Agent 编辑页仅可覆盖提交到 Hub 的模型/Provider。
 
 ### 1.5 工作流与体验
 
