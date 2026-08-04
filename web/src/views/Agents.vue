@@ -392,25 +392,26 @@ const roleLabel = (role) => {
 
 const onRoleChange = (role) => {
   if (!editingAgent.value && !form.value.name) {
-    form.value.name = role === 'analyze' ? 'code-analyzer' : role === 'coder' ? 'code-developer' : 'code-reviewer'
+    // 使用 matea-* 命名，避免 matea 单独作为总入口的误解
+    form.value.name = role === 'analyze' ? 'matea-analyst' : role === 'coder' ? 'matea-coder' : 'matea-review'
   }
 }
 
 const applyRoleWizard = (role) => {
   let templateName = ''
   let name = ''
-  
+
   if (role === 'analyze') {
     templateName = 'analyze_issue'
-    name = 'code-analyzer'
+    name = 'matea-analyst'
   } else if (role === 'coder') {
     templateName = 'solve_issue'
-    name = 'code-developer'
+    name = 'matea-coder'
   } else if (role === 'review') {
     templateName = 'review_pr'
-    name = 'code-reviewer'
+    name = 'matea-review'
   }
-  
+
   if (templateName) {
     const tmpl = builtinTemplates.value.find(t => t.name === templateName)
     if (tmpl) {
@@ -419,7 +420,11 @@ const applyRoleWizard = (role) => {
     }
   }
   form.value.name = name
-  ElMessage.success(`已应用 ${roleLabel(role)} 向导：命名 + 默认 Prompt`)
+  // 设置 backend 为 builtin（与 1.2.6 的归一化函数配合，无顺序依赖）
+  form.value.backend = 'builtin'
+  // 设置 gitea_username 为与 name 相同（配合任务 1.1.3 的自动映射）
+  form.value.gitea_username = name
+  ElMessage.success(`已应用 ${roleLabel(role)} 向导：命名 + Backend + Gitea 用户名 + 默认 Prompt`)
 }
 
 const loadModelCatalog = async () => {
