@@ -12,14 +12,15 @@ import (
 )
 
 // EventCallback is called when a webhook event is parsed and matched.
-// It receives the parsed event for further processing (e.g., enqueue to dispatcher).
+// It receives the unified Intent produced by the ingress (1.3.1) for further
+// processing (e.g., enqueue to dispatcher).
 //
 // Return semantics (must stay aligned with dispatcher.HandleEvent):
 //   - true  — terminal outcome (enqueued, intentionally skipped, gate reject, etc.);
 //     the delivery is marked processed and will not be replayed.
 //   - false — transient failure (DB/enqueue errors); leave status=accepted so
 //     ReplayAccepted can retry after restart.
-type EventCallback func(evt *WebhookEvent) bool
+type EventCallback func(intent *Intent) bool
 
 // Handler processes incoming Gitea webhook requests.
 type Handler struct {
@@ -110,7 +111,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate payload before accepting into the inbox.
-	if _, err := ParseEvent(eventType, deliveryID, body); err != nil {
+	if _, err := ParseIntent(eventType, deliveryID, body); err != nil {
 		log.Printf("[ERROR] Failed to parse event %s: %v", eventType, err)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
@@ -139,7 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) processAccepted(deliveryID, eventType string, body []byte) {
-	evt, err := ParseEvent(eventType, deliveryID, body)
+	intent, err := ParseIntent(eventType, deliveryID, body)
 	if err != nil {
 		// Payload was validated before accept; re-parse failure is unrecoverable.
 		log.Printf("[ERROR] Failed to re-parse accepted delivery %s: %v", deliveryID, err)
@@ -150,7 +151,7 @@ func (h *Handler) processAccepted(deliveryID, eventType string, body []byte) {
 		h.dedup.MarkProcessed(deliveryID)
 		return
 	}
-	if h.callback(evt) {
+	if h.callback(intent) {
 		h.dedup.MarkProcessed(deliveryID)
 		return
 	}

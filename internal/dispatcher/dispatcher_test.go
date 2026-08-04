@@ -141,7 +141,7 @@ func TestDispatcherHandleEvent(t *testing.T) {
 	}
 
 	// Test HandleEvent
-	result := d.HandleEvent(evt)
+	result := d.HandleEvent(giteaingress.WrapEvent(evt))
 	if !result {
 		t.Error("HandleEvent returned false, expected true")
 	}
@@ -208,12 +208,12 @@ func TestDispatcherDuplicateDelivery(t *testing.T) {
 	}
 
 	// First call should succeed
-	if !d.HandleEvent(evt) {
+	if !d.HandleEvent(giteaingress.WrapEvent(evt)) {
 		t.Error("First HandleEvent should succeed")
 	}
 
 	// Second call with same delivery should fail (duplicate)
-	if d.HandleEvent(evt) {
+	if d.HandleEvent(giteaingress.WrapEvent(evt)) {
 		t.Error("Second HandleEvent with same delivery should fail")
 	}
 
@@ -274,10 +274,10 @@ func TestPurePRCommentsUseDistinctEffectiveKeys(t *testing.T) {
 		}
 	}
 
-	if !d.HandleEvent(mkEvt("pure-pr-20", 20)) {
+	if !d.HandleEvent(giteaingress.WrapEvent(mkEvt("pure-pr-20", 20))) {
 		t.Fatal("HandleEvent PR#20 failed")
 	}
-	if !d.HandleEvent(mkEvt("pure-pr-21", 21)) {
+	if !d.HandleEvent(giteaingress.WrapEvent(mkEvt("pure-pr-21", 21))) {
 		t.Fatal("HandleEvent PR#21 should succeed (must not collide on issue_id=0)")
 	}
 
