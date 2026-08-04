@@ -271,6 +271,14 @@ go vet ./...
 
 在 Matea 中注册多个功能性 Agent，每个 Agent 设置 `role` 并在 Gitea 上作为协作者：
 
+### Role 定义
+
+- **`role` 为闭集**：`analyze` | `coder` | `review`（创建任何 Agent 必须三选一）
+- **Agent 实例数不限**：同一 role 可创建多个 Agent 实例，按仓库/技术栈特化（如 `matea-coder-go`、`matea-coder-fe`）
+- **不使用 capabilities 概念**：role 是 Agent 职责的唯一真相，不引入 capabilities 作为别名
+
+### Role 类型与触发
+
 | role | 触发方式 | 说明 |
 |------|----------|------|
 | `analyze` | Issue 上 **Assign** analyze Agent | 需求/Bug 分析，输出评论报告 |
