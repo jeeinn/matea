@@ -37,6 +37,7 @@ type TestEnv struct {
 	Mux          *http.ServeMux
 	Server       *httptest.Server
 	GiteaMock    *httptest.Server
+	HubMock      *MockHub // generic hub backend mock (task 1.2.7)
 	CleanupFuncs []func()
 }
 
@@ -106,6 +107,10 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	// Create test server
 	server := httptest.NewServer(mux)
 
+	// Create mock hub (1.2.7): validates HubBackend testability and paves the
+	// way for Phase 2 hub dispatch tests. Default scenario: normal, no auth.
+	hubMock := NewMockHub(t)
+
 	env := &TestEnv{
 		DB:         db,
 		Config:     cfg,
@@ -113,11 +118,13 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		Mux:        mux,
 		Server:     server,
 		GiteaMock:  giteaMock,
+		HubMock:    hubMock,
 		CleanupFuncs: []func(){
 			func() { db.Close() },
 			func() { os.Remove(tmpDB.Name()) },
 			func() { server.Close() },
 			func() { giteaMock.Close() },
+			func() { hubMock.Close() },
 		},
 	}
 
