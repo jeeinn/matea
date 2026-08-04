@@ -83,6 +83,14 @@ type TaskContext struct {
 	Diff       string            `json:"diff,omitempty"`        // review_pr only
 	BaseBranch string            `json:"base_branch,omitempty"`
 
+	// Execution target for the builtin backend: which local LLM to run.
+	// Hub backends own their model config server-side and ignore these.
+	// (Added in 1.2.3 when the builtin loop was wrapped as a HubBackend —
+	// the interface refined from a real implementation.)
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	TaskID   int64  `json:"task_id,omitempty"` // local task id (logging / usage attribution)
+
 	// Matea prompt layer output (system_prompt / user_template rendered).
 	SystemPrompt string `json:"system_prompt,omitempty"`
 	UserPrompt   string `json:"user_prompt,omitempty"`
