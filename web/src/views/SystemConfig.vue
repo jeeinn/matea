@@ -64,7 +64,13 @@
 
         <!-- Tab 2: LLM 配置 -->
         <el-tab-pane label="LLM 配置" name="llm">
-          <el-alert title="配置 LLM Provider 后，Agent 创建时可从已配置的 Provider 中选择" type="info" :closable="false" style="margin-bottom: 16px" />
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            <template #title>
+              LLM Provider 仅用于 <b>builtin</b> 后端
+            </template>
+            此处配置的 Provider 仅对 backend 为 <b>builtin</b> 的 Agent 生效：配置后，builtin Agent 创建/编辑时可从下拉中选择 Provider 与模型。
+            <b>hub-* 后端</b>（如 hub-opencode、Phase 2 的 hub-hermes）由 Hub 自身管理 LLM，<b>不读取此处配置</b>；其连接参数（URL/鉴权/工作区模式）在服务器端 agents.backends.&lt;后端名&gt; 中按命名后端统一设置，Agent 编辑页仅可覆盖提交到 Hub 的模型/Provider。
+          </el-alert>
           <el-form label-width="140px" class="config-form">
             <el-form-item label="Provider 列表">
               <div class="provider-toolbar">
