@@ -170,8 +170,12 @@ type HubBackend interface {
 	Submit(ctx context.Context, task *TaskContext) (*Handle, error)
 
 	// Poll reports the current result and state for a Handle. It must be
-	// safe to call repeatedly and after a Matea restart (given the persisted
-	// Handle).
+	// safe to call repeatedly. Restart-safety binds backends whose Handles
+	// are persisted (async hubs — Matea persists the Handle at Submit and
+	// the Executor re-attaches polling on startup). Synchronous backends
+	// (builtin, and hub-opencode in Phase 1) complete inside Submit and
+	// cache outcomes in memory: a post-restart Poll reports "unknown
+	// handle", and the task queue's crash-replay re-runs the task instead.
 	Poll(ctx context.Context, h *Handle) (*BackendResult, State, error)
 
 	// Cancel asks the backend to stop the task (best effort).

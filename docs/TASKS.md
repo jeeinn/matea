@@ -84,7 +84,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [x] 1.2.4 在四个 Runner 中预留 `hub-*` backend 分流分支  
   Phase 1 中 `hub-hermes` / `hub-openclaw` / `hub-api` 返回明确错误（尚无实现）；**`hub-opencode` 例外，保持可用**（见 1.2.5）。未知 backend 必须报错，不得静默回落 builtin。
-  ✅ 已完成（提交 75d481c）：ResolveHubBackend + 注册表（builtin 常驻、hub-opencode 单例）；五入口统一校验；保留名/未知名显式报错
+  ✅ 已完成（提交 75d481c）：ResolveHubBackend + 注册表（builtin 常驻、hub-opencode 单例）；四个 Runner 文件全覆盖（五个 Runner 入口，Dev/Bugfix 共用 runWriteTask）；保留名/未知名显式报错
 
 - [x] 1.2.5 将现有 `CodingBackend`（OpenCode）改造为 `hub-opencode` 可选实现  
   与 `HubBackend` 接口对齐；**Phase 1 保持 OpenCode 可用**，使接口抽象从两个真实实现（builtin + opencode）反推；保持现有配置兼容或提供迁移说明。
@@ -178,7 +178,10 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [ ] 2.1.1 实现 `internal/agents/backends/hermes`  
   `HubBackend.Submit` 按 task_type 分支；HTTP/API 调用 Hermes；Handle 持久化与重启恢复。  
-  重启恢复须满足 1.2.1 的「落库 + Executor 重启拾取」要求，不得仅做 Runner 内串行 Poll。
+  重启恢复须满足 1.2.1 的「落库 + Executor 重启拾取」要求，不得仅做 Runner 内串行 Poll。  
+  📌 Phase 1.2 评审挂账（20260804-Phase1.2-code-review 🟡）：  
+  ① **IdempotencyKey 去重落地**——1.2 两个实现均以 RemoteID 为缓存键，IdempotencyKey 已计算未消费；Handle 持久化时须以其防重复提交。  
+  ② **Poll 重启措辞统一**——接口注释已按「重启安全只约束 Handle 落库的异步后端」收紧（hub_backend.go），持久化接管时复核实现/测试措辞一致。
 
 - [ ] 2.1.2 `analyze_issue` → Hermes  
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
