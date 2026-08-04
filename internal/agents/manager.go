@@ -113,6 +113,7 @@ func (m *Manager) EnsureGiteaAccount(username, currentToken string) (token strin
 
 	password := generatePassword()
 	if user == nil {
+		// User doesn't exist - create new Matea-managed account
 		if _, err := m.gitea.AdminCreateUser(gitea.CreateUserRequest{
 			LoginName:          username,
 			Username:           username,
@@ -126,10 +127,20 @@ func (m *Manager) EnsureGiteaAccount(username, currentToken string) (token strin
 		userCreated = true
 		log.Printf("[INFO] Created Gitea user: %s", username)
 	} else {
-		if err := m.gitea.AdminUpdateUserPassword(username, password); err != nil {
-			return "", false, fmt.Errorf("reset gitea user password: %w", err)
+		// User exists but token invalid - check if managed by Matea
+		// Query the agent by gitea_username to check managed_by_matea flag
+		existingAgent, err := m.db.GetAgentByGiteaUsername(username)
+		if err == nil && existingAgent != nil && existingAgent.ManagedByMatea {
+			// This is a Matea-managed account, safe to reset password
+			if err := m.gitea.AdminUpdateUserPassword(username, password); err != nil {
+				return "", false, fmt.Errorf("reset gitea user password: %w", err)
+			}
+			log.Printf("[INFO] Refreshed Gitea credentials for Matea-managed user: %s", username)
+		} else {
+			// Either no agent found, or agent exists but not managed by Matea
+			// This is a real person's account - refuse to take over
+			return "", false, fmt.Errorf("gitea user %q already exists and is not managed by Matea; please choose a different username or manually take over the account", username)
 		}
-		log.Printf("[INFO] Refreshed Gitea credentials for existing user: %s", username)
 	}
 
 	tokenResp, err := m.gitea.CreateTokenWithCredentials(username, password, agentTokenName)
@@ -142,7 +153,7 @@ func (m *Manager) EnsureGiteaAccount(username, currentToken string) (token strin
 
 // CreateAgent registers a new agent with Gitea account and stores it in DB.
 func (m *Manager) CreateAgent(req CreateAgentRequest) (*store.Agent, error) {
-	token, _, err := m.EnsureGiteaAccount(req.GiteaUsername, "")
+	token, userCreated, err := m.EnsureGiteaAccount(req.GiteaUsername, "")
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +182,7 @@ func (m *Manager) CreateAgent(req CreateAgentRequest) (*store.Agent, error) {
 		BackendOptions:  req.BackendOptions,
 		ToolPack:        req.ToolPack,
 		McpServers:      req.McpServers,
+		ManagedByMatea:  userCreated, // Mark as managed if we created the Gitea user
 	}
 	if err := m.db.CreateAgent(agent); err != nil {
 		return nil, fmt.Errorf("store agent: %w", err)
