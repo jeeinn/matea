@@ -82,6 +82,12 @@ func (b *BuiltinHubBackend) HealthCheck(ctx context.Context) error {
 // Handle with the error; execution errors also fail Submit directly because
 // the synchronous builtin already knows the outcome — no Handle worth
 // persisting exists.
+//
+// Note on idempotency / crash safety: RemoteID is generated only after the
+// task completes, so a crash during execute() leaves no Handle behind. The
+// builtin backend relies on the task queue's existing crash-replay to re-run
+// the task after restart. This matches the synchronous-backend contract
+// documented on HubBackend.Poll.
 func (b *BuiltinHubBackend) Submit(ctx context.Context, tc *TaskContext) (*Handle, error) {
 	if tc == nil {
 		return nil, fmt.Errorf("builtin backend: nil TaskContext")
@@ -193,8 +199,12 @@ func (b *BuiltinHubBackend) executeWrite(ctx context.Context, tc *TaskContext) (
 	}
 
 	res, err := b.factory.builtinBackend.Run(ctx, CodingRequest{
-		WorkDir:      tc.SandboxPath,
-		Sandbox:      sb,
+		WorkDir: tc.SandboxPath,
+		Sandbox: sb,
+		// Task/Agent here carry only the fields the builtin coding backend
+		// actually consumes (ID/Repo/Event/Context and Provider/Model).
+		// PRID/Sender/SessionID/Continue/Timeout/BackendOptions/ToolPack are
+		// either unused by the builtin path or handled at the runner layer.
 		Task:         &store.Task{ID: tc.TaskID, Repo: tc.Repo, Event: tc.IssueTitle, Context: tc.IssueBody},
 		Agent:        &store.Agent{Provider: tc.Provider, Model: tc.Model},
 		TaskSubType:  subType,
@@ -207,7 +217,6 @@ func (b *BuiltinHubBackend) executeWrite(ctx context.Context, tc *TaskContext) (
 	return &BackendResult{Summary: res.Summary}, nil
 }
 
-// resolveProvider looks up the LLM provider named by the TaskContext.
 // resolveProvider resolves the LLM provider for the **builtin** backend from the
 // global llm.providers config (via the LLM registry). It is only ever called for
 // the builtin backend: hub-* backends manage their own LLM and must never reach

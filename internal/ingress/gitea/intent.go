@@ -36,6 +36,11 @@ type Intent struct {
 	ThreadID string `json:"thread_id,omitempty"`
 
 	// Event is the parsed Gitea webhook payload (nil for non-Gitea sources).
+	// It is intentionally excluded from JSON serialization: the payload is
+	// consumed in-process by the dispatcher and should not be persisted or
+	// forwarded as-is. If a future ingress (MCP/API/CLI) needs to round-trip
+	// an Intent through logs/queues, the source-specific payload should be
+	// re-attached from the delivery layer rather than serialized here.
 	Event *WebhookEvent `json:"-"`
 }
 
