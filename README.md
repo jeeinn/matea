@@ -8,37 +8,49 @@
 [![License](https://img.shields.io/badge/License-MIT-blue)](#license)
 [![Tests](https://img.shields.io/badge/Tests-55+-brightgreen)](#测试)
 
-AI Agent 网关 —— 通过 Gitea Webhook 事件驱动，将 AI Agent 嵌入 Gitea 工作流。支持多种 Agent 类型，通过 Tool-Use（Function Calling）与代码库交互，自动完成代码分析、审查、开发和修复任务。
+AI Agent 网关 —— 通过 Gitea Webhook 事件驱动，将 AI Agent 嵌入 Gitea 工作流。支持多种 Agent 类型，通过 Tool-Use（Function Calling）与代码库交互，自动完成代码分析、审查、开发和修复任务。默认使用内置 Agent Loop（`builtin` backend），可选接入 Hub 后端（OpenCode / Hermes）外包执行。
 
 ## 功能特性
 
 - 🤖 **多种 Agent 类型** —— 需求分析、代码审查、评论交互、Issue 开发、Bug 修复
 - 🔧 **Tool-Use Agent** —— 基于 LLM Function Calling，通过 read_file / write_file / search_code / run_command / apply_diff 等工具理解和修改代码
+- 🌐 **可插拔后端** —— 默认 `builtin` 内置 Agent Loop；可选 `hub-opencode` 等 Hub 后端，将执行外包给外部服务
 - 🔒 **轻量级沙箱** —— 目录隔离 + 命令白名单 + 超时控制 + 审计日志（不依赖 Docker）
 - 🎯 **可配置模板** —— 支持自定义 System Prompt 和 User Template，支持 Go template 语法
-- 🌐 **Web UI** —— Vue 3 + Element Plus 管理界面，Dashboard / Agent 管理 / 任务列表 / Prompt 编辑
+- 🖥️ **Web UI** —— Vue 3 + Element Plus 管理界面，Dashboard / Agent 管理 / 任务列表 / Prompt 编辑
 - 📡 **多 LLM 支持** —— OpenAI 兼容（DeepSeek / Qwen / Moonshot / Ollama）+ Anthropic Claude
 - ⚙️ **灵活配置** —— Agent 级别 loop_config 覆盖（最大迭代、Token 限制、超时控制）
 
 ## 架构概览
 
 ```
-Gitea Webhook → Handler (签名验证 + 去重)
-  → Dispatcher (路由匹配 + 任务队列 + 并发执行)
+Gitea Webhook → ingress/gitea (签名验证 + 去重)
+  → Dispatcher (EventResolver + 任务队列 + 并发执行)
     → Runner (Analyze / Review / Interaction / Dev / Bugfix)
-      → Agent Loop (多轮 LLM 对话 + Tool Call)
+      → builtin Agent Loop 或 hub-* backend
     → 写回 Gitea (评论 / PR)
 ```
+
+### 后端选择
+
+| backend | 说明 | 适用场景 |
+|---------|------|---------|
+| `builtin`（默认） | 内置 Agent Loop，多轮 Tool-Use 在 Matea 进程内执行 | 本地 / 自托管 LLM，需要完全控制沙箱 |
+| `hub-opencode` | 将 Prompt 与代码上下文提交到 OpenCode Hub 执行 | 已有 OpenCode 服务，希望复用其会话/工具 |
+| `hub-hermes` / `hub-openclaw` / `hub-api` | Phase 2 逐步接入 | 暂时不可用，选择会明确报错 |
+
+`llm.providers` 配置**仅对 `builtin` backend 生效**；Hub backend 自己管理 LLM 与连接参数。
 
 ### 核心组件
 
 | 包 | 职责 |
 |---|------|
-| `internal/webhook` | HTTP Handler、签名验证、事件解析、去重 |
-| `internal/dispatcher` | Router（事件→Agent 匹配）、TaskQueue（SQLite 持久化）、Executor（并发控制） |
-| `internal/agents` | Runner 实现：AnalyzeRunner、ReviewRunner、InteractionRunner、DevRunner、BugfixRunner |
-| `internal/agent` | Tool-Use Agent Loop：ToolRegistry + 多轮对话循环 |
-| `internal/llm` | Provider 接口 + OpenAI 兼容客户端 + Anthropic 客户端 |
+| `internal/ingress/gitea` | Gitea Webhook HTTP Handler、签名验证、事件解析、去重、统一输出 `Intent` |
+| `internal/dispatcher` | 事件分发、TaskQueue（SQLite 持久化）、Executor（并发控制） |
+| `internal/workflow` | v2 Assign 模型：Resolver、WorkflowContext 状态机、L1/L2/L3 门禁、Session 生命周期 |
+| `internal/agents` | Runner 实现 + Manager + Registry；`builtin` / `hub-*` backend 分流 |
+| `internal/agent` | Tool-Use Agent Loop：ToolRegistry + 多轮对话循环（`builtin` backend 使用） |
+| `internal/llm` | Provider 接口 + OpenAI 兼容客户端 + Anthropic 客户端（`builtin` backend 使用） |
 | `internal/store` | SQLite 数据库（WAL 模式）、自动迁移、CRUD |
 | `internal/sandbox` | 工作空间隔离、命令白名单、Git 操作、审计日志 |
 | `internal/gitea` | Gitea API 客户端（Issue / PR / 评论 / 文件） |
@@ -76,8 +88,8 @@ chmod +x matea-linux-amd64   # Linux / macOS
 | ① | 登录 | `admin` / `admin123` → **立即改密** |
 | ② | **系统配置 → Gitea 连接** | 填写 Gitea 地址、管理员 Token（需 `write:admin`）、Webhook 密钥 → **测试 Gitea 连接** → **保存全部** |
 | ③ | **系统配置 → LLM 配置** | 填写 Provider JSON 与默认模型 → **测试 LLM 连接** → **保存全部** |
-| ④ | **Agent 管理** | 新建 analyze / coder / review 三个 Agent，勾选目标仓库 |
-| ⑤ | Gitea 仓库 | 将 Agent 用户加为协作者；配置 Webhook（见下文） |
+| ④ | **Agent 管理** | 点击「从模板创建」，依次生成 `matea-analyst` / `matea-coder` / `matea-review`；勾选目标仓库 |
+| ⑤ | Gitea 仓库 |  Matea 默认自动为 Agent 创建 Gitea 账号（`gitea.auto_provision: true`）；如关闭则需手动将 Agent 用户加为协作者，并配置 Webhook（见下文） |
 
 **Gitea 管理员 Token 所需权限**：`write:admin`（创建 Agent 用户）、`write:repository`、`read:repository`。
 
@@ -102,9 +114,14 @@ chmod +x matea-linux-amd64   # Linux / macOS
 
 ### 4. 验证工作流
 
-1. 在 Gitea 创建 Issue，Assign `analyze-agent` → 等待分析评论  
-2. Assign `coder-agent` → 等待 PR 创建  
-3. 在 PR 上 Request `review-agent` → 等待审查评论  
+1. 在 Gitea 创建 Issue，**Assign** `matea-analyst` → 等待分析评论  
+2. 继续 **Assign** `matea-coder` → 等待 PR 创建  
+3. 在 PR 上 **Request Reviewer** `matea-review` → 等待审查评论  
+4. 也可以在 Issue/PR 评论中 **@Agent 用户名** 续作；`/dev`、`/reply`、`/force` 控制行为
+
+> **命名说明**：推荐使用 `matea-analyst` / `matea-coder` / `matea-review` 作为默认 Agent 名称。这避免了单独使用 `matea` 带来的"总入口"误解。如果你的现有 Agent 使用旧命名（如 `code-analyzer`），仍然可以正常工作，只需在文档示例中替换为你的实际 Agent 名称即可。
+>
+> **账号自动创建**：`gitea.auto_provision` 默认为 `true`，Matea 会在创建/更新 Agent 时自动创建同名 Gitea 用户并签发 Token。若环境要求手动管理账号，在系统配置或 `config.yaml` 中设置 `gitea.auto_provision: false`，然后手动创建同名用户并在 Agent 编辑页填入 Gitea Token。
 
 详细联调清单见 [docs/archived/20260709-v2-gitea-integration-checklist.md](docs/archived/20260709-v2-gitea-integration-checklist.md)。
 
@@ -150,11 +167,11 @@ llm:
 | 配置段 | 说明 |
 |--------|------|
 | `server` | 监听地址和端口 |
-| `gitea` | Gitea 连接信息（URL、管理员 Token、Webhook 密钥） |
+| `gitea` | Gitea 连接信息（URL、管理员 Token、Webhook 密钥、账号自动创建开关） |
 | `workspace` | Agent 工作目录配置 |
 | `dispatcher` | 并发数、重试、429 退避、队列大小（无全局任务超时） |
-| `llm` | LLM Provider 与连通性默认（provider/model） |
-| `agents` | Agent 默认预算（tokens/timeout/temperature）与 Loop 总超时 |
+| `llm` | **builtin backend 专用** LLM Provider 与连通性默认（provider/model） |
+| `agents` | Agent 默认预算（tokens/timeout/temperature）与 Loop 总超时；命名后端 `backends` 配置 |
 | `auth` | JWT 认证配置 |
 | `api` | 管理 API 认证 Token |
 
@@ -196,6 +213,14 @@ agents:
 ```
 
 单个 Agent 可通过 `loop_config` 覆盖系统默认值，支持设置为空数组显式禁用校验。
+
+### Agent backend 与 LLM 边界
+
+- **默认 backend 是 `builtin`**：Agent Loop 在 Matea 进程内运行，使用 `llm.providers` 中的 Provider/Model。
+- **`hub-opencode` backend**：代码执行由 OpenCode Hub 完成，`llm.providers` 对该 Agent 不生效；Agent 编辑页仅可覆盖提交到 OpenCode 的模型/Provider，连接参数（URL/鉴权/工作区模式）在 `agents.backends.<name>` 中按命名后端统一设置。
+- **`hub-hermes` / `hub-openclaw` / `hub-api`**：Phase 2 接入，当前不可用。
+
+完整 backend 配置示例见 [config.full-example.yaml](config.full-example.yaml) 的 `agents.backends` 段。
 
 ## 开发
 
@@ -249,15 +274,16 @@ go vet ./...
 ├── config.example.yaml     # 精简配置示例（可选；无文件时自动 bootstrap）
 ├── config.full-example.yaml # 完整配置参考
 ├── internal/
-│   ├── agent/              # Tool-Use Agent Loop + 工具定义
-│   ├── agents/             # Runner 实现 + Manager + Registry
+│   ├── agent/              # Tool-Use Agent Loop + 工具定义（builtin backend 使用）
+│   ├── agents/             # Runner 实现 + Manager + Registry；builtin / hub-* backend 分流
 │   ├── api/                # 管理 REST API + 认证中间件
 │   ├── auth/               # JWT + bcrypt
 │   ├── config/             # YAML 配置加载 + 环境变量展开
 │   ├── dispatcher/         # TaskQueue + Executor + v2 流水线
+│   ├── ingress/gitea/      # Gitea Webhook Handler：验签、去重、解析、统一输出 Intent
 │   ├── workflow/           # Event Resolver + 状态机 + 门禁 + Session + 生命周期
 │   ├── gitea/              # Gitea API 客户端
-│   ├── llm/                # LLM Provider 接口 + 实现
+│   ├── llm/                # LLM Provider 接口 + 实现（builtin backend 使用）
 │   ├── sandbox/            # 沙箱（目录隔离 + 命令执行 + Git 操作）
 │   ├── store/              # SQLite 数据库 + 自动迁移
 │   └── webhook/            # Webhook HTTP Handler
@@ -271,6 +297,14 @@ go vet ./...
 
 在 Matea 中注册多个功能性 Agent，每个 Agent 设置 `role` 并在 Gitea 上作为协作者：
 
+### Role 定义
+
+- **`role` 为闭集**：`analyze` | `coder` | `review`（创建任何 Agent 必须三选一）
+- **Agent 实例数不限**：同一 role 可创建多个 Agent 实例，按仓库/技术栈特化（如 `matea-coder-go`、`matea-coder-fe`）
+- **不使用 capabilities 概念**：role 是 Agent 职责的唯一真相，不引入 capabilities 作为别名
+
+### Role 类型与触发
+
 | role | 触发方式 | 说明 |
 |------|----------|------|
 | `analyze` | Issue 上 **Assign** analyze Agent | 需求/Bug 分析，输出评论报告 |
@@ -282,9 +316,49 @@ go vet ./...
 
 > v2 已弃用 `ai:analyze` / `ai:solve` 等 Label 触发及 routes 配置。迁移见 [设计文档 §11.2](docs/archived/20260615-trigger-rules-and-workflow-improvement.md#112-从-label-触发迁移到-assign)。
 
+## 接入 Hub 后端（可选）
+
+Matea 的默认路径是 `builtin` backend：下载二进制、配置 LLM、创建 Agent 即可用，无需额外服务。如果你已有 OpenCode Hub 或希望把 Agent 执行外包，可为 Agent 选择 `hub-opencode` backend。
+
+### 1. 配置命名后端
+
+在 `config.yaml` 或 Web UI **系统配置** 的 `agents.backends` 段添加一个命名后端（不要与 `builtin` 重名）：
+
+```yaml
+agents:
+  default: builtin
+  backends:
+    my-opencode:
+      type: hub-opencode
+      base_url: "http://localhost:8080"
+      auth:
+        username: "matea"
+        password: "${OPENCODE_PASSWORD}"
+      workspace_mode: matea_path   # Phase 1 仅支持 matea_path（Matea 准备沙箱路径，OpenCode 在该目录工作）
+```
+
+### 2. 创建/编辑 Agent 选择 backend
+
+在 **Agent 管理** 创建 Agent 时：
+
+- **Coding Backend** 选择 `my-opencode`
+- **Provider / Model / Temperature / Loop Config** 自动隐藏（Hub 自管 LLM）
+- **System Prompt / User Template** 仍保留：作为 Agent 人设随 Prompt 提交给 Hub
+- **OpenCode 覆盖键**（可选）：覆盖提交到 OpenCode 的 `opencode_model`、`opencode_provider`、`opencode_agent`
+
+### 3. 运行方式差异
+
+| 任务 | builtin | hub-opencode |
+|------|---------|--------------|
+| `analyze_issue` / `review_pr` / `reply_comment` | 内置 Agent Loop + Tool-Use | 提交 Prompt/上下文给 OpenCode，结果写回 Gitea |
+| `solve_issue` / `fix_bug` | 内置沙箱 + git/PR | OpenCode 在 Matea 准备的沙箱路径工作，Matea 仍负责 git/PR |
+
+> **注意**：`hub-hermes` / `hub-openclaw` / `hub-api` 在 Phase 1 尚未实现，选择这些 backend 会返回明确错误；完整 Hub 后端支持是 Phase 2 目标。
+
 ## 文档
 
 - [技术架构](docs/ARCHITECTURE.md)
+- [Agent 指南](docs/AGENTS.md)
 - [任务清单](docs/TASKS.md)（按需 backlog，暂缓）
 - [部署指南](docs/DEPLOYMENT.md)
 - [服务器运行时设计 v4](docs/server-runtime-design-v4.md)
@@ -299,3 +373,4 @@ go vet ./...
 ## License
 
 MIT —— 见根目录 [LICENSE](LICENSE)。
+

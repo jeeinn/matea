@@ -183,6 +183,7 @@ func (m *ConfigManager) getActiveMap() map[string]interface{} {
 		"gitea.url":                                cfg.Gitea.URL,
 		"gitea.admin_token":                        cfg.Gitea.AdminToken,
 		"gitea.webhook_secret":                     cfg.Gitea.WebhookSecret,
+		"gitea.auto_provision":                     cfg.Gitea.AutoProvision,
 		"llm.defaults.provider":                    cfg.LLM.Defaults.Provider,
 		"llm.defaults.model":                       cfg.LLM.Defaults.Model,
 		"llm.providers":                            cfg.LLM.Providers,

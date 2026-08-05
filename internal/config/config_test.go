@@ -70,7 +70,7 @@ func TestLoadEmptyYAMLAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "info", cfg.Logging.Level)
 	assert.Equal(t, "deepseek", cfg.LLM.Defaults.Provider)
 	assert.Equal(t, "deepseek-v4-flash", cfg.LLM.Defaults.Model)
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
 	assert.Equal(t, "./data/work", cfg.Sandbox.BaseDir) // aligned from workspace
 	assert.Equal(t, DefaultAgentLoopConfig().MaxIterations, cfg.Agents.Loop.MaxIterations)
 	assert.Equal(t, DefaultAgentLoopConfig().TotalTimeout, cfg.Agents.Loop.TotalTimeout)
@@ -105,13 +105,13 @@ auth:
 	assert.Contains(t, cfg.LLM.Providers, "deepseek")
 }
 
-func TestApplyBackendDefaultsSetsInternal(t *testing.T) {
+func TestApplyBackendDefaultsSetsBuiltin(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
 
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
-	assert.Contains(t, cfg.Agents.Backends.Backends, "internal")
-	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["internal"].Type)
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
+	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
+	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["builtin"].Type)
 }
 
 func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
@@ -120,33 +120,36 @@ func TestApplyBackendDefaultsPreservesExplicitDefault(t *testing.T) {
 			Backends: AgentBackendsConfig{
 				Default: "opencode-local",
 				Backends: map[string]BackendConfig{
-					"opencode-local": {Type: BackendTypeOpenCodeHTTP, BaseURL: "http://127.0.0.1:4096"},
+					"opencode-local": {Type: BackendTypeHubOpenCode, BaseURL: "http://127.0.0.1:4096"},
 				},
 			},
 		},
 	}
 	applyDefaults(cfg)
 
-	// Explicit default preserved; internal still ensured
+	// Explicit default preserved; builtin still ensured; legacy type normalized
 	assert.Equal(t, "opencode-local", cfg.Agents.Backends.Default)
-	assert.Contains(t, cfg.Agents.Backends.Backends, "internal")
+	assert.Contains(t, cfg.Agents.Backends.Backends, "builtin")
 	assert.Contains(t, cfg.Agents.Backends.Backends, "opencode-local")
+	assert.Equal(t, BackendTypeHubOpenCode, cfg.Agents.Backends.Backends["opencode-local"].Type)
 }
 
-func TestApplyBackendDefaultsBackfillsInternalType(t *testing.T) {
+func TestApplyBackendDefaultsBackfillsBuiltinType(t *testing.T) {
 	cfg := &Config{
 		Agents: AgentsConfig{
 			Backends: AgentBackendsConfig{
 				Backends: map[string]BackendConfig{
-					"internal": {}, // type empty
+					"internal": {}, // legacy key, type empty
 				},
 			},
 		},
 	}
 	applyDefaults(cfg)
 
-	assert.Equal(t, "internal", cfg.Agents.Backends.Default)
-	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["internal"].Type)
+	// Legacy key normalized to canonical "builtin"; type backfilled
+	assert.Equal(t, "builtin", cfg.Agents.Backends.Default)
+	assert.Equal(t, BackendTypeBuiltin, cfg.Agents.Backends.Backends["builtin"].Type)
+	assert.NotContains(t, cfg.Agents.Backends.Backends, "internal")
 }
 
 func TestLoadGeneratesBootstrapIfMissing(t *testing.T) {
@@ -258,4 +261,46 @@ func TestIsLikelyLocalLLM(t *testing.T) {
 	assert.True(t, isLikelyLocalLLM("http://172.16.0.2:11434"))
 	assert.False(t, isLikelyLocalLLM("https://api.deepseek.com/v1"))
 	assert.False(t, isLikelyLocalLLM(""))
+}
+
+func TestLoad_GiteaAutoProvisionDefaultsTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "minimal.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+gitea:
+  url: "http://localhost:3000"
+`), 0644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Gitea.AutoProvision, "gitea.auto_provision should default to true when unset")
+}
+
+func TestLoad_GiteaAutoProvisionExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "minimal.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+gitea:
+  url: "http://localhost:3000"
+  auto_provision: false
+`), 0644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.Gitea.AutoProvision, "gitea.auto_provision should honor explicit false")
+}
+
+func TestConfigKey_GiteaAutoProvision(t *testing.T) {
+	assert.True(t, IsConfigKey("gitea.auto_provision"))
+
+	v, err := parseConfigValue("gitea.auto_provision", "false")
+	require.NoError(t, err)
+	assert.Equal(t, false, v)
+
+	cfg := &Config{Gitea: GiteaConfig{AutoProvision: true}}
+	assert.Equal(t, "true", getConfigEntry(cfg, "gitea.auto_provision"))
+
+	require.NoError(t, applyConfigEntry(cfg, "gitea.auto_provision", "false"))
+	assert.False(t, cfg.Gitea.AutoProvision)
+	assert.Equal(t, "false", getConfigEntry(cfg, "gitea.auto_provision"))
 }

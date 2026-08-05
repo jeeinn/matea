@@ -11,6 +11,7 @@ var configKeys = []string{
 	"gitea.url",
 	"gitea.admin_token",
 	"gitea.webhook_secret",
+	"gitea.auto_provision",
 	"llm.defaults.provider",
 	"llm.defaults.model",
 	"llm.providers",
@@ -97,6 +98,12 @@ func parseConfigValue(key, value string) (interface{}, error) {
 			return nil, fmt.Errorf("invalid JSON: %w", err)
 		}
 		return cmds, nil
+	case "gitea.auto_provision":
+		b, err := parseBoolValue(value)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
 	default:
 		return value, nil
 	}
@@ -110,6 +117,8 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Gitea.AdminToken
 	case "gitea.webhook_secret":
 		return cfg.Gitea.WebhookSecret
+	case "gitea.auto_provision":
+		return cfg.Gitea.AutoProvision
 	case "llm.defaults.provider":
 		return cfg.LLM.Defaults.Provider
 	case "llm.defaults.model":
@@ -172,6 +181,12 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 		cfg.Gitea.AdminToken = value
 	case "gitea.webhook_secret":
 		cfg.Gitea.WebhookSecret = value
+	case "gitea.auto_provision":
+		b, err := parseBoolValue(value)
+		if err != nil {
+			return fmt.Errorf("not a boolean: %s", value)
+		}
+		cfg.Gitea.AutoProvision = b
 	case "llm.defaults.provider":
 		cfg.LLM.Defaults.Provider = value
 	case "llm.defaults.model":
@@ -310,6 +325,8 @@ func getConfigEntry(cfg *Config, key string) string {
 		return cfg.Gitea.AdminToken
 	case "gitea.webhook_secret":
 		return cfg.Gitea.WebhookSecret
+	case "gitea.auto_provision":
+		return strconv.FormatBool(cfg.Gitea.AutoProvision)
 	case "llm.defaults.provider":
 		return cfg.LLM.Defaults.Provider
 	case "llm.defaults.model":

@@ -4,17 +4,17 @@ import (
 	"log"
 	"strings"
 
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // InteractionHandler processes @Mention interactions.
 type InteractionHandler struct {
 	registry *Registry
-	callback func(agentID int64, evt *webhook.WebhookEvent)
+	callback func(agentID int64, evt *giteaingress.WebhookEvent)
 }
 
 // NewInteractionHandler creates a new InteractionHandler.
-func NewInteractionHandler(registry *Registry, callback func(agentID int64, evt *webhook.WebhookEvent)) *InteractionHandler {
+func NewInteractionHandler(registry *Registry, callback func(agentID int64, evt *giteaingress.WebhookEvent)) *InteractionHandler {
 	return &InteractionHandler{
 		registry: registry,
 		callback: callback,
@@ -22,7 +22,7 @@ func NewInteractionHandler(registry *Registry, callback func(agentID int64, evt 
 }
 
 // HandleComment checks if the comment mentions any agent and triggers interaction.
-func (h *InteractionHandler) HandleComment(evt *webhook.WebhookEvent) {
+func (h *InteractionHandler) HandleComment(evt *giteaingress.WebhookEvent) {
 	if evt.Comment == nil {
 		return
 	}

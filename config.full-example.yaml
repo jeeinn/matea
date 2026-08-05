@@ -17,6 +17,10 @@ gitea:
   admin_token: "${GITEA_ADMIN_TOKEN}"
   # Webhook 签名密钥（在 Gitea Webhook 设置中配置的密钥）
   webhook_secret: "your-webhook-secret-here"
+  # 是否自动创建/续期 Agent 的 Gitea 账号与 Token（默认 true）。
+  # 设为 false 时，Matea 不再调用 Gitea Admin API 建号/改密/签发令牌，
+  # 由运维手动创建同名 Gitea 账号并填入 Agent 的 Gitea Token。
+  # auto_provision: false
 
 workspace:
   # Agent 工作目录根（Session 路径：{base_dir}/sessions/{id}/repo）
@@ -51,6 +55,7 @@ logging:
   path: "./data/logs"
 
 llm:
+  # 仅用于 builtin 后端的 Agent。hub-* 后端（如 hub-opencode）由 Hub 自行管理 LLM，不读取此处。
   providers:
     # DeepSeek（推荐，性价比高）
     # models 未设置 → 使用内置模型目录
@@ -131,15 +136,15 @@ agents:
     #   - "npm test"
 
   # 编码后端配置（OpenCode Path A）
-  # 默认 internal（内置 AgentLoop）；非写任务（analyze/review/reply）始终 internal
+  # 默认 builtin（内置 AgentLoop）；非写任务（analyze/review/reply）始终 builtin
   # opencode-local 为可选 sidecar，需本机启动 opencode serve
   backends:
-    default: internal
+    default: builtin
     backends:
-      internal:
+      builtin:
         type: builtin
       # opencode-local:
-      #   type: opencode_http
+      #   type: hub-opencode
       #   base_url: "http://127.0.0.1:4096"
       #   auth:
       #     username: opencode
@@ -149,7 +154,7 @@ agents:
       #   health_check:
       #     path: /global/health
       #     interval: 30s
-      #   allow_fallback_internal: false  # false=探活失败任务 failed；true=降级到 internal Loop
+      #   allow_fallback_builtin: false  # false=探活失败任务 failed；true=降级到 builtin Loop
 
   templates:
     analyze:

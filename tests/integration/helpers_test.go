@@ -23,7 +23,7 @@ import (
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 
 	_ "modernc.org/sqlite"
@@ -37,6 +37,7 @@ type TestEnv struct {
 	Mux          *http.ServeMux
 	Server       *httptest.Server
 	GiteaMock    *httptest.Server
+	HubMock      *MockHub // generic hub backend mock (task 1.2.7)
 	CleanupFuncs []func()
 }
 
@@ -100,11 +101,15 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	apiHandler.RegisterRoutes(mux)
 
 	// Create webhook handler
-	webhookHandler := webhook.NewHandler(&cfg.Gitea, db.DB, d.HandleEvent)
+	webhookHandler := giteaingress.NewHandler(&cfg.Gitea, db.DB, d.HandleEvent)
 	mux.Handle("POST /webhook/gitea", webhookHandler)
 
 	// Create test server
 	server := httptest.NewServer(mux)
+
+	// Create mock hub (1.2.7): validates HubBackend testability and paves the
+	// way for Phase 2 hub dispatch tests. Default scenario: normal, no auth.
+	hubMock := NewMockHub(t)
 
 	env := &TestEnv{
 		DB:         db,
@@ -113,11 +118,13 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		Mux:        mux,
 		Server:     server,
 		GiteaMock:  giteaMock,
+		HubMock:    hubMock,
 		CleanupFuncs: []func(){
 			func() { db.Close() },
 			func() { os.Remove(tmpDB.Name()) },
 			func() { server.Close() },
 			func() { giteaMock.Close() },
+			func() { hubMock.Close() },
 		},
 	}
 
@@ -427,6 +434,14 @@ func newGiteaMock() *httptest.Server {
 				"number": 1,
 				"title":  "Comment",
 			})
+
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/users/"):
+			// Users do not exist by default in the mock — return 404 so
+			// EnsureGiteaAccount takes the create-user branch (real Gitea
+			// behavior; the previous fall-through 200 made GetUser always
+			// report the user as existing).
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"message": "user not found"})
 
 		default:
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

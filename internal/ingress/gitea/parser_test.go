@@ -1,4 +1,4 @@
-package webhook
+package gitea
 
 import (
 	"testing"

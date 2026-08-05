@@ -114,15 +114,61 @@ func (m *WorkflowManager) OnTaskComplete(ctx *store.WorkflowContext, taskType st
 		if prID > 0 {
 			ctx.PRID = prID
 		}
-	case "reply_comment", "solve_comment":
-		// No stage change; write PR ID if available
+	case "reply_comment":
+		// 纯回复类任务不推进工作流：mention/斜杠命令入口在 pipeline 中统一调用了
+		// Transition() 把 stage 推到 analyzing/developing/reviewing，若完成时不回落，
+		// stage 会滞留在中间态（analyzing 尤其致命，会让后续 analyze/coder 触发被
+		// 「分析进行中」直接吞掉）。这里回落到本次推进前的阶段。
 		if prID > 0 {
 			ctx.PRID = prID
+		}
+		m.rollbackTransientStage(ctx, taskType)
+	case "solve_comment":
+		if prID > 0 {
+			// 已产出 PR：与 solve_issue 保持一致，停留在 developing 等待后续审查
+			ctx.PRID = prID
+		} else {
+			// 未产出 PR：本次触发没有实际推进工作流，回落到推进前的阶段
+			m.rollbackTransientStage(ctx, taskType)
 		}
 	default:
 		log.Printf("[WARN] Unknown task type %s for stage update", taskType)
 	}
 	return m.db.UpdateWorkflowContext(ctx)
+}
+
+// rollbackTransientStage 把「由回复类任务临时推进的 stage」回落到推进前的阶段。
+//
+// 规则：
+//   - PreviousStage 为空 → 本次触发是同阶段重入（TransitionStage 已清空），
+//     没有可回落的前序阶段，保持现状。
+//   - PreviousStage 为 analyzing → analyzing 是「分析进行中」的瞬时标记，
+//     不能作为回落目标（否则会重新制造滞留），按 idle 处理，与 OnTaskFailed 一致。
+//   - 回落目标与当前 stage 相同 → 仅清理 PreviousStage。
+//
+// 回落时一并清空 ActiveAgentID/ActiveRole/SessionID，语义与 OnTaskFailed 的回滚一致：
+// 该 Agent 已完成本次回复，不再持有工作流所有权。
+func (m *WorkflowManager) rollbackTransientStage(ctx *store.WorkflowContext, taskType string) {
+	rollback := ctx.PreviousStage
+	if rollback == "" {
+		return
+	}
+	if rollback == store.StageAnalyzing {
+		rollback = store.StageIdle
+	}
+	if rollback == ctx.Stage {
+		ctx.PreviousStage = ""
+		return
+	}
+
+	from := ctx.Stage
+	ctx.Stage = rollback
+	ctx.PreviousStage = ""
+	ctx.ActiveAgentID = 0
+	ctx.ActiveRole = ""
+	ctx.SessionID = ""
+	log.Printf("[INFO] Rolled back workflow %s#%d stage: %s → %s (%s completed, workflow not advanced)",
+		ctx.Repo, ctx.IssueID, from, rollback, taskType)
 }
 
 // OnTaskFailed rolls back workflow stage after a task fails.

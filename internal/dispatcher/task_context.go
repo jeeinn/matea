@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // buildTaskContext constructs the context string for the task from the event.
@@ -15,7 +15,7 @@ import (
 // For write-path continuations (solve_comment), recent PR/issue comments —
 // especially review-agent feedback — are appended so the coder sees review
 // guidance even when the triggering comment only says "fix per review".
-func (d *Dispatcher) buildTaskContext(evt *webhook.WebhookEvent, agent *store.Agent, taskType string) string {
+func (d *Dispatcher) buildTaskContext(evt *giteaingress.WebhookEvent, agent *store.Agent, taskType string) string {
 	base := d.renderTaskContextBase(evt, agent, taskType)
 	if needsCommentHistory(taskType) {
 		base = d.appendCommentHistory(base, evt)
@@ -23,7 +23,7 @@ func (d *Dispatcher) buildTaskContext(evt *webhook.WebhookEvent, agent *store.Ag
 	return base
 }
 
-func (d *Dispatcher) renderTaskContextBase(evt *webhook.WebhookEvent, agent *store.Agent, taskType string) string {
+func (d *Dispatcher) renderTaskContextBase(evt *giteaingress.WebhookEvent, agent *store.Agent, taskType string) string {
 	// Try to use agent's user_template first
 	if agent.UserTemplate != "" {
 		rendered, err := RenderTemplate(agent.UserTemplate, BuildTemplateData(evt))
@@ -62,7 +62,7 @@ func needsCommentHistory(taskType string) bool {
 
 // appendCommentHistory fetches recent issue/PR comments and appends them to context.
 // Failures are best-effort: the base context is still returned.
-func (d *Dispatcher) appendCommentHistory(base string, evt *webhook.WebhookEvent) string {
+func (d *Dispatcher) appendCommentHistory(base string, evt *giteaingress.WebhookEvent) string {
 	owner, repo, commentIssueID := commentFetchTarget(evt)
 	if owner == "" || repo == "" || commentIssueID <= 0 {
 		return base
@@ -94,7 +94,7 @@ func (d *Dispatcher) appendCommentHistory(base string, evt *webhook.WebhookEvent
 	return base + history
 }
 
-func commentFetchTarget(evt *webhook.WebhookEvent) (owner, repo string, issueOrPR int) {
+func commentFetchTarget(evt *giteaingress.WebhookEvent) (owner, repo string, issueOrPR int) {
 	if evt == nil {
 		return "", "", 0
 	}
@@ -130,7 +130,7 @@ func (d *Dispatcher) reviewAgentUsernames() map[string]bool {
 }
 
 // buildDefaultContext builds the default context string without templates.
-func (d *Dispatcher) buildDefaultContext(evt *webhook.WebhookEvent) string {
+func (d *Dispatcher) buildDefaultContext(evt *giteaingress.WebhookEvent) string {
 	var sb strings.Builder
 
 	// Add repository info

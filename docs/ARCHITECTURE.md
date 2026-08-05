@@ -8,6 +8,9 @@ Matea 是一个 Go 服务，接收 Gitea Webhook 事件，通过 **Assign Agent*
 - **Assign 触发 Who，WorkflowContext 定义 When，WorkflowPolicy 定义能不能转，AgentSession 支撑 Continue**
 - **Assign 触发** — 在 Issue/PR 上 Assign Agent 即可触发工作流（v2 弃用 Label 触发与 routes 表）
 - **功能性 Agent + Role** — 每个 Agent 有 role（analyze/coder/review），决定执行行为
+  - **`role` 为闭集**：`analyze` | `coder` | `review`（创建任何 Agent 必须三选一）
+  - **Agent 实例数不限**：同一 role 可创建多个 Agent 实例，按仓库/技术栈特化（如 `matea-coder-go`、`matea-coder-fe`）
+  - **不引入 capabilities 概念**：role 是 Agent 职责的唯一真相，不使用 capabilities 作为别名或替代（代码库中不存在该概念，引入会增加认知负担）
 - **WorkflowContext 状态机** — Gateway 维护阶段真相，不从 Gitea 快照推断
 - **Session 续作** — @mention 可复用 Session 和 Workspace，支持 PR 上改代码
 - **三层门禁** — L1 结构性（内置）、L2 流程性（可配）、L3 建议性（评论）
@@ -392,10 +395,11 @@ type Agent struct {
     Name          string
     GiteaUsername string    // 对应 Gitea 协作者；Assign 时匹配 assignee
     GiteaToken    string    // 写回评论/创建 PR 的凭证
-    Role          string    // analyze | coder | review — 决定触发后的 Runner/task_type
+    Role          string    // analyze | coder | review — 闭集，决定触发后的 Runner/task_type
+                            // 同一 role 允许多个 Agent 实例（按仓库/技术栈特化）
     Provider      string    // LLM provider 名称
     Model         string    // 模型名称
-    Repos         []string  // 可选：限定 Agent 生效的仓库列表
+    Repos         []string  // 可选：限定 Agent 生效的仓库列表（支持多实例按仓库特化）
     MaxTokens     int       // 0 = 使用 RunnerFactory 默认值
     Temperature   float64   // 0 = 使用 RunnerFactory 默认值
     SystemPrompt  string    // Agent 人格
@@ -686,9 +690,9 @@ web/src/                             # Vue 3 前端
 
 | Backend | 说明 |
 |---------|------|
-| `internal`（默认） | 内置 `AgentLoop` + 沙箱工具 |
-| `opencode_http` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR |
+| `builtin`（默认） | 内置 `AgentLoop` + 沙箱工具 |
+| `hub-opencode` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR |
 
-约束：Analyze / Review **永不**走 OpenCode。Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_internal: true` 才降级 internal。
+约束：Analyze / Review **永不**走 OpenCode。Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_builtin: true` 才降级 builtin。
 
 Session 工作目录通过 `?directory=` + `X-Opencode-Directory` 绑定到 Gateway workspace（[archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。运维步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#opencode-sidecar可选-path-a)。

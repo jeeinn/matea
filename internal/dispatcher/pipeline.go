@@ -6,12 +6,12 @@ import (
 	"strings"
 
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 
 // handleEventV2 processes events through the new Assign-based pipeline.
-func (d *Dispatcher) handleEventV2(evt *webhook.WebhookEvent) bool {
+func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 	// Step 1: Sender filter — skip if sender is any active agent (self-trigger prevention)
 	if d.resolver.IsAgentSender(evt) {
 		log.Printf("[INFO] Sender %q is an active agent, ignoring event to prevent self-trigger", evt.Sender.Login)

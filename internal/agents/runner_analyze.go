@@ -38,6 +38,13 @@ func NewAnalyzeRunner(factory *RunnerFactory) *AnalyzeRunner {
 // It first attempts a shallow clone + short read-only AgentLoop for richer
 // analysis. If clone fails it falls back to single-shot LLM (legacy behavior).
 func (r *AnalyzeRunner) Run(ctx context.Context, task *store.Task, agent *store.Agent) (*Result, error) {
+	// Hub dispatch branch (1.2.4): reserved hub-* / unknown backends fail
+	// loudly. Analyze stays on the builtin LLM by design (forced builtin);
+	// configured hub-opencode instances pass validation but are write-only.
+	if err := r.factory.validateHubDispatch(agent); err != nil {
+		return nil, err
+	}
+
 	provider, err := r.factory.llmRegistry.Get(agent.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("get provider: %w", err)

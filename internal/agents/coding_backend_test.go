@@ -15,9 +15,9 @@ import (
 )
 
 // Compile-time interface compliance check.
-var _ CodingBackend = (*InternalCodingBackend)(nil)
+var _ CodingBackend = (*BuiltinCodingBackend)(nil)
 
-// mockLLMProvider is a minimal llm.Provider used by InternalCodingBackend tests.
+// mockLLMProvider is a minimal llm.Provider used by BuiltinCodingBackend tests.
 // It returns a fixed assistant message with no tool calls, so AgentLoop.Run
 // terminates after a single iteration.
 type mockLLMProvider struct {
@@ -33,7 +33,7 @@ func (m *mockLLMProvider) ChatCompletion(ctx context.Context, req *llm.ChatReque
 	}, nil
 }
 
-func newInternalTestFactory(t *testing.T, providerName string, provider llm.Provider) *RunnerFactory {
+func newBuiltinTestFactory(t *testing.T, providerName string, provider llm.Provider) *RunnerFactory {
 	t.Helper()
 	registry := llm.NewRegistry(nil)
 	if provider != nil {
@@ -43,24 +43,24 @@ func newInternalTestFactory(t *testing.T, providerName string, provider llm.Prov
 	return factory
 }
 
-func TestInternalCodingBackendName(t *testing.T) {
-	b := NewInternalCodingBackend(newInternalTestFactory(t, "mock", nil))
-	assert.Equal(t, "internal", b.Name())
+func TestBuiltinCodingBackendName(t *testing.T) {
+	b := NewBuiltinCodingBackend(newBuiltinTestFactory(t, "mock", nil))
+	assert.Equal(t, "builtin", b.Name())
 }
 
-func TestInternalCodingBackendAbort(t *testing.T) {
-	b := NewInternalCodingBackend(newInternalTestFactory(t, "mock", nil))
-	// Abort is a no-op for the internal backend; must not error and must not
+func TestBuiltinCodingBackendAbort(t *testing.T) {
+	b := NewBuiltinCodingBackend(newBuiltinTestFactory(t, "mock", nil))
+	// Abort is a no-op for the builtin backend; must not error and must not
 	// depend on the handle argument.
 	err := b.Abort(context.Background(), "any-handle")
 	require.NoError(t, err)
 }
 
-// TestInternalCodingBackendRunNoProvider verifies that Run surfaces a
+// TestBuiltinCodingBackendRunNoProvider verifies that Run surfaces a
 // provider-not-found error from the registry rather than panicking.
-func TestInternalCodingBackendRunNoProvider(t *testing.T) {
-	factory := newInternalTestFactory(t, "mock", nil) // no provider registered under "missing"
-	b := NewInternalCodingBackend(factory)
+func TestBuiltinCodingBackendRunNoProvider(t *testing.T) {
+	factory := newBuiltinTestFactory(t, "mock", nil) // no provider registered under "missing"
+	b := NewBuiltinCodingBackend(factory)
 
 	sb := newMinimalSandbox(t)
 	_, err := b.Run(context.Background(), CodingRequest{
@@ -75,21 +75,21 @@ func TestInternalCodingBackendRunNoProvider(t *testing.T) {
 	assert.Contains(t, err.Error(), "provider")
 }
 
-// TestInternalCodingBackendRunSuccess exercises the happy path end-to-end:
+// TestBuiltinCodingBackendRunSuccess exercises the happy path end-to-end:
 // a registered mock provider returns a non-empty content with no tool calls,
 // AgentLoop.Run terminates after one iteration, and Run returns a CodingResult
 // carrying the summary and the provider instance for reuse by finalize.
 //
 // No ModelMetaProvider is attached (meta=nil): the model-level supports_tools
 // gate must not reject unregistered models; only an explicit SupportsTools=false
-// meta blocks coder runs (see TestInternalCodingBackendRunModelNoTools).
-func TestInternalCodingBackendRunSuccess(t *testing.T) {
+// meta blocks coder runs (see TestBuiltinCodingBackendRunModelNoTools).
+func TestBuiltinCodingBackendRunSuccess(t *testing.T) {
 	mock := &mockLLMProvider{
 		content: "Implemented the requested change.",
 		usage:   llm.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}
-	factory := newInternalTestFactory(t, "mock", mock)
-	b := NewInternalCodingBackend(factory)
+	factory := newBuiltinTestFactory(t, "mock", mock)
+	b := NewBuiltinCodingBackend(factory)
 
 	sb := newMinimalSandbox(t)
 	task := &store.Task{ID: 42, Repo: "owner/repo"}
@@ -107,13 +107,13 @@ func TestInternalCodingBackendRunSuccess(t *testing.T) {
 	require.NotNil(t, result)
 	assert.True(t, result.Success)
 	assert.Equal(t, "Implemented the requested change.", result.Summary)
-	assert.Empty(t, result.RemoteSessionID, "internal backend must not set a remote session id")
+	assert.Empty(t, result.RemoteSessionID, "builtin backend must not set a remote session id")
 	assert.NotNil(t, result.Provider, "Provider must be returned for reuse by finalize")
 }
 
-func TestInternalCodingBackendRunModelNoTools(t *testing.T) {
+func TestBuiltinCodingBackendRunModelNoTools(t *testing.T) {
 	mock := &mockLLMProvider{content: "should not run"}
-	factory := newInternalTestFactory(t, "deepseek", mock)
+	factory := newBuiltinTestFactory(t, "deepseek", mock)
 	factory.SetModelMetaProvider(&stubModelMeta{
 		defs: map[string]*config.ModelDefinition{
 			"deepseek/deepseek-reasoner": {
@@ -122,7 +122,7 @@ func TestInternalCodingBackendRunModelNoTools(t *testing.T) {
 			},
 		},
 	})
-	b := NewInternalCodingBackend(factory)
+	b := NewBuiltinCodingBackend(factory)
 
 	sb := newMinimalSandbox(t)
 	_, err := b.Run(context.Background(), CodingRequest{
@@ -139,9 +139,9 @@ func TestInternalCodingBackendRunModelNoTools(t *testing.T) {
 
 // Sparse API-discovery meta (ID only, supports_tools zero-value false) must not
 // block coder runs — same policy as meta=nil.
-func TestInternalCodingBackendRunSparseUnknownAllows(t *testing.T) {
+func TestBuiltinCodingBackendRunSparseUnknownAllows(t *testing.T) {
 	mock := &mockLLMProvider{content: "done"}
-	factory := newInternalTestFactory(t, "custom-gw", mock)
+	factory := newBuiltinTestFactory(t, "custom-gw", mock)
 	factory.SetModelMetaProvider(&stubModelMeta{
 		defs: map[string]*config.ModelDefinition{
 			"custom-gw/vendor-mystery-v1": {
@@ -151,7 +151,7 @@ func TestInternalCodingBackendRunSparseUnknownAllows(t *testing.T) {
 			},
 		},
 	})
-	b := NewInternalCodingBackend(factory)
+	b := NewBuiltinCodingBackend(factory)
 
 	sb := newMinimalSandbox(t)
 	result, err := b.Run(context.Background(), CodingRequest{

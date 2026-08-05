@@ -26,6 +26,12 @@ func NewReviewRunner(factory *RunnerFactory) *ReviewRunner {
 // Run executes the review task with an independent Checker context (no coder
 // conversation history — only PR metadata + diff).
 func (r *ReviewRunner) Run(ctx context.Context, task *store.Task, agent *store.Agent) (*Result, error) {
+	// Hub dispatch branch (1.2.4): reserved hub-* / unknown backends fail
+	// loudly. Review stays on the builtin LLM by design (forced builtin).
+	if err := r.factory.validateHubDispatch(agent); err != nil {
+		return nil, err
+	}
+
 	parts := strings.SplitN(task.Repo, "/", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid repo format: %s", task.Repo)

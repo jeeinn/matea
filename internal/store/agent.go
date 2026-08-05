@@ -35,31 +35,34 @@ type Agent struct {
 	Repos           []string         `json:"repos,omitempty"`
 	Role            string           `json:"role"` // analyze | coder | review
 	Status          string           `json:"status"`
-	Backend         string           `json:"backend"`                   // coding backend name; default "internal" (OpenCode Path A)
+	Backend         string           `json:"backend"`                   // coding backend name; default "builtin" (OpenCode Path A)
 	BackendOptions  map[string]any   `json:"backend_options,omitempty"` // backend-specific options (JSON)
 	ToolPack        string           `json:"tool_pack"`                 // ToolPack name; empty = use role-based default
 	McpServers      []string         `json:"mcp_servers,omitempty"`     // Enabled MCP server names; empty = none
+	ManagedByMatea  bool             `json:"managed_by_matea"`          // true = Matea created and manages this Gitea account
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 const agentSelectCols = `id, name, gitea_username, gitea_token, avatar_url, provider, model,
 	max_output_tokens, max_input_tokens, temperature, timeout, system_prompt, user_template,
-	loop_config, repos, role, status, backend, backend_options, tool_pack, mcp_servers, created_at, updated_at`
+	loop_config, repos, role, status, backend, backend_options, tool_pack, mcp_servers, managed_by_matea, created_at, updated_at`
 
 func scanAgent(scanner interface {
 	Scan(dest ...any) error
 }) (*Agent, error) {
 	var a Agent
 	var loopConfigJSON, reposJSON, backendOptionsJSON, mcpServersJSON string
+	var managedByMateaInt int
 	err := scanner.Scan(
 		&a.ID, &a.Name, &a.GiteaUsername, &a.GiteaToken, &a.AvatarURL, &a.Provider, &a.Model,
 		&a.MaxOutputTokens, &a.MaxInputTokens, &a.Temperature, &a.Timeout, &a.SystemPrompt, &a.UserTemplate,
-		&loopConfigJSON, &reposJSON, &a.Role, &a.Status, &a.Backend, &backendOptionsJSON, &a.ToolPack, &mcpServersJSON, &a.CreatedAt, &a.UpdatedAt,
+		&loopConfigJSON, &reposJSON, &a.Role, &a.Status, &a.Backend, &backendOptionsJSON, &a.ToolPack, &mcpServersJSON, &managedByMateaInt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
+	a.ManagedByMatea = managedByMateaInt != 0
 	if loopConfigJSON != "" {
 		json.Unmarshal([]byte(loopConfigJSON), &a.LoopConfig)
 	}
@@ -73,7 +76,7 @@ func scanAgent(scanner interface {
 		json.Unmarshal([]byte(mcpServersJSON), &a.McpServers)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 	return &a, nil
 }
@@ -101,17 +104,17 @@ func (db *DB) CreateAgent(a *Agent) error {
 		mcpServersJSON = string(data)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 
 	result, err := db.Exec(`INSERT INTO agents
 		(name, gitea_username, gitea_token, avatar_url, provider, model,
 		 max_output_tokens, max_input_tokens, temperature, timeout, system_prompt, user_template,
-		 loop_config, repos, role, status, backend, backend_options, tool_pack, mcp_servers)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 loop_config, repos, role, status, backend, backend_options, tool_pack, mcp_servers, managed_by_matea)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.Name, a.GiteaUsername, a.GiteaToken, a.AvatarURL, a.Provider, a.Model,
 		a.MaxOutputTokens, a.MaxInputTokens, a.Temperature, a.Timeout, a.SystemPrompt, a.UserTemplate,
-		loopConfigJSON, reposJSON, a.Role, a.Status, a.Backend, backendOptionsJSON, a.ToolPack, mcpServersJSON)
+		loopConfigJSON, reposJSON, a.Role, a.Status, a.Backend, backendOptionsJSON, a.ToolPack, mcpServersJSON, boolToInt(a.ManagedByMatea))
 	if err != nil {
 		return fmt.Errorf("insert agent: %w", err)
 	}
@@ -180,18 +183,18 @@ func (db *DB) UpdateAgent(a *Agent) error {
 		mcpServersJSON = string(data)
 	}
 	if a.Backend == "" {
-		a.Backend = "internal"
+		a.Backend = "builtin"
 	}
 
 	_, err := db.Exec(`UPDATE agents SET name=?, provider=?, model=?,
 		max_output_tokens=?, max_input_tokens=?, temperature=?, timeout=?,
 		system_prompt=?, user_template=?, loop_config=?, repos=?, role=?, status=?,
-		avatar_url=?, gitea_token=?, backend=?, backend_options=?, tool_pack=?, mcp_servers=?, updated_at=CURRENT_TIMESTAMP
+		avatar_url=?, gitea_token=?, backend=?, backend_options=?, tool_pack=?, mcp_servers=?, managed_by_matea=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?`,
 		a.Name, a.Provider, a.Model,
 		a.MaxOutputTokens, a.MaxInputTokens, a.Temperature, a.Timeout,
 		a.SystemPrompt, a.UserTemplate, loopConfigJSON, reposJSON, a.Role, a.Status,
-		a.AvatarURL, a.GiteaToken, a.Backend, backendOptionsJSON, a.ToolPack, mcpServersJSON, a.ID)
+		a.AvatarURL, a.GiteaToken, a.Backend, backendOptionsJSON, a.ToolPack, mcpServersJSON, boolToInt(a.ManagedByMatea), a.ID)
 	if err != nil {
 		return fmt.Errorf("update agent: %w", err)
 	}

@@ -80,6 +80,11 @@ type GiteaConfig struct {
 	URL           string `yaml:"url"`
 	AdminToken    string `yaml:"admin_token"`
 	WebhookSecret string `yaml:"webhook_secret"`
+	// AutoProvision controls whether Matea automatically creates/refreshes the
+	// Gitea account for an agent on create/update. Defaults to true; set
+	// `gitea.auto_provision: false` to disable (operator must create the Gitea
+	// account and token manually).
+	AutoProvision bool `yaml:"auto_provision"`
 }
 
 type WorkspaceConfig struct {
@@ -119,6 +124,8 @@ type LoggingConfig struct {
 }
 
 type LLMConfig struct {
+	// Providers 是 **builtin** 后端的 LLM 配置来源。
+	// hub-* 后端（如 hub-opencode）由 Hub 自身管理 LLM，不读取此处配置。
 	Providers        map[string]ProviderConfig `yaml:"providers"`
 	Defaults         LLMDefaultsConfig         `yaml:"defaults"`
 	RateLimitRetries int                       `yaml:"rate_limit_retries"` // retries after HTTP 429; 0 = no retry (still needs rate_limit_backoff > 0)
@@ -240,25 +247,25 @@ type ToolPackConfig struct {
 }
 
 // AgentBackendsConfig holds coding-backend definitions for write tasks.
-// Non-write tasks (Analyze/Review/Reply) always use the implicit `internal` backend
+// Non-write tasks (Analyze/Review/Reply) always use the implicit `builtin` backend
 // regardless of this config. See server-runtime-design-v4.md §3 / §4.4.
 type AgentBackendsConfig struct {
-	Default  string                   `yaml:"default"`  // backend name; empty → "internal"
-	Backends map[string]BackendConfig `yaml:"backends"` // named backends; "internal" is implicit
+	Default  string                   `yaml:"default"`  // backend name; empty → "builtin"
+	Backends map[string]BackendConfig `yaml:"backends"` // named backends; "builtin" is implicit
 }
 
 // BackendConfig describes one coding backend. Type distinguishes builtin vs opencode.
 type BackendConfig struct {
-	Type                  string                   `yaml:"type"`                    // builtin | opencode_http
-	BaseURL               string                   `yaml:"base_url"`                // opencode_http only
-	Auth                  BackendAuthConfig        `yaml:"auth"`                    // opencode_http only
+	Type                  string                   `yaml:"type"`                    // builtin | hub-opencode
+	BaseURL               string                   `yaml:"base_url"`                // hub-opencode only
+	Auth                  BackendAuthConfig        `yaml:"auth"`                    // hub-opencode only
 	Timeout               string                   `yaml:"timeout"`                 // e.g. "45m"
 	WorkspaceMode         string                   `yaml:"workspace_mode"`          // first release: "matea_path" only
-	HealthCheck           BackendHealthCheckConfig `yaml:"health_check"`            // opencode_http only
-	AllowFallbackInternal bool                     `yaml:"allow_fallback_internal"` // default false
+	HealthCheck           BackendHealthCheckConfig `yaml:"health_check"`            // hub-opencode only
+	AllowFallbackBuiltin  bool                     `yaml:"allow_fallback_builtin"`  // default false
 }
 
-// BackendAuthConfig holds HTTP Basic auth credentials for an opencode_http backend.
+// BackendAuthConfig holds HTTP Basic auth credentials for a hub-opencode backend.
 type BackendAuthConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -272,16 +279,44 @@ type BackendHealthCheckConfig struct {
 
 // Backend type constants.
 const (
-	BackendTypeBuiltin      = "builtin"
-	BackendTypeOpenCodeHTTP = "opencode_http"
+	BackendTypeBuiltin     = "builtin"
+	BackendTypeHubOpenCode = "hub-opencode"
 )
 
-// DefaultAgentBackends returns the default backends config: a single implicit `internal` builtin.
+// Canonical backend names (task 1.2.6).
+const (
+	// BackendNameBuiltin is the canonical name of the built-in coding backend.
+	BackendNameBuiltin = "builtin"
+)
+
+// Legacy backend identifiers accepted during the 1.2.6 transition.
+const (
+	legacyBackendInternal     = "internal"
+	legacyBackendOpenCodeHTTP = "opencode_http"
+)
+
+// NormalizeBackend maps legacy backend identifiers to canonical names:
+// "internal" → "builtin", "opencode_http" → "hub-opencode". Everything else
+// (including "") passes through unchanged. Applied at config load and at
+// coding-backend resolution so both old and new identifiers are accepted
+// (task 1.2.6a — lands first to remove ordering dependencies).
+func NormalizeBackend(name string) string {
+	switch name {
+	case legacyBackendInternal:
+		return BackendNameBuiltin
+	case legacyBackendOpenCodeHTTP:
+		return BackendTypeHubOpenCode
+	default:
+		return name
+	}
+}
+
+// DefaultAgentBackends returns the default backends config: a single implicit builtin.
 func DefaultAgentBackends() AgentBackendsConfig {
 	return AgentBackendsConfig{
-		Default: "internal",
+		Default: BackendNameBuiltin,
 		Backends: map[string]BackendConfig{
-			"internal": {Type: BackendTypeBuiltin},
+			BackendNameBuiltin: {Type: BackendTypeBuiltin},
 		},
 	}
 }

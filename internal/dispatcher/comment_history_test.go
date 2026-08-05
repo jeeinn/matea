@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jeeinn/matea/internal/gitea"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,10 +62,10 @@ func TestTruncateCommentBody(t *testing.T) {
 }
 
 func TestCommentFetchTargetPrefersPR(t *testing.T) {
-	evt := &webhook.WebhookEvent{
-		Repo:  webhook.Repository{FullName: "jeeinn/rust-study"},
-		Issue: &webhook.Issue{Number: 2},
-		PR:    &webhook.PullRequest{Number: 2},
+	evt := &giteaingress.WebhookEvent{
+		Repo:  giteaingress.Repository{FullName: "jeeinn/rust-study"},
+		Issue: &giteaingress.Issue{Number: 2},
+		PR:    &giteaingress.PullRequest{Number: 2},
 	}
 	owner, repo, id := commentFetchTarget(evt)
 	assert.Equal(t, "jeeinn", owner)

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -53,6 +54,22 @@ func LoadWithBootstrap(path string) (*LoadResult, error) {
 	}
 
 	applyDefaults(&cfg)
+
+	// gitea.auto_provision defaults to true. A plain bool unmarshals an absent
+	// key to false, so we can't distinguish "unset" from an explicit
+	// `auto_provision: false` in applyDefaults. Probe the raw YAML for presence
+	// and only force the default when the key was never written.
+	var probe struct {
+		Gitea struct {
+			AutoProvision *bool `yaml:"auto_provision"`
+		} `yaml:"gitea"`
+	}
+	if err := yaml.Unmarshal([]byte(expanded), &probe); err == nil {
+		if probe.Gitea.AutoProvision == nil {
+			cfg.Gitea.AutoProvision = true
+		}
+	}
+
 	if err := ValidateAgentLoopConfig(cfg.Agents.Loop); err != nil {
 		return nil, err
 	}
@@ -241,22 +258,50 @@ func ApplyToolPackDefaults(tpc *ToolPacksConfig) {
 	}
 }
 
-// ApplyBackendDefaults ensures the implicit `internal` builtin backend exists and
-// is the default when none is set. Non-write tasks always use internal regardless.
-// Exported for use by runners / other packages that construct backends independently.
+// ApplyBackendDefaults normalizes legacy backend identifiers (internal →
+// builtin, opencode_http → hub-opencode) and ensures the builtin backend
+// exists and is the default when none is set. Non-write tasks always use the
+// builtin backend regardless. Exported for use by runners / other packages
+// that construct backends independently.
 func ApplyBackendDefaults(backends *AgentBackendsConfig) {
+	backends.Default = NormalizeBackend(backends.Default)
 	if backends.Default == "" {
-		backends.Default = "internal"
+		backends.Default = BackendNameBuiltin
 	}
 	if backends.Backends == nil {
 		backends.Backends = map[string]BackendConfig{}
 	}
-	if _, ok := backends.Backends["internal"]; !ok {
-		backends.Backends["internal"] = BackendConfig{Type: BackendTypeBuiltin}
-	} else if backends.Backends["internal"].Type == "" {
-		b := backends.Backends["internal"]
-		b.Type = BackendTypeBuiltin
-		backends.Backends["internal"] = b
+	// Normalize legacy map keys and legacy backend types. If a legacy key and
+	// a canonical key both exist (e.g. user defined both `internal:` and
+	// `builtin:`), the canonical key always wins and we log a warning so the
+	// operator knows which config is effective.
+	normalized := make(map[string]BackendConfig, len(backends.Backends)+1)
+	for name, b := range backends.Backends {
+		b.Type = NormalizeBackend(b.Type)
+		canonical := NormalizeBackend(name)
+		if existing, exists := normalized[canonical]; exists {
+			if name == canonical {
+				log.Printf("[WARN] Backend config conflict: legacy key %q also maps to canonical %q; using canonical %q configuration", canonical, canonical, canonical)
+				normalized[canonical] = b
+			} else {
+				log.Printf("[WARN] Backend config conflict: ignoring legacy key %q because canonical %q is already present", name, canonical)
+			}
+			// Avoid logging twice when the conflict is between two different
+			// legacy keys that normalize to the same canonical name.
+			_ = existing
+			continue
+		}
+		normalized[canonical] = b
+	}
+	backends.Backends = normalized
+	// Ensure the builtin backend entry exists and is typed.
+	if b, ok := backends.Backends[BackendNameBuiltin]; ok {
+		if b.Type == "" {
+			b.Type = BackendTypeBuiltin
+			backends.Backends[BackendNameBuiltin] = b
+		}
+	} else {
+		backends.Backends[BackendNameBuiltin] = BackendConfig{Type: BackendTypeBuiltin}
 	}
 }
 

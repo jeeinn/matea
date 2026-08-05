@@ -1,4 +1,4 @@
-package webhook
+package gitea
 
 import (
 	"bytes"
@@ -51,9 +51,9 @@ func TestHandlerAcceptsBeforeAsyncProcess(t *testing.T) {
 	defer db.Close()
 
 	var called atomic.Int32
-	h := NewHandler(&config.GiteaConfig{}, db.DB, func(evt *WebhookEvent) bool {
+	h := NewHandler(&config.GiteaConfig{}, db.DB, func(intent *Intent) bool {
 		called.Add(1)
-		assert.Equal(t, "issues", evt.Event)
+		assert.Equal(t, "issues", intent.Event.Event)
 		return true
 	})
 
@@ -91,7 +91,7 @@ func TestHandlerLeavesAcceptedOnCallbackFalse(t *testing.T) {
 	defer db.Close()
 
 	var called atomic.Int32
-	h := NewHandler(&config.GiteaConfig{}, db.DB, func(evt *WebhookEvent) bool {
+	h := NewHandler(&config.GiteaConfig{}, db.DB, func(intent *Intent) bool {
 		called.Add(1)
 		return false // transient failure — must stay accepted for ReplayAccepted
 	})

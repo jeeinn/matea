@@ -8,7 +8,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 func setupMentionRegistry() *agents.Registry {
@@ -23,16 +23,16 @@ func TestMentionResolveAnalyzeAgent(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
 			Body: "@analyze-007 请分析一下这个需求",
-			User: webhook.User{Login: "human"},
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -47,16 +47,16 @@ func TestMentionResolveCoderAgent(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 10},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 10},
+		Comment: &giteaingress.Comment{
 			Body: "@coder-ds 请修复这个问题",
-			User: webhook.User{Login: "human"},
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -70,16 +70,16 @@ func TestMentionResolveOnPRComment(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "pull_request_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		PR:     &webhook.PullRequest{Number: 20},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		PR:     &giteaingress.PullRequest{Number: 20},
+		Comment: &giteaingress.Comment{
 			Body: "@coder-ds 命名改为 CamelCase",
-			User: webhook.User{Login: "reviewer"},
+			User: giteaingress.User{Login: "reviewer"},
 		},
-		Sender: webhook.User{Login: "reviewer"},
+		Sender: giteaingress.User{Login: "reviewer"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -93,16 +93,16 @@ func TestMentionForceDevMode(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
-			Body: "@analyze-007 /dev 请直接实现",
-			User: webhook.User{Login: "human"},
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
+			Body: "/dev\n@analyze-007 请直接实现",
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -114,16 +114,16 @@ func TestMentionForceReplyMode(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
-			Body: "@coder-ds /reply 只回答问题",
-			User: webhook.User{Login: "human"},
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
+			Body: "/reply\n@coder-ds 只回答问题",
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -135,16 +135,16 @@ func TestMentionNoAgent(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
 			Body: "这是一条普通评论，没有 @mention",
-			User: webhook.User{Login: "human"},
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -155,16 +155,16 @@ func TestMentionUnknownUser(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
 			Body: "@random-person 请帮忙看看",
-			User: webhook.User{Login: "human"},
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -175,16 +175,16 @@ func TestMentionAgentCommentIgnored(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
 			Body: "<!-- matea-agent -->\n✅ 分析完成\n@coder-ds 建议开始实现",
-			User: webhook.User{Login: "analyze-007"},
+			User: giteaingress.User{Login: "analyze-007"},
 		},
-		Sender: webhook.User{Login: "analyze-007"},
+		Sender: giteaingress.User{Login: "analyze-007"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -195,16 +195,16 @@ func TestMentionReviewerOnPR(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "pull_request_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		PR:     &webhook.PullRequest{Number: 15},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		PR:     &giteaingress.PullRequest{Number: 15},
+		Comment: &giteaingress.Comment{
 			Body: "@reviewer-gpt 请审查最新变更",
-			User: webhook.User{Login: "coder-ds"},
+			User: giteaingress.User{Login: "coder-ds"},
 		},
-		Sender: webhook.User{Login: "coder-ds"},
+		Sender: giteaingress.User{Login: "coder-ds"},
 	}
 
 	result := resolver.Resolve(evt)
@@ -217,16 +217,16 @@ func TestMentionMultipleMentionsFirstAgent(t *testing.T) {
 	reg := setupMentionRegistry()
 	resolver := NewResolver(reg)
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event:  "issue_comment",
 		Action: "created",
-		Repo:   webhook.Repository{FullName: "owner/repo"},
-		Issue:  &webhook.Issue{Number: 5},
-		Comment: &webhook.Comment{
+		Repo:   giteaingress.Repository{FullName: "owner/repo"},
+		Issue:  &giteaingress.Issue{Number: 5},
+		Comment: &giteaingress.Comment{
 			Body: "@human-user @coder-ds 请实现这个功能",
-			User: webhook.User{Login: "human"},
+			User: giteaingress.User{Login: "human"},
 		},
-		Sender: webhook.User{Login: "human"},
+		Sender: giteaingress.User{Login: "human"},
 	}
 
 	result := resolver.Resolve(evt)

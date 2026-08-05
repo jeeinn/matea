@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 func TestL1ReviewRequiresPR(t *testing.T) {
@@ -21,10 +21,10 @@ func TestL1ReviewRequiresPR(t *testing.T) {
 	reviewAgent := &store.Agent{ID: 1, Name: "reviewer", Role: store.RoleReview, Status: "active"}
 
 	// Issue event with no PR → should fail
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "issues",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{Number: 1},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{Number: 1},
 	}
 	result := gate.CheckL1(evt, store.RoleReview, reviewAgent)
 	assert.False(t, result.Allowed)
@@ -44,10 +44,10 @@ func TestL1ReviewWithPRID(t *testing.T) {
 
 	reviewAgent := &store.Agent{ID: 1, Name: "reviewer", Role: store.RoleReview, Status: "active"}
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "issues",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{Number: 2},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{Number: 2},
 	}
 	result := gate.CheckL1(evt, store.RoleReview, reviewAgent)
 	assert.True(t, result.Allowed)
@@ -60,10 +60,10 @@ func TestL1ReviewOnPROpen(t *testing.T) {
 	reviewAgent := &store.Agent{ID: 1, Name: "reviewer", Role: store.RoleReview, Status: "active"}
 
 	// PR event with open state → allowed
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "pull_request",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		PR:    &webhook.PullRequest{Number: 10, State: "open"},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		PR:    &giteaingress.PullRequest{Number: 10, State: "open"},
 	}
 	result := gate.CheckL1(evt, store.RoleReview, reviewAgent)
 	assert.True(t, result.Allowed)
@@ -76,10 +76,10 @@ func TestL1ReviewOnClosedPR(t *testing.T) {
 	reviewAgent := &store.Agent{ID: 1, Name: "reviewer", Role: store.RoleReview, Status: "active"}
 
 	// PR event with closed state → should fail
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "pull_request",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		PR:    &webhook.PullRequest{Number: 10, State: "closed"},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		PR:    &giteaingress.PullRequest{Number: 10, State: "closed"},
 	}
 	result := gate.CheckL1(evt, store.RoleReview, reviewAgent)
 	assert.False(t, result.Allowed)
@@ -92,10 +92,10 @@ func TestL1AnalyzePassesThrough(t *testing.T) {
 
 	analyzeAgent := &store.Agent{ID: 1, Name: "analyzer", Role: store.RoleAnalyze, Status: "active"}
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "issues",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{Number: 1},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{Number: 1},
 	}
 	result := gate.CheckL1(evt, store.RoleAnalyze, analyzeAgent)
 	assert.True(t, result.Allowed)
@@ -108,10 +108,10 @@ func TestL1CoderPassesThrough(t *testing.T) {
 
 	coderAgent := &store.Agent{ID: 1, Name: "coder", Role: store.RoleCoder, Status: "active"}
 
-	evt := &webhook.WebhookEvent{
+	evt := &giteaingress.WebhookEvent{
 		Event: "issues",
-		Repo:  webhook.Repository{FullName: "owner/repo"},
-		Issue: &webhook.Issue{Number: 1},
+		Repo:  giteaingress.Repository{FullName: "owner/repo"},
+		Issue: &giteaingress.Issue{Number: 1},
 	}
 	result := gate.CheckL1(evt, store.RoleCoder, coderAgent)
 	assert.True(t, result.Allowed)

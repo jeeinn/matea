@@ -4,11 +4,10 @@ import (
 	"log"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
 
 // ResolveResult holds the resolution of a webhook event.
@@ -25,7 +24,8 @@ type ResolveResult struct {
 	Merged    bool   // true if PR was merged (not just closed)
 }
 
-// Resolver resolves webhook events to agent + task type via the Assign model.
+// Resolver resolves webhook events to agent + task type.
+// Unified intent: all triggers (Assign / Request Review / @mention) pull an agent into the conversation.
 type Resolver struct {
 	registry *agents.Registry
 }
@@ -41,9 +41,41 @@ var linkedIssuePattern = regexp.MustCompile(`(?i)(?:fix(?:es|ed)?|close[sd]?|res
 // mentionPattern matches @username in comment bodies.
 var mentionPattern = regexp.MustCompile(`@(\w[\w-]*)`)
 
+// slashCommandPattern matches /command at line start (ignoring code blocks).
+// Matches: /dev, /reply, /force at the beginning of a line.
+var slashCommandPattern = regexp.MustCompile(`(?m)^/(\w+)`)
+
+// hasSlashCommand checks if a slash command appears at line start, excluding code blocks.
+func hasSlashCommand(body, command string) bool {
+	// Strip code blocks first to avoid false positives
+	body = stripCodeBlocks(body)
+
+	matches := slashCommandPattern.FindAllStringSubmatch(body, -1)
+	for _, match := range matches {
+		if len(match) >= 2 && match[1] == command {
+			return true
+		}
+	}
+	return false
+}
+
+// stripCodeBlocks removes markdown code blocks (``` and `) from text.
+func stripCodeBlocks(text string) string {
+	// Remove triple-backtick blocks (greedy match anything between ```)
+	tripleBacktick := regexp.MustCompile("(?s)```.*?```")
+	text = tripleBacktick.ReplaceAllString(text, "")
+
+	// Remove inline code
+	inlineCode := regexp.MustCompile("`[^`]*`")
+	text = inlineCode.ReplaceAllString(text, "")
+
+	return text
+}
+
+
 // Resolve determines what to do with a webhook event.
 // Returns nil if the event should be ignored.
-func (r *Resolver) Resolve(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) Resolve(evt *giteaingress.WebhookEvent) *ResolveResult {
 	switch evt.Event {
 	case "issues":
 		return r.resolveIssue(evt)
@@ -57,7 +89,7 @@ func (r *Resolver) Resolve(evt *webhook.WebhookEvent) *ResolveResult {
 }
 
 // resolveIssue handles issue events.
-func (r *Resolver) resolveIssue(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveIssue(evt *giteaingress.WebhookEvent) *ResolveResult {
 	switch evt.Action {
 	case "assigned":
 		return r.resolveAssigned(evt)
@@ -75,7 +107,7 @@ func (r *Resolver) resolveIssue(evt *webhook.WebhookEvent) *ResolveResult {
 }
 
 // resolveIssueClosed handles issues.closed events — archive sessions, set context to done.
-func (r *Resolver) resolveIssueClosed(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveIssueClosed(evt *giteaingress.WebhookEvent) *ResolveResult {
 	issueID := 0
 	if evt.Issue != nil {
 		issueID = evt.Issue.Number
@@ -86,9 +118,9 @@ func (r *Resolver) resolveIssueClosed(evt *webhook.WebhookEvent) *ResolveResult 
 	}
 }
 
-// resolveAssigned handles issues.assigned events.
+// resolveAssigned handles issues.assigned events — pulls the assigned agent into the issue conversation.
 // Uses ONLY the single assignee from the webhook payload (not the full assignees list).
-func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolveAssigned(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.Assignee == nil {
 		log.Printf("[DEBUG] issues.assigned event with no assignee field, ignoring")
 		return nil
@@ -97,7 +129,7 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 	username := evt.Assignee.Login
 	agent := r.registry.GetByGiteaUsername(username)
 	if agent == nil {
-		log.Printf("[DEBUG] Assignee %q not in agent registry, ignoring", username)
+		log.Printf("[DEBUG] Assigned agent %q not in registry, ignoring", username)
 		return nil
 	}
 
@@ -110,24 +142,31 @@ func (r *Resolver) resolveAssigned(evt *webhook.WebhookEvent) *ResolveResult {
 		role = store.RoleAnalyze
 	}
 
-	// Determine task type based on role
-	taskType := r.taskTypeForRole(role, evt)
-
-	issueID := 0
-	if evt.Issue != nil {
-		issueID = evt.Issue.Number
+	// Resolve task type from the (role, surface, intent) table.
+	// review+issue+assign has no mapping → task not created (previously it
+	// produced review_pr and was rejected later by the L1 gate; resolving
+	// to nil here is the same externally-visible outcome, one step earlier).
+	surface := DetermineSurface(evt)
+	taskType := ResolveTaskType(role, surface, IntentAssign, evt)
+	if taskType == "" {
+		log.Printf("[DEBUG] No task type mapping for role=%q surface=%q intent=%q, ignoring", role, surface, IntentAssign)
+		return nil
 	}
+
+	// Use ResolveLogicIssueAndPR to support PR context (same as comment path)
+	issueID, prID := r.ResolveLogicIssueAndPR(evt)
 
 	return &ResolveResult{
 		Agent:    agent,
 		TaskType: taskType,
 		Role:     role,
 		IssueID:  issueID,
+		PRID:     prID,
 	}
 }
 
 // resolvePullRequest handles pull_request events.
-func (r *Resolver) resolvePullRequest(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolvePullRequest(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.PR == nil {
 		return nil
 	}
@@ -142,8 +181,8 @@ func (r *Resolver) resolvePullRequest(evt *webhook.WebhookEvent) *ResolveResult 
 	}
 }
 
-// resolveReviewRequested handles pull_request review_requested events.
-func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveResult {
+// resolveReviewRequested handles pull_request review_requested events — pulls the review agent into the PR conversation.
+func (r *Resolver) resolveReviewRequested(evt *giteaingress.WebhookEvent) *ResolveResult {
 	// Find a review agent among requested reviewers
 	if evt.PR.RequestedReviewers == nil || len(evt.PR.RequestedReviewers) == 0 {
 		return nil
@@ -152,12 +191,18 @@ func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveRes
 	for _, reviewer := range evt.PR.RequestedReviewers {
 		agent := r.registry.GetByGiteaUsername(reviewer.Login)
 		if agent != nil && agent.Role == store.RoleReview {
+			// Resolve task type from the (role, surface, intent) table
+			taskType := ResolveTaskType(store.RoleReview, SurfacePR, IntentReviewRequested, evt)
+			if taskType == "" {
+				return nil
+			}
+
 			// Try to resolve linked issue from PR body
 			issueID := r.resolveLinkedIssue(evt)
 
 			return &ResolveResult{
 				Agent:    agent,
-				TaskType: "review_pr",
+				TaskType: taskType,
 				Role:     store.RoleReview,
 				IssueID:  issueID,
 				PRID:     evt.PR.Number,
@@ -170,7 +215,7 @@ func (r *Resolver) resolveReviewRequested(evt *webhook.WebhookEvent) *ResolveRes
 
 // resolvePRClosed handles pull_request.closed events.
 // Merged PR → archive sessions; closed without merge → retain for pr_closed_retention.
-func (r *Resolver) resolvePRClosed(evt *webhook.WebhookEvent) *ResolveResult {
+func (r *Resolver) resolvePRClosed(evt *giteaingress.WebhookEvent) *ResolveResult {
 	// Gitea sends state="closed" with merged=true when a PR is merged.
 	// The state field is NEVER "merged" — that was the old bug.
 	merged := evt.PR != nil && evt.PR.Merged
@@ -185,31 +230,9 @@ func (r *Resolver) resolvePRClosed(evt *webhook.WebhookEvent) *ResolveResult {
 	}
 }
 
-// taskTypeForRole determines the task type based on agent role and event context.
-func (r *Resolver) taskTypeForRole(role string, evt *webhook.WebhookEvent) string {
-	switch role {
-	case store.RoleAnalyze:
-		return "analyze_issue"
-	case store.RoleCoder:
-		// Check for business label "bug" → fix_bug, otherwise solve_issue
-		if evt.Issue != nil {
-			for _, label := range evt.Issue.Labels {
-				if label.Name == "bug" {
-					return "fix_bug"
-				}
-			}
-		}
-		return "solve_issue"
-	case store.RoleReview:
-		return "review_pr"
-	default:
-		return "analyze_issue"
-	}
-}
-
 // resolveLinkedIssue extracts the linked issue number from PR / PR-as-issue body
 // (Fixes/Closes/Resolves #N). Returns 0 if none found.
-func (r *Resolver) resolveLinkedIssue(evt *webhook.WebhookEvent) int {
+func (r *Resolver) resolveLinkedIssue(evt *giteaingress.WebhookEvent) int {
 	for _, body := range linkedIssueBodies(evt) {
 		if n := extractLinkedIssue(body); n > 0 {
 			return n
@@ -218,7 +241,7 @@ func (r *Resolver) resolveLinkedIssue(evt *webhook.WebhookEvent) int {
 	return 0
 }
 
-func linkedIssueBodies(evt *webhook.WebhookEvent) []string {
+func linkedIssueBodies(evt *giteaingress.WebhookEvent) []string {
 	if evt == nil {
 		return nil
 	}
@@ -246,7 +269,7 @@ func extractLinkedIssue(body string) int {
 }
 
 // isPRConversation reports whether the event is about a pull request thread.
-func isPRConversation(evt *webhook.WebhookEvent) bool {
+func isPRConversation(evt *giteaingress.WebhookEvent) bool {
 	if evt == nil {
 		return false
 	}
@@ -263,7 +286,7 @@ func isPRConversation(evt *webhook.WebhookEvent) bool {
 // Pure PR with no linked issue: issueID=0, prID=P. Downstream must map this
 // via effectiveIssueKey (prID) for session/lock/workflow/writeback — do not
 // key storage on raw 0.
-func (r *Resolver) ResolveLogicIssueAndPR(evt *webhook.WebhookEvent) (issueID, prID int) {
+func (r *Resolver) ResolveLogicIssueAndPR(evt *giteaingress.WebhookEvent) (issueID, prID int) {
 	if isPRConversation(evt) {
 		if evt.PR != nil {
 			prID = evt.PR.Number
@@ -280,12 +303,12 @@ func (r *Resolver) ResolveLogicIssueAndPR(evt *webhook.WebhookEvent) (issueID, p
 }
 
 // IsAgentSender checks if the event sender is any active agent (to prevent self-trigger loops).
-func (r *Resolver) IsAgentSender(evt *webhook.WebhookEvent) bool {
+func (r *Resolver) IsAgentSender(evt *giteaingress.WebhookEvent) bool {
 	return r.registry.GetByGiteaUsername(evt.Sender.Login) != nil
 }
 
-// resolveComment handles issue_comment / pull_request_comment events with @mention resolution.
-func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
+// resolveComment handles issue_comment / pull_request_comment events — pulls @mentioned agent into the conversation.
+func (r *Resolver) resolveComment(evt *giteaingress.WebhookEvent) *ResolveResult {
 	if evt.Comment == nil {
 		return nil
 	}
@@ -297,14 +320,14 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 		return nil
 	}
 
-	// Check for force mode commands
-	forceDev := strings.Contains(body, "/dev")
-	forceReply := strings.Contains(body, "/reply")
+	// Check for force mode commands (line-start anchored, excluding code blocks)
+	forceDev := hasSlashCommand(body, "dev")
+	forceReply := hasSlashCommand(body, "reply")
 
-	// Parse @mentions from comment body
+	// Pull agent into conversation via @mention
 	agent := r.findMentionedAgent(body)
 
-	// If no explicit @mention, we can't resolve (Phase 17 doesn't support fallback yet)
+	// If no explicit @mention, we can't resolve
 	if agent == nil {
 		return nil
 	}
@@ -312,11 +335,31 @@ func (r *Resolver) resolveComment(evt *webhook.WebhookEvent) *ResolveResult {
 	// Session / Workflow keys use logic issue; PR APIs use prID.
 	issueID, prID := r.ResolveLogicIssueAndPR(evt)
 
-	// Determine task type based on role and force commands
-	taskType := r.commentTaskType(agent, forceDev, forceReply, evt)
+	// Derive intent: slash commands override plain mention (dev wins over reply,
+	// matching the previous commentTaskType precedence).
+	intent := IntentMention
+	if forceDev {
+		intent = IntentSlashDev
+	} else if forceReply {
+		intent = IntentSlashReply
+	}
 
-	// Detect /force for soft gate bypass
-	force := strings.Contains(body, "/force") && !forceDev && !forceReply
+	// Resolve task type from the (role, surface, intent) table.
+	// Empty role falls back to analyze (previously the switch default returned
+	// reply_comment; analyze+mention maps to the same task type).
+	role := agent.Role
+	if role == "" {
+		role = store.RoleAnalyze
+	}
+	surface := DetermineSurface(evt)
+	taskType := ResolveTaskType(role, surface, intent, evt)
+	if taskType == "" {
+		log.Printf("[DEBUG] No task type mapping for role=%q surface=%q intent=%q, ignoring", role, surface, intent)
+		return nil
+	}
+
+	// Detect /force for soft gate bypass (line-start anchored, excluding code blocks)
+	force := hasSlashCommand(body, "force") && !forceDev && !forceReply
 
 	return &ResolveResult{
 		Agent:    agent,
@@ -341,27 +384,4 @@ func (r *Resolver) findMentionedAgent(body string) *store.Agent {
 		}
 	}
 	return nil
-}
-
-// commentTaskType determines the task type for a comment-based continuation.
-func (r *Resolver) commentTaskType(agent *store.Agent, forceDev, forceReply bool, evt *webhook.WebhookEvent) string {
-	// Force modes override role-based logic
-	if forceDev {
-		return "solve_comment"
-	}
-	if forceReply {
-		return "reply_comment"
-	}
-
-	// Role-based routing
-	switch agent.Role {
-	case store.RoleAnalyze:
-		return "reply_comment" // Analyze is read-only
-	case store.RoleCoder:
-		return "solve_comment"
-	case store.RoleReview:
-		return "reply_comment" // Review discussion is read-only
-	default:
-		return "reply_comment"
-	}
 }

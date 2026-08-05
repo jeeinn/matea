@@ -558,25 +558,25 @@ opencode serve --port 4096
 ```yaml
 agents:
   backends:
-    default: internal
+    default: builtin
     backends:
       opencode-local:
-        type: opencode_http
+        type: hub-opencode
         base_url: "http://127.0.0.1:4096"
         workspace_mode: matea_path   # 第一期唯一合法值
         health_check:
           path: /health                # 或 /global/health，视 OpenCode 版本
-        allow_fallback_internal: false # true=探活失败时降级内置 Loop（默认勿开）
+        allow_fallback_builtin: false # true=探活失败时降级内置 Loop（默认勿开）
 ```
 
-Agent 侧设置 `backend: opencode-local`（仅 solve / fix_bug 写任务生效；analyze/review 强制 internal）。
+Agent 侧设置 `backend: opencode-local`（仅 solve / fix_bug 写任务生效；analyze/review 强制 builtin）。
 
 ### 行为说明
 
 | 场景 | 任务状态 |
 |------|----------|
-| sidecar 探活失败且 `allow_fallback_internal=false` | **failed**（可读错误评论） |
-| 探活失败且 `allow_fallback_internal=true` | 切到 internal 继续 |
+| sidecar 探活失败且 `allow_fallback_builtin=false` | **failed**（可读错误评论） |
+| 探活失败且 `allow_fallback_builtin=true` | 切到 builtin 继续 |
 | 探活成功但改码/提 PR 失败 | failed / partial（写回规则见 P0.1） |
 
 工作目录绑定：`POST /session?directory=<workspace>` + `X-Opencode-Directory`（见 [archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。

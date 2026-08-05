@@ -55,11 +55,11 @@ func (m *ConfigManager) GetDisplayMap() (map[string]interface{}, error) {
 
 	backendsMeta := make([]map[string]interface{}, 0, len(activeBackends.Backends)+1)
 	backendsMeta = append(backendsMeta, map[string]interface{}{
-		"name": "internal",
+		"name": "builtin",
 		"type": BackendTypeBuiltin,
 	})
 	for name, bc := range activeBackends.Backends {
-		if name == "internal" {
+		if name == "builtin" {
 			continue
 		}
 		backendsMeta = append(backendsMeta, map[string]interface{}{

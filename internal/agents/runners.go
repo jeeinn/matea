@@ -80,7 +80,8 @@ type RunnerFactory struct {
 	getDebugConfig   func() config.DebugConfig
 	modelMeta        ModelMetaProvider
 	backends         config.AgentBackendsConfig // coding backends (Path A)
-	internalBackend  *InternalCodingBackend     // always available, built from this factory
+	builtinBackend   *BuiltinCodingBackend      // always available, built from this factory
+	hubRegistry      *HubBackendRegistry        // builtin + configured hub-* backends (1.2.4 dispatch)
 	toolPacks        config.ToolPacksConfig     // built-in + user-defined tool packs
 	mcpRegistry      *mcp.Registry              // MCP server registry (nil = no MCP)
 	gatewayDir       string                     // gateway root directory for SKILL.md scanning
@@ -137,7 +138,26 @@ func NewRunnerFactory(llmRegistry *llm.Registry, giteaFactory GiteaClientFactory
 		mcpRegistry:      mcpReg,
 		gatewayDir:       gatewayDir,
 	}
-	factory.internalBackend = NewInternalCodingBackend(factory)
+	factory.builtinBackend = NewBuiltinCodingBackend(factory)
+
+	// Hub backend registry (1.2.4): builtin always registered; configured
+	// hub-opencode instances registered as shared singletons so HubBackend
+	// Submit→Poll affinity holds (their outcome cache is instance-local).
+	// Instances that fail construction are skipped here — ResolveCodingBackend
+	// surfaces the construction error when the backend is actually used.
+	factory.hubRegistry = NewHubBackendRegistry()
+	factory.hubRegistry.Register(NewBuiltinHubBackend(factory))
+	for name, cfg := range beCfg.Backends {
+		if config.NormalizeBackend(cfg.Type) != config.BackendTypeHubOpenCode {
+			continue
+		}
+		oc, err := NewOpenCodeHTTPBackend(name, cfg)
+		if err != nil {
+			log.Printf("[WARN] hub backend %q not registered: %v", name, err)
+			continue
+		}
+		factory.hubRegistry.Register(oc)
+	}
 	return factory
 }
 

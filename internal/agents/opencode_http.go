@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 const (
@@ -37,6 +39,19 @@ type OpenCodeHTTPBackend struct {
 	cfg    config.BackendConfig
 	client *http.Client
 	name   string // backend name from config, e.g. "opencode-local"
+
+	// hubResults caches terminal outcomes of HubBackend.Submit, keyed by the
+	// opencode session id. Instance-local: shared registry instances (1.2.4)
+	// keep Submit→Poll affinity; the fresh-per-call CodingBackend path never
+	// touches this cache.
+	hubMu      sync.Mutex
+	hubResults map[string]hubOutcome
+}
+
+// hubOutcome is the cached terminal result of a submitted hub task.
+type hubOutcome struct {
+	result *BackendResult
+	err    error
 }
 
 // NewOpenCodeHTTPBackend builds an OpenCode HTTP backend from a named config entry.
@@ -62,9 +77,10 @@ func NewOpenCodeHTTPBackend(name string, cfg config.BackendConfig) (*OpenCodeHTT
 	}
 
 	return &OpenCodeHTTPBackend{
-		cfg:    cfg,
-		client: client,
-		name:   name,
+		cfg:        cfg,
+		client:     client,
+		name:       name,
+		hubResults: make(map[string]hubOutcome),
 	}, nil
 }
 
@@ -440,4 +456,120 @@ func (b *OpenCodeHTTPBackend) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("health check returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// --- HubBackend implementation (task 1.2.5) ----------------------------------
+//
+// OpenCodeHTTPBackend implements HubBackend alongside CodingBackend, so the
+// hub seam has two real implementations (builtin + hub-opencode) to validate
+// against. Phase 1 execution stays synchronous: Submit runs the opencode
+// session to completion via the existing CodingBackend.Run path and caches
+// the outcome keyed by session id; the first Poll reports the terminal state.
+// True async polling of the hub session (with Handle persistence and
+// executor re-attach per 1.2.1) is Phase 2 — the current CodingBackend runner
+// path is unchanged and OpenCode remains fully usable.
+//
+// Write-only constraint (ARCHITECTURE: Analyze/Review never走 OpenCode) is
+// enforced here too: non-write task types are rejected at Submit.
+
+// Compile-time interface compliance check.
+var _ HubBackend = (*OpenCodeHTTPBackend)(nil)
+
+// Capabilities declares the opencode feature set: the sidecar runs its own
+// tool-use loop server-side; Matea keeps git/PR finalization.
+func (b *OpenCodeHTTPBackend) Capabilities() HubCapabilities {
+	return HubCapabilities{
+		SupportsToolUse: true,
+	}
+}
+
+// Submit runs a write task on the opencode sidecar synchronously and returns
+// a Handle whose RemoteID is the opencode session id. Non-write task types
+// and missing sandbox paths are rejected as submission errors.
+func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Handle, error) {
+	if tc == nil {
+		return nil, fmt.Errorf("hub-opencode backend %q: nil TaskContext", b.name)
+	}
+	subType, err := opencodeWriteSubType(tc.TaskType)
+	if err != nil {
+		return nil, err
+	}
+	if tc.SandboxPath == "" {
+		return nil, fmt.Errorf("hub-opencode backend %q: TaskContext.SandboxPath is required for %s tasks", b.name, tc.TaskType)
+	}
+
+	res, err := b.Run(ctx, CodingRequest{
+		WorkDir:      tc.SandboxPath,
+		Task:         &store.Task{ID: tc.TaskID, Repo: tc.Repo, Event: tc.IssueTitle, Context: tc.IssueBody},
+		Agent:        &store.Agent{Provider: tc.Provider, Model: tc.Model},
+		TaskSubType:  subType,
+		Prompt:       tc.UserPrompt,
+		SystemPrompt: tc.SystemPrompt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !res.Success {
+		return nil, fmt.Errorf("hub-opencode backend %q reported failure: %s", b.name, res.Summary)
+	}
+
+	remoteID := res.RemoteSessionID
+	if remoteID == "" {
+		remoteID = fmt.Sprintf("opencode-%d", time.Now().UnixNano())
+	}
+	h := &Handle{
+		Backend:        b.name,
+		RemoteID:       remoteID,
+		IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", tc.TaskType, tc.Repo, tc.IssueID, tc.PRID),
+	}
+	b.hubMu.Lock()
+	b.hubResults[remoteID] = hubOutcome{result: &BackendResult{Summary: res.Summary}}
+	b.hubMu.Unlock()
+	return h, nil
+}
+
+// Poll returns the cached terminal outcome for a Handle produced by Submit.
+// The cache is instance-local (see the struct doc); an unknown RemoteID is an
+// error, never a silent pending.
+func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResult, State, error) {
+	_ = ctx
+	if h == nil {
+		return nil, "", fmt.Errorf("hub-opencode backend %q: nil Handle", b.name)
+	}
+	if h.Backend != "" && h.Backend != b.name {
+		return nil, "", fmt.Errorf("hub-opencode backend %q: handle belongs to backend %q", b.name, h.Backend)
+	}
+	b.hubMu.Lock()
+	out, ok := b.hubResults[h.RemoteID]
+	b.hubMu.Unlock()
+	if !ok {
+		return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)
+	}
+	if out.err != nil {
+		return nil, StateFailed, out.err
+	}
+	return out.result, StateDone, nil
+}
+
+// Cancel aborts the opencode session referenced by the Handle (best effort,
+// same semantics as CodingBackend.Abort). Nil handles and empty RemoteIDs are
+// tolerated — cancellation is idempotent by nature.
+func (b *OpenCodeHTTPBackend) Cancel(ctx context.Context, h *Handle) error {
+	if h == nil || h.RemoteID == "" {
+		return nil
+	}
+	return b.Abort(ctx, h.RemoteID)
+}
+
+// opencodeWriteSubType maps a hub task type to the coding sub-type, rejecting
+// non-write task types (Analyze/Review/Reply never run on OpenCode).
+func opencodeWriteSubType(taskType string) (string, error) {
+	switch taskType {
+	case "solve_issue", "solve_comment":
+		return "dev", nil
+	case "fix_bug":
+		return "bugfix", nil
+	default:
+		return "", fmt.Errorf("hub-opencode supports write task types only (solve_issue / solve_comment / fix_bug), got %q", taskType)
+	}
 }

@@ -77,7 +77,7 @@ Get-Content data\e2e-env.local | ForEach-Object {
 | `logging.path` | `./data/logs-e2e` |
 | `llm.providers.*` | OpenAI-compatible（曾用 SenseNova：`https://token.sensenova.cn/v1`） |
 | `agents.defaults.provider` / `model` | 与上面对齐（如 `sensenova` / `deepseek-v4-flash`） |
-| `agents.backends.opencode-local` | `base_url: http://127.0.0.1:4096`，`health_check.path: /global/health`，`allow_fallback_internal: false` |
+| `agents.backends.opencode-local` | `base_url: http://127.0.0.1:4096`，`health_check.path: /global/health`，`allow_fallback_builtin: false` |
 | `mcp.servers.e2e-mock` | `base_url: http://127.0.0.1:18080/mcp` |
 
 远程配置可备份为 `config.remote.yaml`（勿把真实密钥写进仓库）。

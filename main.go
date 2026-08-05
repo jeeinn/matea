@@ -23,7 +23,7 @@ import (
 	"github.com/jeeinn/matea/internal/logging"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	"github.com/jeeinn/matea/internal/webhook"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 
@@ -175,7 +175,7 @@ func main() {
 	})
 
 	// Webhook handler - wired to dispatcher
-	webhookHandler := webhook.NewHandler(&activeCfg.Gitea, db.DB, d.HandleEvent)
+	webhookHandler := giteaingress.NewHandler(&activeCfg.Gitea, db.DB, d.HandleEvent)
 	mux.Handle("POST /webhook/gitea", webhookHandler)
 	// Recover deliveries accepted before crash (after HTTP 200, before processing finished).
 	webhookHandler.ReplayAccepted()
