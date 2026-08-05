@@ -53,6 +53,22 @@ func LoadWithBootstrap(path string) (*LoadResult, error) {
 	}
 
 	applyDefaults(&cfg)
+
+	// gitea.auto_provision defaults to true. A plain bool unmarshals an absent
+	// key to false, so we can't distinguish "unset" from an explicit
+	// `auto_provision: false` in applyDefaults. Probe the raw YAML for presence
+	// and only force the default when the key was never written.
+	var probe struct {
+		Gitea struct {
+			AutoProvision *bool `yaml:"auto_provision"`
+		} `yaml:"gitea"`
+	}
+	if err := yaml.Unmarshal([]byte(expanded), &probe); err == nil {
+		if probe.Gitea.AutoProvision == nil {
+			cfg.Gitea.AutoProvision = true
+		}
+	}
+
 	if err := ValidateAgentLoopConfig(cfg.Agents.Loop); err != nil {
 		return nil, err
 	}

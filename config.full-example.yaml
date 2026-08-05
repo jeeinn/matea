@@ -17,6 +17,10 @@ gitea:
   admin_token: "${GITEA_ADMIN_TOKEN}"
   # Webhook 签名密钥（在 Gitea Webhook 设置中配置的密钥）
   webhook_secret: "your-webhook-secret-here"
+  # 是否自动创建/续期 Agent 的 Gitea 账号与 Token（默认 true）。
+  # 设为 false 时，Matea 不再调用 Gitea Admin API 建号/改密/签发令牌，
+  # 由运维手动创建同名 Gitea 账号并填入 Agent 的 Gitea Token。
+  # auto_provision: false
 
 workspace:
   # Agent 工作目录根（Session 路径：{base_dir}/sessions/{id}/repo）

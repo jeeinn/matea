@@ -32,7 +32,7 @@ func newTestManager(t *testing.T, handler http.HandlerFunc) *Manager {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	cfg := &config.GiteaConfig{URL: server.URL, AdminToken: "admin-token"}
+	cfg := &config.GiteaConfig{URL: server.URL, AdminToken: "admin-token", AutoProvision: true}
 	return NewManager(db, cfg)
 }
 
@@ -264,4 +264,57 @@ func TestCreateAgent_MarksNewAccountsAsManaged(t *testing.T) {
 	savedAgent, err := mgr.db.GetAgent(agent.ID)
 	require.NoError(t, err)
 	assert.True(t, savedAgent.ManagedByMatea, "Saved agent should retain managed flag")
+}
+
+// TestCreateAgent_SkipsProvisionWhenDisabled verifies that with
+// gitea.auto_provision=false, Matea never calls the Gitea Admin API and the
+// agent is created with no token and not marked as managed by Matea.
+func TestCreateAgent_SkipsProvisionWhenDisabled(t *testing.T) {
+	mgr := newTestManager(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Gitea API must not be called when auto_provision is disabled: %s %s", r.Method, r.URL.Path)
+	})
+	mgr.cfg.AutoProvision = false
+
+	req := CreateAgentRequest{
+		Name:          "no-prov-agent",
+		GiteaUsername: "no-prov",
+		Role:          store.RoleAnalyze,
+		Provider:      "deepseek",
+		Model:         "deepseek-v4-flash",
+	}
+
+	agent, err := mgr.CreateAgent(req)
+	require.NoError(t, err)
+	assert.False(t, agent.ManagedByMatea, "agent must not be marked managed when provisioning disabled")
+	assert.Empty(t, agent.GiteaToken, "no token should be set when provisioning disabled")
+
+	saved, err := mgr.db.GetAgent(agent.ID)
+	require.NoError(t, err)
+	assert.Empty(t, saved.GiteaToken)
+}
+
+// TestUpdateAgent_SkipsProvisionWhenDisabled verifies that an existing agent's
+// token is preserved (not refreshed) when auto_provision is disabled.
+func TestUpdateAgent_SkipsProvisionWhenDisabled(t *testing.T) {
+	mgr := newTestManager(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Gitea API must not be called when auto_provision is disabled: %s %s", r.Method, r.URL.Path)
+	})
+	mgr.cfg.AutoProvision = false
+
+	agent := &store.Agent{
+		Name:          "keep-token-agent",
+		GiteaUsername: "keep-token",
+		GiteaToken:    "manual-token",
+		Role:          store.RoleAnalyze,
+		Status:        "active",
+		Provider:      "deepseek",
+		Model:         "deepseek-v4-flash",
+	}
+	require.NoError(t, mgr.db.CreateAgent(agent))
+
+	require.NoError(t, mgr.UpdateAgent(agent))
+
+	got, err := mgr.db.GetAgent(agent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "manual-token", got.GiteaToken, "existing token must be preserved when provisioning disabled")
 }

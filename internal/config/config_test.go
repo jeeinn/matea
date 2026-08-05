@@ -262,3 +262,45 @@ func TestIsLikelyLocalLLM(t *testing.T) {
 	assert.False(t, isLikelyLocalLLM("https://api.deepseek.com/v1"))
 	assert.False(t, isLikelyLocalLLM(""))
 }
+
+func TestLoad_GiteaAutoProvisionDefaultsTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "minimal.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+gitea:
+  url: "http://localhost:3000"
+`), 0644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Gitea.AutoProvision, "gitea.auto_provision should default to true when unset")
+}
+
+func TestLoad_GiteaAutoProvisionExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "minimal.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+gitea:
+  url: "http://localhost:3000"
+  auto_provision: false
+`), 0644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.Gitea.AutoProvision, "gitea.auto_provision should honor explicit false")
+}
+
+func TestConfigKey_GiteaAutoProvision(t *testing.T) {
+	assert.True(t, IsConfigKey("gitea.auto_provision"))
+
+	v, err := parseConfigValue("gitea.auto_provision", "false")
+	require.NoError(t, err)
+	assert.Equal(t, false, v)
+
+	cfg := &Config{Gitea: GiteaConfig{AutoProvision: true}}
+	assert.Equal(t, "true", getConfigEntry(cfg, "gitea.auto_provision"))
+
+	require.NoError(t, applyConfigEntry(cfg, "gitea.auto_provision", "false"))
+	assert.False(t, cfg.Gitea.AutoProvision)
+	assert.Equal(t, "false", getConfigEntry(cfg, "gitea.auto_provision"))
+}

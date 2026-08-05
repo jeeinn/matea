@@ -80,6 +80,11 @@ type GiteaConfig struct {
 	URL           string `yaml:"url"`
 	AdminToken    string `yaml:"admin_token"`
 	WebhookSecret string `yaml:"webhook_secret"`
+	// AutoProvision controls whether Matea automatically creates/refreshes the
+	// Gitea account for an agent on create/update. Defaults to true; set
+	// `gitea.auto_provision: false` to disable (operator must create the Gitea
+	// account and token manually).
+	AutoProvision bool `yaml:"auto_provision"`
 }
 
 type WorkspaceConfig struct {

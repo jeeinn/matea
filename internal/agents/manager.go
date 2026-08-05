@@ -153,9 +153,17 @@ func (m *Manager) EnsureGiteaAccount(username, currentToken string) (token strin
 
 // CreateAgent registers a new agent with Gitea account and stores it in DB.
 func (m *Manager) CreateAgent(req CreateAgentRequest) (*store.Agent, error) {
-	token, userCreated, err := m.EnsureGiteaAccount(req.GiteaUsername, "")
-	if err != nil {
-		return nil, err
+	var token string
+	var userCreated bool
+	if m.cfg != nil && m.cfg.AutoProvision {
+		t, uc, err := m.EnsureGiteaAccount(req.GiteaUsername, "")
+		if err != nil {
+			return nil, err
+		}
+		token = t
+		userCreated = uc
+	} else {
+		log.Printf("[INFO] Gitea account auto-provision disabled (gitea.auto_provision=false); skipping EnsureGiteaAccount for %s", req.GiteaUsername)
 	}
 
 	role := req.Role
@@ -197,15 +205,19 @@ func (m *Manager) CreateAgent(req CreateAgentRequest) (*store.Agent, error) {
 
 // UpdateAgent updates an agent's configuration and ensures its Gitea account exists.
 func (m *Manager) UpdateAgent(agent *store.Agent) error {
-	token, userCreated, err := m.EnsureGiteaAccount(agent.GiteaUsername, agent.GiteaToken)
-	if err != nil {
-		return err
-	}
-	if token != agent.GiteaToken {
-		agent.GiteaToken = token
-	}
-	if userCreated {
-		log.Printf("[INFO] Provisioned Gitea user for agent id=%d username=%s", agent.ID, agent.GiteaUsername)
+	if m.cfg != nil && m.cfg.AutoProvision {
+		token, userCreated, err := m.EnsureGiteaAccount(agent.GiteaUsername, agent.GiteaToken)
+		if err != nil {
+			return err
+		}
+		if token != agent.GiteaToken {
+			agent.GiteaToken = token
+		}
+		if userCreated {
+			log.Printf("[INFO] Provisioned Gitea user for agent id=%d username=%s", agent.ID, agent.GiteaUsername)
+		}
+	} else {
+		log.Printf("[INFO] Gitea account auto-provision disabled (gitea.auto_provision=false); skipping EnsureGiteaAccount for %s", agent.GiteaUsername)
 	}
 	if err := m.db.UpdateAgent(agent); err != nil {
 		return err
