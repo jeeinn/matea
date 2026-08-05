@@ -76,6 +76,10 @@ func (f *RunnerFactory) ResolveHubBackend(agent *store.Agent) (HubBackend, error
 // hub-* dispatch branch in every runner. Reserved-but-unimplemented hub
 // backends and unknown names fail the task loudly; builtin and configured
 // hub-opencode instances pass through to the existing execution paths.
+//
+// TODO(Phase 2): replace this validation-only seam with actual Submit/Poll
+// dispatch through HubBackend, including Handle persistence and executor
+// re-attach on restart (see HubBackend.Poll contract and 1.2.1 design note).
 func (f *RunnerFactory) validateHubDispatch(agent *store.Agent) error {
 	_, err := f.ResolveHubBackend(agent)
 	return err
