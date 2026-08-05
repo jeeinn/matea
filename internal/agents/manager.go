@@ -213,6 +213,9 @@ func (m *Manager) UpdateAgent(agent *store.Agent) error {
 		if token != agent.GiteaToken {
 			agent.GiteaToken = token
 		}
+		// EnsureGiteaAccount only succeeds for Matea-managed accounts; when
+		// auto-provision is on, the account is under Matea's management.
+		agent.ManagedByMatea = true
 		if userCreated {
 			log.Printf("[INFO] Provisioned Gitea user for agent id=%d username=%s", agent.ID, agent.GiteaUsername)
 		}
