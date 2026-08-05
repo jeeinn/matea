@@ -21,9 +21,9 @@
       <div v-if="contexts.length > 0" class="context-list">
         <el-table :data="contexts" style="width: 100%" @row-click="selectContext">
           <el-table-column prop="issue_id" label="Issue#" width="80" />
-          <el-table-column prop="stage" label="阶段" width="120">
+          <el-table-column label="状态" width="140">
             <template #default="{ row }">
-              <el-tag :type="getStageType(row.stage)" size="small">{{ stageLabels[row.stage] || row.stage }}</el-tag>
+              <el-tag :type="semanticStatus(row).type" size="small">{{ semanticStatus(row).label }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="active_role" label="活跃角色" width="100">
@@ -67,45 +67,64 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item label="仓库">{{ selectedContext.repo }}</el-descriptions-item>
         <el-descriptions-item label="Issue">#{{ selectedContext.issue_id }}</el-descriptions-item>
-        <el-descriptions-item label="阶段" :span="2">
+        <el-descriptions-item label="状态" :span="2">
           <div class="stage-display">
-            <el-tag :type="getStageType(selectedContext.stage)" size="medium">{{ stageLabels[selectedContext.stage] || selectedContext.stage }}</el-tag>
-            <span v-if="selectedContext.previous_stage" class="previous-stage">
-              (前一阶段: {{ stageLabels[selectedContext.previous_stage] }})
-            </span>
+            <el-tag :type="semanticStatus(selectedContext).type" size="medium">{{ semanticStatus(selectedContext).label }}</el-tag>
+            <span class="status-hint">{{ semanticStatus(selectedContext).hint }}</span>
           </div>
         </el-descriptions-item>
         <el-descriptions-item label="活跃角色">{{ roleLabels[selectedContext.active_role] || selectedContext.active_role || '-' }}</el-descriptions-item>
         <el-descriptions-item label="活跃 Agent">{{ agentMap[selectedContext.active_agent_id] || selectedContext.active_agent_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="关联 PR">{{ selectedContext.pr_id || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="会话 ID">
-          <span v-if="selectedContext.session_id" class="session-id">{{ selectedContext.session_id }}</span>
-          <span v-else>-</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="更新时间" :span="2">{{ formatDate(selectedContext.updated_at) }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDate(selectedContext.updated_at) }}</el-descriptions-item>
       </el-descriptions>
 
-      <div class="stage-flow">
-        <h4>工作流阶段流程</h4>
-        <div class="flow-steps">
-          <div 
-            v-for="step in stageFlow" 
-            :key="step.stage"
-            :class="['flow-step', { 
-              active: selectedContext.stage === step.stage,
-              passed: isStagePassed(selectedContext.stage, step.stage),
-              pending: !isStagePassed(selectedContext.stage, step.stage) && selectedContext.stage !== step.stage
-            }]"
-          >
-            <div class="step-circle">
-              <el-icon v-if="selectedContext.stage === step.stage"><CircleCheck /></el-icon>
-              <span v-else-if="isStagePassed(selectedContext.stage, step.stage)">✓</span>
-              <span v-else>{{ step.order }}</span>
+      <!-- 诊断（高级）：内部 stage 机不作为默认用户可见面，仅排障时展开 -->
+      <el-collapse v-model="diagnosticsOpen" class="diagnostics">
+        <el-collapse-item name="diagnostics">
+          <template #title>
+            <span class="diagnostics-title">诊断（高级）</span>
+            <span class="diagnostics-sub">内部工作流阶段，仅用于排障</span>
+          </template>
+
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="内部阶段">
+              <el-tag :type="getStageType(selectedContext.stage)" size="small">{{ stageLabels[selectedContext.stage] || selectedContext.stage }}</el-tag>
+              <code class="raw-value">{{ selectedContext.stage }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item label="前一阶段">
+              <span v-if="selectedContext.previous_stage">{{ stageLabels[selectedContext.previous_stage] || selectedContext.previous_stage }}</span>
+              <span v-else class="text-gray">-</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="会话 ID" :span="2">
+              <span v-if="selectedContext.session_id" class="session-id">{{ selectedContext.session_id }}</span>
+              <span v-else class="text-gray">-</span>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="stage-flow">
+            <h4>工作流阶段流程</h4>
+            <div class="flow-steps">
+              <div
+                v-for="step in stageFlow"
+                :key="step.stage"
+                :class="['flow-step', {
+                  active: selectedContext.stage === step.stage,
+                  passed: isStagePassed(selectedContext.stage, step.stage),
+                  pending: !isStagePassed(selectedContext.stage, step.stage) && selectedContext.stage !== step.stage
+                }]"
+              >
+                <div class="step-circle">
+                  <el-icon v-if="selectedContext.stage === step.stage"><CircleCheck /></el-icon>
+                  <span v-else-if="isStagePassed(selectedContext.stage, step.stage)">✓</span>
+                  <span v-else>{{ step.order }}</span>
+                </div>
+                <div class="step-label">{{ step.label }}</div>
+              </div>
             </div>
-            <div class="step-label">{{ step.label }}</div>
           </div>
-        </div>
-      </div>
+        </el-collapse-item>
+      </el-collapse>
 
       <div v-if="relatedTasks.length > 0" class="related-tasks">
         <h4>相关任务</h4>
@@ -177,6 +196,8 @@ const searchRepo = ref('')
 const searchIssue = ref('')
 const showTaskDetail = ref(false)
 const taskDetail = ref(null)
+// 诊断折叠默认收起：普通用户只看语义状态，排障时才展开内部 stage
+const diagnosticsOpen = ref([])
 
 const stageLabels = {
   idle: '空闲',
@@ -211,6 +232,27 @@ const agentMap = computed(() => {
   for (const a of agents.value) map[a.id] = a.name
   return map
 })
+
+// semanticStatus 把内部 stage 机映射为用户可理解的语义状态。
+// 1.5.2：用户只需感知「Agent 正在处理 / 已回复 / 已创建 PR」，
+// analyzing/analyzed/developing/reviewing 这类内部阶段收进诊断折叠。
+const semanticStatus = (ctx) => {
+  if (!ctx) return { key: 'idle', label: '空闲', type: 'info', hint: '' }
+  const stage = ctx.stage
+  if (stage === 'analyzing' || stage === 'developing' || stage === 'reviewing') {
+    return { key: 'processing', label: 'Agent 正在处理', type: 'warning', hint: '任务进行中，完成后会在 Gitea 留言' }
+  }
+  if (stage === 'done') {
+    return { key: 'done', label: '已完成', type: 'success', hint: '' }
+  }
+  if (ctx.pr_id) {
+    return { key: 'pr_opened', label: '已创建 PR', type: 'success', hint: `关联 PR #${ctx.pr_id}` }
+  }
+  if (stage === 'analyzed') {
+    return { key: 'replied', label: '已回复', type: 'success', hint: 'Agent 已给出分析结论' }
+  }
+  return { key: 'idle', label: '空闲', type: 'info', hint: '等待 Assign 或 @提及触发' }
+}
 
 const getStageType = (stage) => {
   const types = { idle: 'info', analyzing: 'warning', analyzed: 'success', developing: 'warning', reviewing: 'warning', done: 'success' }
@@ -372,7 +414,28 @@ watch(() => [route.query.repo, route.query.issue], ([repo, issue]) => {
   gap: 12px;
 }
 
-.previous-stage {
+.status-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+.diagnostics {
+  margin-top: 20px;
+}
+
+.diagnostics-title {
+  font-weight: 600;
+  margin-right: 10px;
+}
+
+.diagnostics-sub {
+  font-size: 12px;
+  color: #909399;
+}
+
+.raw-value {
+  margin-left: 8px;
+  font-family: monospace;
   font-size: 12px;
   color: #909399;
 }
