@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -272,15 +273,25 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 	}
 	// Normalize legacy map keys and legacy backend types. If a legacy key and
 	// a canonical key both exist (e.g. user defined both `internal:` and
-	// `builtin:`), whichever the map yields first wins — such configs are
-	// pathological and not supported.
+	// `builtin:`), the canonical key always wins and we log a warning so the
+	// operator knows which config is effective.
 	normalized := make(map[string]BackendConfig, len(backends.Backends)+1)
 	for name, b := range backends.Backends {
 		b.Type = NormalizeBackend(b.Type)
 		canonical := NormalizeBackend(name)
-		if _, exists := normalized[canonical]; !exists {
-			normalized[canonical] = b
+		if existing, exists := normalized[canonical]; exists {
+			if name == canonical {
+				log.Printf("[WARN] Backend config conflict: legacy key %q also maps to canonical %q; using canonical %q configuration", canonical, canonical, canonical)
+				normalized[canonical] = b
+			} else {
+				log.Printf("[WARN] Backend config conflict: ignoring legacy key %q because canonical %q is already present", name, canonical)
+			}
+			// Avoid logging twice when the conflict is between two different
+			// legacy keys that normalize to the same canonical name.
+			_ = existing
+			continue
 		}
+		normalized[canonical] = b
 	}
 	backends.Backends = normalized
 	// Ensure the builtin backend entry exists and is typed.
