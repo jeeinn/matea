@@ -1,6 +1,6 @@
 # 任务清单
 
-> 更新：2026-08-03（Hub 后端演进规划；已按 [规划评审](20260803-规划评审-Hub演进与Agent简化方案.md) 修正 P0/P1 项）  
+> 更新：2026-08-04（Phase 1.4 + 1.5 收官；[Phase 1.5 方案](20260804-Phase1.5-plan.md) 已落地）  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · 可插拔 Hub 后端（OpenCode / Hermes / OpenClaw / 自定义） · 不自研 IM SDK  
 > 决策：  
 > - [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md)  
@@ -161,15 +161,28 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 1.5 工作流与体验
 
-- [ ] 1.5.1 保留 `free/standard/strict` 预设，不开放策略单元  
-  但将 gate 评估拆成独立函数，便于 Phase 3 配置化。
+- [x] 1.5.1 保留 `free/standard/strict` 预设，不开放策略单元  
+  但将 gate 评估拆成独立函数，便于 Phase 3 配置化。  
+  ✅ 已核验（无需改码）：`internal/workflow/policy.go` 中 gate 评估已是独立函数（`EvaluateGate` + 各 `eval*`），`free/standard/strict` 三预设（`PresetFree/Standard/Strict` + `GetPreset`）齐备；`allow_skip_analyze` 等仅作前向兼容占位（无消费者），符合「Phase 3 再配置化」的约定。
 
-- [ ] 1.5.2 隐藏 WorkflowContext stage 的用户可见面  
+- [x] 1.5.2 隐藏 WorkflowContext stage 的用户可见面  
   用户只感知「Agent 正在处理 / 已回复 / 已创建 PR」。  
-  顺带修复既有缺陷：mention 路径会 `Transition(ctx, role)` 推进 stage，但 `OnTaskComplete("reply_comment"/"solve_comment")` 不回落 stage，导致 stage 滞留（如 `analyzing`）。
+  顺带修复既有缺陷：mention 路径会 `Transition(ctx, role)` 推进 stage，但 `OnTaskComplete("reply_comment"/"solve_comment")` 不回落 stage，导致 stage 滞留（如 `analyzing`）。  
+  ✅ 已交付，拆为两项：
+  - **1.5.2A 后端 stage 回落（修复滞留）**：`store/workflow.go` 的 `TransitionStage` 仅在「真实阶段变化」时记录 `PreviousStage`（同阶段重入清空）；`internal/workflow/context.go` 的 `OnTaskComplete` 对 `reply_comment`/`solve_comment` 新增 `rollbackTransientStage`，按推荐规则回落。
+    📌 **1.5.2A 拍板（用户确认）**：`solve_comment` 回滚语义 = 有 PR 则保持 `developing`（与 `solve_issue` 一致），无 PR 则回落 `PreviousStage`；`reply_comment` 一律回落 `PreviousStage`。
+  - **1.5.2B 前端语义化**：`web/src/views/WorkflowDetail.vue` 列表「阶段」→「状态」用 `semanticStatus()`（处理中/已回复/已建 PR/已完成/空闲），原始 stage-flow 与 previous_stage 收进「诊断（高级）」折叠（默认收起）。`npm run build` 通过。
+  - 回归测试：`internal/workflow/context_rollback_test.go`（6 例覆盖 1.5.2A）+ 既有 dispatcher/integration 零回退。
 
-- [ ] 1.5.3 保留 `EnsureGiteaAccount`，默认开启，可配置关闭  
-  `gitea.auto_provision: false` 时仅校验/提示手动创建。
+- [x] 1.5.3 保留 `EnsureGiteaAccount`，默认开启，可配置关闭  
+  `gitea.auto_provision: false` 时仅校验/提示手动创建。  
+  ✅ 已交付：`gitea.auto_provision` 开关覆盖 6 处 + 测试：
+  - schema：`GiteaConfig.AutoProvision bool yaml:"auto_provision"`
+  - 加载默认：`config.go` `LoadWithBootstrap` 用 `*bool` 探测原始 YAML 是否存在该键——**缺失默认 `true`，显式 `false` 被尊重**（规避零值歧义）
+  - 热更新链路：`config/keys.go` 白名单 + `parseConfigValue` + `getConfigValueTyped` + `applyConfigEntry` + `getConfigEntry` 五处；`config/manager.go` `getActiveMap` 加键
+  - 消费点：`agents/manager.go` 的 `CreateAgent`/`UpdateAgent` 在 `m.cfg != nil && m.cfg.AutoProvision` 时才调用 `EnsureGiteaAccount`，否则跳过并保留既有 token
+  - 示例：`config.full-example.yaml` 加注释段（默认开启）
+  - 测试：`config_test.go`（默认 true / 显式 false / 键往返）+ `manager_test.go`（`newTestManager` 置 `AutoProvision:true` 保既有用例；新增 `TestCreateAgent_SkipsProvisionWhenDisabled` / `TestUpdateAgent_SkipsProvisionWhenDisabled`）
 
 ### 1.6 文档与引导
 
