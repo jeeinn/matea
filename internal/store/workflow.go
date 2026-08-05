@@ -31,7 +31,7 @@ type WorkflowContext struct {
 	IssueID       int       `json:"issue_id"`
 	PRID          int       `json:"pr_id"`
 	Stage         string    `json:"stage"`
-	PreviousStage string    `json:"previous_stage"` // stage before entering analyzing (for failure rollback)
+	PreviousStage string    `json:"previous_stage"` // stage before the last real stage change (for failure/reply rollback)
 	ActiveAgentID int64     `json:"active_agent_id"`
 	ActiveRole    string    `json:"active_role"`
 	SessionID     string    `json:"session_id"`
@@ -105,9 +105,19 @@ func (db *DB) ListWorkflowContextsByRepo(repo string) ([]*WorkflowContext, error
 }
 
 // TransitionStage updates the stage and active agent for a workflow context.
+//
+// PreviousStage 记录「本次转换前的阶段」，供两类回落使用：
+//   - analyze 任务失败回滚（WorkflowManager.OnTaskFailed）
+//   - 回复类任务完成后回落（WorkflowManager.OnTaskComplete，见 1.5.2A）
+//
+// 同阶段重入（如 developing → developing、reviewing → reviewing）不产生真实的
+// 阶段变化，此时清空 PreviousStage，表示「没有可回落的前序阶段」，避免回落逻辑
+// 误用上一次转换遗留的陈旧值把工作流倒退。
 func (db *DB) TransitionStage(ctx *WorkflowContext, stage string, agentID int64, role, sessionID string) error {
-	if stage == StageAnalyzing && ctx.Stage != StageAnalyzing {
+	if stage != ctx.Stage {
 		ctx.PreviousStage = ctx.Stage
+	} else {
+		ctx.PreviousStage = ""
 	}
 	ctx.Stage = stage
 	ctx.ActiveAgentID = agentID
