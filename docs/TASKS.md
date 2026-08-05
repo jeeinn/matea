@@ -1,6 +1,6 @@
 # 任务清单
 
-> 更新：2026-08-04（Phase 1.4 + 1.5 收官；[Phase 1.5 方案](20260804-Phase1.5-plan.md) 已落地）  
+> 更新：2026-08-05（Phase 1 全部收官；Phase 2 待启动）  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · 可插拔 Hub 后端（OpenCode / Hermes / OpenClaw / 自定义） · 不自研 IM SDK  
 > 决策：  
 > - [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md)  
@@ -186,9 +186,14 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 1.6 文档与引导
 
-- [ ] 1.6.1 更新 README / 快速开始：默认体验仍是「下载二进制 → 配 Gitea/LLM → Gitea @matea-analyst」
-- [ ] 1.6.2 新增「接入 Hub 后端」进阶章节，不放在快速开始里
-- [ ] 1.6.3 更新 AGENTS.md 产品叙事：默认 builtin，可选 hub-*
+- [x] 1.6.1 更新 README / 快速开始：默认体验仍是「下载二进制 → 配 Gitea/LLM → Gitea @matea-analyst」
+  ✅ 已完成：README.md 更新架构概览（`internal/ingress/gitea`）、核心组件表、快速开始步骤 ④（从模板创建三件套）、验证工作流（Assign + @mention）、`gitea.auto_provision` 默认自动建号说明、配置说明表标注 `llm` 仅 builtin 使用、`agents` 段含命名后端；新增「Agent backend 与 LLM 边界」说明。
+
+- [x] 1.6.2 新增「接入 Hub 后端」进阶章节，不放在快速开始里
+  ✅ 已完成：README.md 新增「接入 Hub 后端（可选）」章节，说明命名后端 `agents.backends.<name>` 配置、Agent 编辑页字段变化、builtin vs hub-opencode 运行差异，并提示 `hub-hermes` 等 Phase 2 可用。
+
+- [x] 1.6.3 更新 AGENTS.md 产品叙事：默认 builtin，可选 hub-*
+  ✅ 已完成：新建 docs/AGENTS.md，产品叙事从「Agent 是什么 → 默认 builtin → 可选 hub-opencode → role 闭集 → 触发方式 → 账号自动创建」展开，并在 README 文档索引中链接。
 
 ---
 
