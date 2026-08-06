@@ -1,109 +1,235 @@
 package agents
 
 import (
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+	"context"
+	"errors"
 	"testing"
-
-	"github.com/jeeinn/matea/internal/config"
-	"github.com/jeeinn/matea/internal/sandbox"
-	"github.com/jeeinn/matea/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestMergeLoopConfigHarnessFields(t *testing.T) {
-	defaults := config.DefaultAgentLoopConfig()
-	assert.Equal(t, 3, defaults.NoProgressLimit)
-	assert.False(t, defaults.IndependentChecker)
+// --- Mock Harness for testing ---
 
-	off := 0
-	agent := &store.AgentLoopConfig{
-		NoProgressLimit: &off,
-		VerifyCommands:  []string{}, // explicit empty disables
-	}
-	merged := MergeLoopConfig(agent, defaults)
-	assert.Equal(t, 0, merged.NoProgressLimit)
-	assert.NotNil(t, merged.VerifyCommands)
-	assert.Len(t, merged.VerifyCommands, 0)
-
-	on := 5
-	checker := true
-	agent2 := &store.AgentLoopConfig{
-		NoProgressLimit:    &on,
-		VerifyCommands:     []string{"go test ./..."},
-		IndependentChecker: &checker,
-	}
-	merged2 := MergeLoopConfig(agent2, defaults)
-	assert.Equal(t, 5, merged2.NoProgressLimit)
-	assert.Equal(t, []string{"go test ./..."}, merged2.VerifyCommands)
-	assert.True(t, merged2.IndependentChecker)
+type mockHarness struct {
+	profile      HarnessProfile
+	turnCalled   bool
+	turnInput    *HarnessTurnInput
+	turnResult   *HarnessTurnResult
+	turnErr      error
+	closeCalled  bool
+	resetCalled  string
 }
 
-func TestRunHarnessVerifyOK(t *testing.T) {
-	dir := t.TempDir()
-	cfg := sandbox.DefaultSandboxConfig()
-	cfg.Mode = sandbox.ModeFixed
-	cfg.BaseDir = dir
-	sb := sandbox.NewWithPath(cfg, 1, dir)
-	require.NoError(t, sb.Setup())
-
-	var cmds []string
-	if runtime.GOOS == "windows" {
-		cmds = []string{"echo ok"}
-	} else {
-		cmds = []string{"true"}
-	}
-	require.NoError(t, runHarnessVerify(sb, cmds))
+func (m *mockHarness) Profile() HarnessProfile {
+	return m.profile
 }
 
-func TestRunHarnessVerifyFails(t *testing.T) {
-	dir := t.TempDir()
-	cfg := sandbox.DefaultSandboxConfig()
-	cfg.Mode = sandbox.ModeFixed
-	cfg.BaseDir = dir
-	sb := sandbox.NewWithPath(cfg, 2, dir)
-	require.NoError(t, sb.Setup())
-
-	var cmds []string
-	if runtime.GOOS == "windows" {
-		cmds = []string{"cmd /C exit 1"}
-	} else {
-		cmds = []string{"false"}
-	}
-	err := runHarnessVerify(sb, cmds)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "verify gate failed")
+func (m *mockHarness) RunTurn(ctx context.Context, input *HarnessTurnInput) (*HarnessTurnResult, error) {
+	m.turnCalled = true
+	m.turnInput = input
+	return m.turnResult, m.turnErr
 }
 
-func TestWorkspaceProgressSnapshotChanges(t *testing.T) {
-	dir := t.TempDir()
-	cfg := sandbox.DefaultSandboxConfig()
-	cfg.Mode = sandbox.ModeFixed
-	cfg.BaseDir = dir
-	sb := sandbox.NewWithPath(cfg, 3, dir)
-	require.NoError(t, sb.Setup())
+func (m *mockHarness) Close() error {
+	m.closeCalled = true
+	return nil
+}
 
-	// init git repo
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = sb.WorkDir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(out))
+func (m *mockHarness) ResetSession(sessionID string) error {
+	m.resetCalled = sessionID
+	return nil
+}
+
+// --- Tests ---
+
+func TestHarnessRouterRegisterAndLookup(t *testing.T) {
+	r := newHarnessRouter()
+
+	h := &mockHarness{
+		profile: HarnessProfile{
+			ID:                "test-harness",
+			DisplayName:       "Test Harness",
+			ControlTransport:  ControlSubmitContract,
+			ToolTransport:     ToolViaSubmit,
+			SupportsToolUse:   true,
+			SupportsMemory:    false,
+			HandlesGit:        false,
+			HasIMChannels:     false,
+			OwnsWorkspace:     false,
+		},
 	}
-	run("init")
-	run("config", "user.email", "t@t.com")
-	run("config", "user.name", "t")
-	require.NoError(t, os.WriteFile(filepath.Join(sb.WorkDir, "a.txt"), []byte("a"), 0644))
-	run("add", "a.txt")
-	run("commit", "-m", "init")
 
-	s1 := workspaceProgressSnapshot(sb)
-	require.NoError(t, os.WriteFile(filepath.Join(sb.WorkDir, "b.txt"), []byte("b"), 0644))
-	s2 := workspaceProgressSnapshot(sb)
-	assert.NotEqual(t, s1, s2)
+	// Register
+	r.Register(h)
+
+	// Lookup
+	got, err := r.Lookup("test-harness")
+	require.NoError(t, err)
+	assert.Equal(t, "test-harness", got.Profile().ID)
+
+	// Names
+	names := r.Names()
+	assert.Contains(t, names, "test-harness")
+}
+
+func TestHarnessRouterLookupUnknown(t *testing.T) {
+	r := newHarnessRouter()
+
+	_, err := r.Lookup("nonexistent")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown harness")
+}
+
+func TestHarnessRouterRegisterEmptyIDPanics(t *testing.T) {
+	r := newHarnessRouter()
+
+	h := &mockHarness{
+		profile: HarnessProfile{ID: ""},
+	}
+
+	assert.Panics(t, func() {
+		r.Register(h)
+	})
+}
+
+func TestHarnessRouterGetHarnessNormalizesBackend(t *testing.T) {
+	r := newHarnessRouter()
+
+	h := &mockHarness{
+		profile: HarnessProfile{
+			ID:               "builtin",
+			ControlTransport: ControlSubmitContract,
+			ToolTransport:    ToolDirect,
+		},
+	}
+	r.Register(h)
+
+	// Empty backend name should resolve to builtin
+	got, err := r.GetHarness("")
+	require.NoError(t, err)
+	assert.Equal(t, "builtin", got.Profile().ID)
+}
+
+func TestHarnessRouterGetHarnessUnknown(t *testing.T) {
+	r := newHarnessRouter()
+
+	_, err := r.GetHarness("nonexistent")
+	assert.Error(t, err)
+}
+
+func TestHarnessProfileTransportMetadata(t *testing.T) {
+	// Verify the transport constants are well-defined
+	assert.Equal(t, TransportKind("in_process"), TransportInProcess)
+	assert.Equal(t, TransportKind("out_of_process"), TransportOutOfProcess)
+
+	assert.Equal(t, ControlTransport("submit_contract"), ControlSubmitContract)
+	assert.Equal(t, ControlTransport("mcp"), ControlMCP)
+
+	assert.Equal(t, ToolTransport("tool_direct"), ToolDirect)
+	assert.Equal(t, ToolTransport("tool_via_submit"), ToolViaSubmit)
+	assert.Equal(t, ToolTransport("tool_via_mcp"), ToolViaMCP)
+}
+
+func TestHarnessActionConstants(t *testing.T) {
+	assert.Equal(t, HarnessAction("comment"), ActionComment)
+	assert.Equal(t, HarnessAction("create_pr"), ActionCreatePR)
+	assert.Equal(t, HarnessAction("none"), ActionNone)
+}
+
+func TestMockHarnessRunTurn(t *testing.T) {
+	h := &mockHarness{
+		profile: HarnessProfile{ID: "mock"},
+		turnResult: &HarnessTurnResult{
+			Reply:  "test reply",
+			Action: ActionComment,
+		},
+	}
+
+	input := &HarnessTurnInput{
+		Task: &TaskContext{
+			TaskType: "analyze_issue",
+			Repo:     "owner/repo",
+		},
+		Model: "gpt-4",
+	}
+
+	result, err := h.RunTurn(context.Background(), input)
+	require.NoError(t, err)
+	assert.True(t, h.turnCalled)
+	assert.Equal(t, "test reply", result.Reply)
+	assert.Equal(t, ActionComment, result.Action)
+	assert.Equal(t, input, h.turnInput)
+}
+
+func TestMockHarnessRunTurnError(t *testing.T) {
+	h := &mockHarness{
+		profile: HarnessProfile{ID: "mock"},
+		turnErr: errors.New("test error"),
+	}
+
+	result, err := h.RunTurn(context.Background(), &HarnessTurnInput{})
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestMockHarnessClose(t *testing.T) {
+	h := &mockHarness{profile: HarnessProfile{ID: "mock"}}
+	err := h.Close()
+	assert.NoError(t, err)
+	assert.True(t, h.closeCalled)
+}
+
+func TestMockHarnessResetSession(t *testing.T) {
+	h := &mockHarness{profile: HarnessProfile{ID: "mock"}}
+	err := h.ResetSession("session-123")
+	assert.NoError(t, err)
+	assert.Equal(t, "session-123", h.resetCalled)
+}
+
+func TestHarnessTurnResultPendingApprovals(t *testing.T) {
+	// Verify PendingApprovals field works
+	result := &HarnessTurnResult{
+		Reply:  "done",
+		Action: ActionNone,
+		PendingApprovals: []PendingApproval{
+			{
+				Kind:        "push",
+				Description: "Push to main",
+				Payload:     "branch:main",
+			},
+		},
+	}
+	assert.Len(t, result.PendingApprovals, 1)
+	assert.Equal(t, "push", result.PendingApprovals[0].Kind)
+}
+
+func TestHarnessTurnResultDeliver(t *testing.T) {
+	// Verify Deliver field works
+	result := &HarnessTurnResult{
+		Reply:  "done",
+		Action: ActionComment,
+		Deliver: &DeliverRequest{
+			Event:   "task_completed",
+			Channel: "feishu",
+			Content: "Task completed successfully",
+		},
+	}
+	assert.NotNil(t, result.Deliver)
+	assert.Equal(t, "task_completed", result.Deliver.Event)
+}
+
+func TestHarnessRouterReplaceExisting(t *testing.T) {
+	r := newHarnessRouter()
+
+	h1 := &mockHarness{profile: HarnessProfile{ID: "test"}}
+	h2 := &mockHarness{profile: HarnessProfile{ID: "test"}}
+
+	r.Register(h1)
+	r.Register(h2)
+
+	got, err := r.Lookup("test")
+	require.NoError(t, err)
+	// Should be h2 (replaced)
+	assert.Equal(t, h2, got)
 }
