@@ -212,30 +212,35 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 2.0 机制骨架：大脑可插拔地基（D10 + D11 + D12，先于 2.1/2.2）
 
-- [ ] 2.0.1 抽出统一 `Harness` 接口 + `harnessRouter` 注册表（D10）
+- [x] 2.0.1 抽出统一 `Harness` 接口 + `harnessRouter` 注册表（D10）
   收敛现有三套接口（`Runner` 同步 / `CodingBackend` 写入 / `HubBackend` 异步 Submit/Poll）为：`Profile() HarnessProfile` + `RunTurn(ctx, HarnessTurnInput) (*HarnessTurnResult, error)` + `Close()` + `ResetSession(id)`。
   `HarnessTurnInput` = `Task TaskContext` + `Tools ToolContext` + `Model string`；`HarnessTurnResult` = `Reply` + `Action`(`comment`/`create_pr`/`none`) + `PendingApprovals`。
   接口**声明** `controlTransport`/`toolTransport` 元数据（对齐 qm），但只实现 in-process(builtin) + out-of-process(submit-contract)。注册表为单文件 `Map<HarnessID, Harness>`，新增大脑 = 加一行。
   📌 **拒绝**：每轮动态选 harness（Matea 任务有状态，选择粒度=每任务/每 agent）；harness×model 双轴校验矩阵（model 仅 builtin 用，hub-* 自管 LLM）。~1–2 人日（含测试）。
+  ✅ 已完成（提交 b4aab51）：Harness/HarnessProfile/HarnessTurnInput/HarnessTurnResult 类型定义；harnessRouter 注册表 (Register/Lookup/GetHarness)；2x2 transport 模型常量
 
-- [ ] 2.0.2 现有 `builtin` 改造为 in-process adapter（D10 实证 1）
+- [x] 2.0.2 现有 `builtin` 改造为 in-process adapter（D10 实证 1）
   内部仍跑现有多 role Agent Loop，仅套上 `Harness` 接口；行为零变化，以既有测试全 PASS 为验收基线。
+  ✅ 已完成（提交 b4aab51）：BuiltinHarness 实现 Harness 接口，Profile 声明 in_process + tool_direct
 
-- [ ] 2.0.3 定义 `ToolContext`/`ToolBox` 并按**三层策略**暴露（D11）
+- [x] 2.0.3 定义 `ToolContext`/`ToolBox` 并按**三层策略**暴露（D11）
   - **沙箱类**（现有 10 个：`read_file`/`write_file`/`list_files`/`search_code`/`rg`/`run_command`/`apply_diff`/`tree`/`git_log`/`git_blame`）：builtin 直连 Go 函数；**对远程 harness 默认不暴露**（成品 harness 自带同名工具，且直接操作共享工作区更快）。
   - **Gitea 类**（新增）：**Phase 2 只做读侧** `gitea_read_issue` / `gitea_read_pr_diff`；**写侧不做**（`gitea_create_comment`/`gitea_create_pr` 留 Phase 3），发评论/建 PR 继续由 Matea 在结果返回后统一落地，守「Gitea 唯一写方」。
   - ⚠️ 对成品 harness（OpenCode/Hermes）ToolBox 只能 **append 不能 replace** —— 其自带工具关不掉，重名会导致模型摇摆。此约束须在接口注释中写死。
+  ✅ 已完成（提交 b4aab51）：ToolBox 三层暴露策略实现；ToolCatSandbox 仅 builtin；ToolCatGitea 远程读侧 (gitea_read_issue/gitea_read_pr_diff)；ToolImplFn 接口
 
-- [ ] 2.0.4 网关级 skill 经 ToolBox 暴露（D11）
+- [x] 2.0.4 网关级 skill 经 ToolBox 暴露（D11）
   仓库内 skill（workspace 的 `skills/`）**不做集成**——随工作区交付，harness 自读（OpenCode 还会读 `AGENTS.md`）。
   网关级 skill（gatewayDir 的 `skills/`）分两半：**正文（body）** 作为 system prompt 片段注入（任何 harness 通吃）；**script 工具** 经 ToolBox 导出、在 **Matea 侧沙箱内执行**。
   远程 harness 自身的 skill/plugin 机制（OpenCode plugin、Claude Code skills）**不接管**，各管各的。
   ⚠️ 安全前置（Phase 3 落 MCP 时强制）：script 为任意 shell，导出即 RCE 面 → 必须同时满足「沙箱工作目录内执行 + API Key 鉴权 + 单 workflow 作用域绑定」。
+  ✅ 已完成（提交 b4aab51）：RegisterGatewaySkills/GetGatewaySkillBody/ListGatewaySkillNames；skillToolToDecl 工具转换；matea_skill_ 前缀避免冲突
 
-- [ ] 2.0.5 配置新增 `workspace_transport` 语义位（D11 部署档位）
+- [x] 2.0.5 配置新增 `workspace_transport` 语义位（D11 部署档位）
   取值 `shared_path`（默认，Phase 2 唯一实现）｜ `mcp`（Phase 3）。
   **`hub-opencode` 显式声明仅支持 L0/L1**：`opencode_http.go` 用 `filepath.Abs(req.WorkDir)` 传绝对本地路径给 `?directory=`/`X-Opencode-Directory`，事实要求同机或共享卷 —— 配置校验需拒绝 `mcp`，文档需写明「配 URL ≠ 可异地」。
   L1 共享卷需明确「单 workflow 期间独占该工作区」。
+  ✅ 已完成（提交 b4aab51）：BackendConfig.WorkspaceTransport 字段；ApplyBackendDefaults 默认 shared_path；ValidateBackendWorkspaceTransport 验证；BackendTypeHubHermes 常量预留
 
 ### 2.1 hub-hermes 实现（基于官方 Runs API：`POST /v1/runs` + `GET /v1/runs/{run_id}` Poll）
 
