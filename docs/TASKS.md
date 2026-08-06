@@ -244,10 +244,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 2.1 hub-hermes 实现（基于官方 Runs API：`POST /v1/runs` + `GET /v1/runs/{run_id}` Poll）
 
-- [ ] 2.1.1 实现 `internal/agents/backends/hermes`
+- [x] 2.1.1 实现 `internal/agents/backends/hermes`
   `HubBackend.Submit` → `POST /v1/runs`（`{input, session_id?, instructions?, conversation_history?, previous_response_id?}`），返回 `{run_id, status}`；`Poll` → `GET /v1/runs/{run_id}` 取 `{status, output, session_id, usage}`，终态 completed/failed 即结束；Bearer 鉴权（`API_SERVER_KEY`）；`session_id` 用于同 repo 多任务续接。
   **Handle 持久化 + 重启恢复**：满足 1.2.1「落库 + Executor 重启拾取」强制点；IdempotencyKey 去重（1.2 评审挂账 ①）；Poll 重启措辞统一（挂账 ②）。
   📌 全 task_type 经同一 Submit/Poll 路径（含 `solve_issue`/`fix_bug`：Hermes 返回 patch/summary → Matea `finalizeWriteChanges` 落地，不反向操作 Matea 沙箱——见 2.1.5 删除说明）。
+  ✅ 已完成（提交 8c5a6f2）：`internal/agents/backends/hermes/hermes.go` 实现 HubBackend 接口（Submit/Poll/Cancel/Capabilities/HealthCheck）；Bearer 鉴权；session_id 按 repo 派生支持跨任务记忆共享；17 个单元测试覆盖正常/失败/鉴权/502/对话历史/diff 场景
 
 - [ ] 2.1.2 `analyze_issue` → Hermes
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
