@@ -15,8 +15,10 @@ import (
 //   - "builtin" (or empty/legacy "internal") → the in-process BuiltinHubBackend;
 //   - a configured hub-opencode instance (e.g. "opencode-local") → the shared
 //     OpenCodeHTTPBackend singleton from the registry — stays fully usable;
-//   - reserved hub-* names without an implementation (hub-hermes /
-//     hub-openclaw / hub-api / any unconfigured hub-*) → explicit error;
+//   - a configured hub-hermes instance → the shared Hermes backend singleton
+//     (constructed via the init()-registered factory, Phase 2);
+//   - reserved hub-* names without an implementation (hub-openclaw / hub-api /
+//     any unconfigured hub-*) → explicit error;
 //   - anything else unknown → explicit error.
 //
 // Unknown backends must never silently fall back to builtin: a typo like
@@ -60,26 +62,66 @@ func (f *RunnerFactory) ResolveHubBackend(agent *store.Agent) (HubBackend, error
 				return nil, err
 			}
 			return b, nil
+		case config.BackendTypeHubHermes:
+			b, err := f.hubRegistry.Lookup(name)
+			if err != nil {
+				// Registration may have been skipped in NewRunnerFactory
+				// because the instance failed construction — surface that
+				// precise error instead of the registry's generic message.
+				if _, cerr := buildHubBackend(name, cfg); cerr != nil {
+					return nil, fmt.Errorf("hub-hermes backend %q is misconfigured: %w", name, cerr)
+				}
+				return nil, err
+			}
+			return b, nil
 		default:
-			return nil, fmt.Errorf("backend %q has unsupported type %q (Phase 1 supports %q and %q)",
-				name, cfg.Type, config.BackendTypeBuiltin, config.BackendTypeHubOpenCode)
+			return nil, fmt.Errorf("backend %q has unsupported type %q (supported: %s)",
+				name, cfg.Type, supportedBackendTypes())
 		}
 	}
 
 	if strings.HasPrefix(name, "hub-") {
-		return nil, fmt.Errorf("hub backend %q is not implemented in Phase 1 (available: builtin, hub-opencode)", name)
+		return nil, fmt.Errorf("hub backend %q is not configured in agents.backends (supported types: %s)",
+			name, supportedBackendTypes())
 	}
 	return nil, fmt.Errorf("unknown backend %q: not builtin, not a configured hub-*, not in agents.backends config", name)
 }
 
-// validateHubDispatch is the Phase 1 runner entry check: it reserves the
-// hub-* dispatch branch in every runner. Reserved-but-unimplemented hub
-// backends and unknown names fail the task loudly; builtin and configured
-// hub-opencode instances pass through to the existing execution paths.
+// supportedBackendTypes lists the backend types this binary can actually
+// construct: the two implemented in-package, plus every type whose factory a
+// linked sub-package registered through init(). Built dynamically so the
+// message cannot drift out of date as hub types are added (it previously
+// hardcoded "Phase 1 supports builtin and hub-opencode" and went stale the
+// moment hub-hermes landed).
+func supportedBackendTypes() string {
+	types := []string{config.BackendTypeBuiltin, config.BackendTypeHubOpenCode}
+	for _, t := range registeredHubBackendTypes() {
+		if t != config.BackendTypeBuiltin && t != config.BackendTypeHubOpenCode {
+			types = append(types, t)
+		}
+	}
+	return strings.Join(types, ", ")
+}
+
+// validateHubDispatch is the runner entry *gate*: it rejects the task when the
+// agent names a backend this binary cannot serve (unknown name, reserved-but-
+// unimplemented hub-*, misconfigured instance). It answers "may this task run
+// at all?" — nothing more.
 //
-// TODO(Phase 2): replace this validation-only seam with actual Submit/Poll
-// dispatch through HubBackend, including Handle persistence and executor
-// re-attach on restart (see HubBackend.Poll contract and 1.2.1 design note).
+// It is deliberately distinct from ResolveHubExecution, which answers the
+// separate question "should this task run through the hub's Submit/Poll
+// instead of the in-process LLM?". A task can pass validateHubDispatch and
+// still get false from ResolveHubExecution — that is the normal case for
+// builtin, and for hub-opencode (validated here, but write-only and driven
+// through the CodingBackend path). Runners therefore call both: the gate
+// first, then the execution-path decision.
+//
+// The two share ResolveHubBackend's normalization, so the duplicated lookup is
+// intentional (correctness over saving a map read).
+//
+// TODO: Handle persistence and executor re-attach on restart are still
+// missing; runViaHub only polls in-process (see HubBackend.Poll contract and
+// the 1.2.1 design note).
 func (f *RunnerFactory) validateHubDispatch(agent *store.Agent) error {
 	_, err := f.ResolveHubBackend(agent)
 	return err

@@ -32,15 +32,15 @@ var _ Harness = (*BuiltinHarness)(nil)
 // Profile declares the builtin harness capabilities.
 func (h *BuiltinHarness) Profile() HarnessProfile {
 	return HarnessProfile{
-		ID:                config.BackendNameBuiltin, // "builtin"
-		DisplayName:       "Builtin Agent Loop",
-		ControlTransport:  ControlSubmitContract, // synchronous submit-contract (in-process)
-		ToolTransport:     ToolDirect,            // direct Go function calls
-		SupportsToolUse:   true,                  // multi-turn AgentLoop
-		SupportsMemory:    false,                 // no cross-session memory (Matea-managed)
-		HandlesGit:        false,                 // Matea finalizes git/PR
-		HasIMChannels:     false,                 // no built-in IM
-		OwnsWorkspace:     false,                 // Matea prepares workspace
+		ID:               config.BackendNameBuiltin, // "builtin"
+		DisplayName:      "Builtin Agent Loop",
+		ControlTransport: ControlSubmitContract, // synchronous submit-contract (in-process)
+		ToolTransport:    ToolDirect,            // direct Go function calls
+		SupportsToolUse:  true,                  // multi-turn AgentLoop
+		SupportsMemory:   false,                 // no cross-session memory (Matea-managed)
+		HandlesGit:       false,                 // Matea finalizes git/PR
+		HasIMChannels:    false,                 // no built-in IM
+		OwnsWorkspace:    false,                 // Matea prepares workspace
 	}
 }
 
@@ -58,6 +58,13 @@ func (h *BuiltinHarness) RunTurn(ctx context.Context, input *HarnessTurnInput) (
 	tc := input.Task
 
 	// Delegate to the existing BuiltinHubBackend for execution.
+	//
+	// A fresh instance per turn is deliberate, not an oversight: unlike the
+	// hub-opencode / hub-hermes singletons — whose in-memory outcome caches
+	// are instance-local and MUST be shared so a later Poll can find the
+	// result — the builtin backend completes synchronously inside Submit and
+	// keeps no state worth sharing across turns. Hoisting this to a shared
+	// field would only create cross-task state where none is needed.
 	backend := NewBuiltinHubBackend(h.factory)
 	handle, err := backend.Submit(ctx, tc)
 	if err != nil {

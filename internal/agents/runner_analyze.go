@@ -45,6 +45,34 @@ func (r *AnalyzeRunner) Run(ctx context.Context, task *store.Task, agent *store.
 		return nil, err
 	}
 
+	// Hub execution branch (task 2.1.2): when the agent's backend is a
+	// hub-hermes instance, route the analyze task through Hermes via
+	// Submit/Poll instead of the in-process LLM loop. Hermes owns its own
+	// execution environment, so no workspace clone is prepared here.
+	if hb, ok := r.factory.ResolveHubExecution(agent); ok {
+		tc := &TaskContext{
+			TaskType:     task.TaskType,
+			Role:         "analyze",
+			Backend:      hb.Name(),
+			Repo:         task.Repo,
+			IssueID:      task.IssueID,
+			PRID:         task.PRID,
+			IssueTitle:   task.Event,
+			IssueBody:    task.Context,
+			SystemPrompt: agent.SystemPrompt,
+			UserPrompt:   task.Context,
+			MemoryKeys:   r.factory.loadMemoryKeys(task),
+		}
+		res, err := r.factory.runViaHub(ctx, task, agent, hb, tc)
+		if err != nil {
+			return nil, err
+		}
+		// Record the conclusion for later tasks on the same repo+issue
+		// (D3 cross-task memory sharing, task 2.1.5).
+		r.factory.saveAnalyzeMemory(task, res.Content)
+		return res, nil
+	}
+
 	provider, err := r.factory.llmRegistry.Get(agent.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("get provider: %w", err)

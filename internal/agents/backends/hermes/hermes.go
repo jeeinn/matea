@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -295,7 +296,30 @@ func (b *Backend) buildRunRequest(tc *agents.TaskContext) *hermesRunRequest {
 		req.Input = fmt.Sprintf("## Diff\n%s\n\n## Question\n%s", tc.Diff, req.Input)
 	}
 
+	// Inject repo/issue memory (D3 cross-task sharing, task 2.1.5) so the hub
+	// can recall prior task conclusions (e.g. an analyze summary) on the same
+	// repo+issue. Appended only when present, so existing callers are unaffected.
+	if len(tc.MemoryKeys) > 0 {
+		var mb strings.Builder
+		mb.WriteString("\n\n## Previously remembered context (repo/issue memory)\n")
+		for k, v := range tc.MemoryKeys {
+			mb.WriteString(fmt.Sprintf("- %s: %s\n", k, v))
+		}
+		req.Input += mb.String()
+	}
+
 	return req
+}
+
+// init registers the Hermes backend factory with the agents package's
+// type→constructor registry. This keeps the dependency one-directional
+// (backends/hermes → agents): the agents package never imports this
+// sub-package, so there is no import cycle, and future hub types register
+// themselves the same way.
+func init() {
+	agents.RegisterHubBackendFactory(config.BackendTypeHubHermes, func(name string, cfg config.BackendConfig) (agents.HubBackend, error) {
+		return NewBackend(name, cfg)
+	})
 }
 
 // do executes an HTTP request against the Hermes API. It attaches Bearer

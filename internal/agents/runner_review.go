@@ -79,14 +79,35 @@ func (r *ReviewRunner) Run(ctx context.Context, task *store.Task, agent *store.A
 	})
 	systemPrompt := agentpkg.MergeAgentSystemPrompt(basePrompt, agent.SystemPrompt)
 
-	provider, err := r.factory.llmRegistry.Get(agent.Provider)
-	if err != nil {
-		return nil, fmt.Errorf("get provider: %w", err)
-	}
-
 	userContent := task.Context
 	if strings.TrimSpace(userContent) == "" {
 		userContent = "Please review this pull request using the criteria in the system prompt."
+	}
+
+	// Hub execution branch (task 2.1.3): when the agent's backend is a
+	// hub-hermes instance, route the review through Hermes. Matea still
+	// pre-fetches the PR diff/metadata above (the hub must not call Gitea
+	// directly) and passes it via the TaskContext.
+	if hb, ok := r.factory.ResolveHubExecution(agent); ok {
+		return r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
+			TaskType:     task.TaskType,
+			Role:         "review",
+			Backend:      hb.Name(),
+			Repo:         task.Repo,
+			IssueID:      task.IssueID,
+			PRID:         prID,
+			IssueTitle:   prTitle,
+			IssueBody:    prBody,
+			Diff:         diff,
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userContent,
+			MemoryKeys:   r.factory.loadMemoryKeys(task),
+		})
+	}
+
+	provider, err := r.factory.llmRegistry.Get(agent.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("get provider: %w", err)
 	}
 
 	messages := []llm.Message{

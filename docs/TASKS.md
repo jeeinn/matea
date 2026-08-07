@@ -250,17 +250,21 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   📌 全 task_type 经同一 Submit/Poll 路径（含 `solve_issue`/`fix_bug`：Hermes 返回 patch/summary → Matea `finalizeWriteChanges` 落地，不反向操作 Matea 沙箱——见 2.1.5 删除说明）。
   ✅ 已完成（提交 8c5a6f2）：`internal/agents/backends/hermes/hermes.go` 实现 HubBackend 接口（Submit/Poll/Cancel/Capabilities/HealthCheck）；Bearer 鉴权；session_id 按 repo 派生支持跨任务记忆共享；17 个单元测试覆盖正常/失败/鉴权/502/对话历史/diff 场景
 
-- [ ] 2.1.2 `analyze_issue` → Hermes
+- [x] 2.1.2 `analyze_issue` → Hermes
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
+  ✅ 已完成：runner_analyze.go 增加 hub 分支，经 `runViaHub` 提交 Hermes（gitea-free，不 clone 工作区）；验证 TaskContext 打包与记忆写入；e2e_test.go::TestAnalyzeRunnerViaHermes PASS
 
-- [ ] 2.1.3 `review_pr` → Hermes
+- [x] 2.1.3 `review_pr` → Hermes
   验证 diff 传递、审查结论、记忆沉淀。
+  ✅ 已完成：runner_review.go 增加 hub 分支，先取 PR diff/元数据再经 runViaHub 提交；diff 注入验证（e2e_test.go::TestReviewRunnerViaHermes PASS）
 
-- [ ] 2.1.4 `reply_comment` → Hermes
+- [x] 2.1.4 `reply_comment` → Hermes
   验证多轮 session（用 `session_id` 续接）、历史评论注入。
+  ✅ 已完成：runner_interaction.go 增加 hub 分支，评论历史转 CommentSnapshot 作 conversation_history（session_id 续接）；e2e_test.go::TestInteractionRunnerViaHermes PASS
 
-- [ ] 2.1.5 验证同一 repo 上 analyze → review → code 的记忆共享（D3）
+- [x] 2.1.5 验证同一 repo 上 analyze → review → code 的记忆共享（D3）
   新增轻量 `memories` 表（repo/issue 级 KV）+ `MemoryKeys` 读写；analyze 写键、code 读键后行为一致；Hermes 侧用 `session_id` 续接同一会话上下文。
+  ✅ 已完成：新增 `memories` 表（repo/issue KV + UNIQUE）+ store `SetMemory/GetMemory/GetAllMemory`；Hermes 适配器将 `MemoryKeys` 注入请求体；analyze 写 `analysis_summary`，review/reply 读取随 TaskContext 传入；e2e_test.go::TestHermesMemorySharing PASS。注：写任务（solve_issue/fix_bug）经 Hermes 的路由与「code 读键」消费者留待下一子任务（本轮范围按决策只接通读/回复三类 + memories 表）。
   📌 **2.1.5（原「Hermes 经 MCP 操作 Matea 沙箱」）已删除**：Hermes 自带沙箱（local/Docker/SSH/Singularity/Modal），应在自身环境跑、把结果经 Poll 回传，由 Matea 落地——既符合 Hermes 执行模型，也守住「Matea 是唯一 Gitea 写方」不变量。
 
 ### 2.2 hub-opencode 改造（D7 三刀，第一刀最早可验证）

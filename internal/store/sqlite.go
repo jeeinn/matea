@@ -214,6 +214,17 @@ func (db *DB) migrate() error {
 			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_policies_repo ON workflow_policies(repo)`,
+		`CREATE TABLE IF NOT EXISTS memories (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo        TEXT NOT NULL,
+			issue_id    INTEGER NOT NULL DEFAULT 0,
+			key         TEXT NOT NULL,
+			value       TEXT NOT NULL,
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(repo, issue_id, key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_memories_repo_issue ON memories(repo, issue_id)`,
 	}
 
 	for _, m := range migrations {

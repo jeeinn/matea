@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	agentpkg "github.com/jeeinn/matea/internal/agent"
+	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/store"
 )
@@ -38,13 +39,57 @@ func (r *InteractionRunner) Run(ctx context.Context, task *store.Task, agent *st
 	}
 	owner, repo := parts[0], parts[1]
 
-	// Get Gitea client
-	client := r.factory.giteaFactory.GetGiteaClient(agent.GiteaToken)
+	// Resolve the hub execution decision *before* touching Gitea. The hub
+	// path only needs the comment history on a best-effort basis, so a
+	// deployment without a configured gitea block must not panic on the
+	// nil factory before we even reach the branch.
+	hb, viaHub := r.factory.ResolveHubExecution(agent)
 
-	// Get comment history for context
-	comments, err := client.IssueComments(owner, repo, task.IssueID)
-	if err != nil {
-		log.Printf("[WARN] Failed to get comments: %v", err)
+	// Get comment history for context. Required for the builtin path (the
+	// prompt is built from it), best-effort for the hub path.
+	var comments []gitea.IssueComment
+	switch {
+	case r.factory.giteaFactory == nil:
+		if !viaHub {
+			return nil, fmt.Errorf("gitea client factory not configured")
+		}
+		log.Printf("[WARN] Task %d: no gitea client factory configured; hub reply proceeds without comment history", task.ID)
+	default:
+		client := r.factory.giteaFactory.GetGiteaClient(agent.GiteaToken)
+		if client == nil {
+			if !viaHub {
+				return nil, fmt.Errorf("gitea client unavailable (task %d)", task.ID)
+			}
+			log.Printf("[WARN] Task %d: gitea client unavailable; hub reply proceeds without comment history", task.ID)
+			break
+		}
+		var err error
+		comments, err = client.IssueComments(owner, repo, task.IssueID)
+		if err != nil {
+			log.Printf("[WARN] Failed to get comments: %v", err)
+		}
+	}
+
+	// Hub execution branch (task 2.1.4): when the agent's backend is a
+	// hub-hermes instance, route the reply through Hermes. The comment
+	// history is delivered as conversation_history so Hermes continues the
+	// multi-turn session (session_id correlation, D3). A failed or skipped
+	// comment fetch yields an empty history rather than failing the task.
+	if viaHub {
+		return r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
+			TaskType:     task.TaskType,
+			Role:         "interaction",
+			Backend:      hb.Name(),
+			Repo:         task.Repo,
+			IssueID:      task.IssueID,
+			PRID:         task.PRID,
+			IssueTitle:   task.Event,
+			IssueBody:    task.Context,
+			Comments:     toCommentSnapshots(comments),
+			SystemPrompt: agent.SystemPrompt,
+			UserPrompt:   fmt.Sprintf("Repository: %s\nIssue/PR #%d\n\n%s", task.Repo, task.IssueID, task.Context),
+			MemoryKeys:   r.factory.loadMemoryKeys(task),
+		})
 	}
 
 	// Build context with comment history

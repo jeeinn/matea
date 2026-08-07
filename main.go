@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"github.com/jeeinn/matea/internal/agents"
+	// Blank import registers the Hermes HubBackend factory (hub-hermes) via its
+	// init(). Must stay imported so agents.buildHubBackend can construct it.
+	_ "github.com/jeeinn/matea/internal/agents/backends/hermes"
 	"github.com/jeeinn/matea/internal/api"
 	"github.com/jeeinn/matea/internal/auth"
 	"github.com/jeeinn/matea/internal/config"

@@ -148,15 +148,22 @@ func NewRunnerFactory(llmRegistry *llm.Registry, giteaFactory GiteaClientFactory
 	factory.hubRegistry = NewHubBackendRegistry()
 	factory.hubRegistry.Register(NewBuiltinHubBackend(factory))
 	for name, cfg := range beCfg.Backends {
-		if config.NormalizeBackend(cfg.Type) != config.BackendTypeHubOpenCode {
-			continue
+		switch config.NormalizeBackend(cfg.Type) {
+		case config.BackendTypeHubOpenCode:
+			oc, err := NewOpenCodeHTTPBackend(name, cfg)
+			if err != nil {
+				log.Printf("[WARN] hub backend %q not registered: %v", name, err)
+				continue
+			}
+			factory.hubRegistry.Register(oc)
+		case config.BackendTypeHubHermes:
+			hb, err := buildHubBackend(name, cfg)
+			if err != nil {
+				log.Printf("[WARN] hub backend %q not registered: %v", name, err)
+				continue
+			}
+			factory.hubRegistry.Register(hb)
 		}
-		oc, err := NewOpenCodeHTTPBackend(name, cfg)
-		if err != nil {
-			log.Printf("[WARN] hub backend %q not registered: %v", name, err)
-			continue
-		}
-		factory.hubRegistry.Register(oc)
 	}
 	return factory
 }

@@ -62,16 +62,18 @@ func TestResolveHubBackendNamedBuiltinType(t *testing.T) {
 	assert.Equal(t, "builtin", b.Name())
 }
 
-// TestResolveHubBackendReservedHubNamesError pins the Phase 1 contract:
-// hub-hermes / hub-openclaw / hub-api (and any unconfigured hub-*) fail with
-// an explicit not-implemented error — never a silent fallback to builtin.
+// TestResolveHubBackendReservedHubNamesError pins the no-silent-fallback
+// contract: a bare hub-* *name* with no matching agents.backends entry fails
+// loudly — never a silent fallback to builtin. Note this is about the missing
+// config entry, not an unimplemented type: hub-hermes is implemented now, but
+// "hub-hermes" used as a backend *name* is still unconfigured here.
 func TestResolveHubBackendReservedHubNamesError(t *testing.T) {
 	factory := newHubDispatchFactory(t, nil)
 
 	for _, name := range []string{"hub-hermes", "hub-openclaw", "hub-api", "hub-future"} {
 		_, err := factory.ResolveHubBackend(&store.Agent{Backend: name})
 		require.Error(t, err, "reserved hub backend %q must error", name)
-		assert.Contains(t, err.Error(), "not implemented in Phase 1")
+		assert.Contains(t, err.Error(), "not configured in agents.backends")
 	}
 }
 
@@ -105,8 +107,8 @@ func TestResolveHubBackendMisconfiguredOpenCode(t *testing.T) {
 // --- Runner-level dispatch branch --------------------------------------------
 
 // TestRunnersRejectReservedHubBackend verifies the 1.2.4 branch is wired into
-// all runners: a reserved hub-* backend fails the task before any LLM, Gitea,
-// or workspace work happens.
+// all runners: an unconfigured hub-* backend fails the task before any LLM,
+// Gitea, or workspace work happens.
 func TestRunnersRejectReservedHubBackend(t *testing.T) {
 	factory := newHubDispatchFactory(t, nil)
 	agent := &store.Agent{Backend: "hub-hermes", Provider: "mock", Model: "m"}
@@ -122,7 +124,7 @@ func TestRunnersRejectReservedHubBackend(t *testing.T) {
 	for name, r := range runners {
 		_, err := r.Run(context.Background(), task, agent)
 		require.Error(t, err, "runner %s must reject hub-hermes", name)
-		assert.Contains(t, err.Error(), "not implemented in Phase 1", "runner %s", name)
+		assert.Contains(t, err.Error(), "not configured in agents.backends", "runner %s", name)
 	}
 }
 
