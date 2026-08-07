@@ -490,7 +490,7 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 	if tc == nil {
 		return nil, fmt.Errorf("hub-opencode backend %q: nil TaskContext", b.name)
 	}
-	subType, err := opencodeWriteSubType(tc.TaskType)
+	subType, err := opencodeSubType(tc.TaskType)
 	if err != nil {
 		return nil, err
 	}
@@ -561,15 +561,27 @@ func (b *OpenCodeHTTPBackend) Cancel(ctx context.Context, h *Handle) error {
 	return b.Abort(ctx, h.RemoteID)
 }
 
-// opencodeWriteSubType maps a hub task type to the coding sub-type, rejecting
-// non-write task types (Analyze/Review/Reply never run on OpenCode).
-func opencodeWriteSubType(taskType string) (string, error) {
+// opencodeSubType maps a hub task type to the coding sub-type OpenCode
+// understands. Write tasks (solve/fix) map to their natural sub-type; read
+// tasks (analyze/review/reply) map to "dev" as a best-effort carrier — the
+// workspace is prepared by Matea and cleaned up after, so the read-only
+// contract is preserved regardless of what OpenCode does inside the sandbox.
+//
+// Phase 2 (D7 first cut) wires analyze through OpenCode; review/reply follow
+// in 2.2.2/2.2.3. Unknown task types are rejected.
+func opencodeSubType(taskType string) (string, error) {
 	switch taskType {
 	case "solve_issue", "solve_comment":
 		return "dev", nil
 	case "fix_bug":
 		return "bugfix", nil
+	case "analyze_issue":
+		return "dev", nil
+	case "review_pr":
+		return "dev", nil
+	case "reply_comment":
+		return "dev", nil
 	default:
-		return "", fmt.Errorf("hub-opencode supports write task types only (solve_issue / solve_comment / fix_bug), got %q", taskType)
+		return "", fmt.Errorf("hub-opencode backend: unsupported task type %q (supported: solve_issue, solve_comment, fix_bug, analyze_issue, review_pr, reply_comment)", taskType)
 	}
 }

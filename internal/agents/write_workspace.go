@@ -49,7 +49,12 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	}
 	owner, repo := parts[0], parts[1]
 
-	// Get Gitea client
+	// Get Gitea client — guard against a nil factory (e.g. dispatch-only
+	// factories in tests or deployments without Gitea) so workspace prep
+	// returns an error the runner can react to instead of panicking.
+	if factory.giteaFactory == nil {
+		return nil, fmt.Errorf("gitea client factory not configured")
+	}
 	client := factory.giteaFactory.GetGiteaClient(agent.GiteaToken)
 
 	// Get repo info for clone URL
@@ -329,7 +334,12 @@ func prepareAnalyzeWorkspace(ctx context.Context, task *store.Task, agent *store
 	}
 	owner, repo := parts[0], parts[1]
 
-	// Get Gitea client
+	// Get Gitea client — guard against a nil factory (e.g. dispatch-only
+	// factories in tests or deployments without Gitea) so workspace prep
+	// returns an error the runner can react to instead of panicking.
+	if factory.giteaFactory == nil {
+		return nil, fmt.Errorf("gitea client factory not configured")
+	}
 	client := factory.giteaFactory.GetGiteaClient(agent.GiteaToken)
 
 	// Get repo info for clone URL and default branch

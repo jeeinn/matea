@@ -269,9 +269,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 2.2 hub-opencode 改造（D7 三刀，第一刀最早可验证）
 
-- [ ] 2.2.1 **D7 第一刀（最小可验证）**：`AnalyzeRunner` 后端感知 + analyze 带工作区给 OpenCode
-  复用 `prepareAnalyzeWorkspace`（默认分支 shallow clone，`write_workspace.go:322`）+ OpenCode 目录绑定（`?directory=`+`X-Opencode-Directory`）；放宽 `opencodeWriteSubType`→`opencodeSubType(taskType)→(subType,isWrite)`；返回 `Action:"comment"`，不建 PR；`defer wwc.Sandbox.Cleanup()`。复杂度低–中（~0.5–1 人日）。
-  📌 依赖 2.0.1/2.0.3：作为 out-of-process adapter 的**实证 2**（证明 remote transport + 带上下文）；工作区经 `workspace_transport=shared_path` 抵达，沙箱类工具不外暴（OpenCode 用自带工具直读该目录）。
+- [x] 2.2.1 **D7 第一刀（最小可验证）**：`AnalyzeRunner` 后端感知 + analyze 带工作区给 OpenCode
+复用 `prepareAnalyzeWorkspace`（默认分支 shallow clone，`write_workspace.go:322`）+ OpenCode 目录绑定（`SandboxPath`→`WorkDir`）；放宽 `opencodeWriteSubType`→`opencodeSubType(taskType)`（analyze/review/reply→"dev"）；返回 `Action:"comment"`，不建 PR；`defer wwc.Sandbox.Cleanup()`。
+✅ 已完成：`opencode_http.go` 放宽子类型映射；`hub_run.go` 新增 `ResolveHubOpenCode`；`runner_analyze.go` 加 hub-opencode 分支（制备 workspace→runViaHub→存记忆，失败降级 single-shot）；`write_workspace.go` 加 `giteaFactory==nil` 守卫；`opencode_hubbackend_test.go` 端到端验证 OpenCode 路由（probe `POST /session`）+ 降级路径。注：review/reply 子类型已映射但 runner 分支留待 2.2.2/2.2.3。
 
 - [ ] 2.2.2 **D7 第二刀**：review 带工作区给 OpenCode
   新增 `prepareReviewWorkspace`（clone PR head 到临时 sandbox），复用 OpenCode 目录绑定做代码审查。

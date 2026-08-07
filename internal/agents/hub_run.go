@@ -75,6 +75,36 @@ func (f *RunnerFactory) ResolveHubExecution(agent *store.Agent) (HubBackend, boo
 	return hb, true
 }
 
+// ResolveHubOpenCode decides whether an agent's backend is an OpenCode-type hub
+// that should execute the task through Submit/Poll. Mirrors ResolveHubExecution
+// but matches on BackendTypeHubOpenCode. Returns the resolved HubBackend and
+// true when the task should run through OpenCode.
+//
+// Phase 2 (D7 first cut) uses this only for analyze_issue; review_pr and
+// reply_comment follow in 2.2.2/2.2.3 once their workspace/single-shot paths
+// are wired.
+func (f *RunnerFactory) ResolveHubOpenCode(agent *store.Agent) (HubBackend, bool) {
+	name := config.NormalizeBackend(agent.Backend)
+	if name == "" {
+		name = config.NormalizeBackend(f.backends.Default)
+	}
+	if name == "" || name == config.BackendNameBuiltin {
+		return nil, false
+	}
+	cfg, ok := f.backends.Backends[name]
+	if !ok {
+		return nil, false
+	}
+	if config.NormalizeBackend(cfg.Type) != config.BackendTypeHubOpenCode {
+		return nil, false
+	}
+	hb, err := f.hubRegistry.Lookup(name)
+	if err != nil {
+		return nil, false
+	}
+	return hb, true
+}
+
 // runViaHub executes a task through a hub backend's async Submit/Poll contract
 // and maps the resulting BackendResult back into a Runner Result. It polls
 // until the handle reaches a terminal state or the context is cancelled.
