@@ -37,6 +37,10 @@ const (
 	// memory inspection/cleanup API later) reference the single definition
 	// instead of re-spelling the literal.
 	AnalyzeMemoryKey = "analysis_summary"
+
+	// ReviewMemoryKey records a review conclusion (D3 cross-task memory
+	// sharing, task 2.2.2). Best-effort, like AnalyzeMemoryKey.
+	ReviewMemoryKey = "review_summary"
 )
 
 // ResolveHubExecution decides whether an agent's backend is a Hermes-type hub
@@ -262,5 +266,18 @@ func (f *RunnerFactory) saveAnalyzeMemory(task *store.Task, content string) {
 	}
 	if err := f.db.SetMemory(task.Repo, task.IssueID, AnalyzeMemoryKey, content); err != nil {
 		log.Printf("[WARN] save analyze memory (repo=%s issue=%d): %v", task.Repo, task.IssueID, err)
+	}
+}
+
+// saveReviewMemory records a review task's conclusion under the
+// repo/issue-scoped ReviewMemoryKey (task 2.2.2, D7 second cut). Failures are
+// logged, not fatal — memory is a best-effort enhancement, never a hard
+// dependency.
+func (f *RunnerFactory) saveReviewMemory(task *store.Task, content string) {
+	if f.db == nil || content == "" {
+		return
+	}
+	if err := f.db.SetMemory(task.Repo, task.IssueID, ReviewMemoryKey, content); err != nil {
+		log.Printf("[WARN] save review memory (repo=%s issue=%d): %v", task.Repo, task.IssueID, err)
 	}
 }

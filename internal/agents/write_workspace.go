@@ -386,3 +386,91 @@ func prepareAnalyzeWorkspace(ctx context.Context, task *store.Task, agent *store
 
 	return wwc, nil
 }
+
+// prepareReviewWorkspace sets up a temporary sandbox with a shallow clone of
+// the pull request's head branch for code-review tasks (task 2.2.2, D7 second
+// cut). OpenCode reads the files itself via shared-path directory binding, so
+// the workspace is always cleaned up by the caller. On clone failure an error
+// is returned so the runner can fall back to a single-shot review.
+//
+// Unlike prepareAnalyzeWorkspace (which clones the repo's default branch), this
+// clones the exact PR head ref so OpenCode reviews the code as proposed, not
+// the base branch. The head ref is resolved from the PR detail returned by
+// gitea.PRHeadRef.
+func prepareReviewWorkspace(ctx context.Context, task *store.Task, agent *store.Agent, factory *RunnerFactory) (*WriteWorkspaceContext, error) {
+	_ = ctx
+
+	// Parse repo owner/name
+	parts := strings.SplitN(task.Repo, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid repo format: %s", task.Repo)
+	}
+	owner, repo := parts[0], parts[1]
+
+	// Get Gitea client — guard against a nil factory (e.g. dispatch-only
+	// factories in tests or deployments without Gitea) so workspace prep
+	// returns an error the runner can react to instead of panicking.
+	if factory.giteaFactory == nil {
+		return nil, fmt.Errorf("gitea client factory not configured")
+	}
+	client := factory.giteaFactory.GetGiteaClient(agent.GiteaToken)
+
+	prID := task.PRID
+	if prID == 0 {
+		prID = task.IssueID
+	}
+
+	// Get repo info for clone URL and PR head ref.
+	repoInfo, err := client.GetRepo(owner, repo)
+	if err != nil {
+		return nil, fmt.Errorf("get repo info: %w", err)
+	}
+	cloneURL, err := gitea.AuthenticatedCloneURL(repoInfo.CloneURL, agent.GiteaUsername, agent.GiteaToken)
+	if err != nil {
+		return nil, fmt.Errorf("authenticated clone url: %w", err)
+	}
+	redactedCloneURL := gitea.RedactCloneURL(cloneURL)
+
+	// Resolve the PR head ref so we clone the branch under review.
+	pr, err := client.PRGet(owner, repo, prID)
+	if err != nil {
+		return nil, fmt.Errorf("get PR: %w", err)
+	}
+	headRef, err := gitea.PRHeadRef(pr)
+	if err != nil {
+		return nil, fmt.Errorf("get PR head ref: %w", err)
+	}
+
+	// Create temporary sandbox (always cleaned up by caller).
+	sb := sandbox.New(factory.sandboxCfg, task.ID)
+	if err := sb.Setup(); err != nil {
+		return nil, fmt.Errorf("setup sandbox: %w", err)
+	}
+
+	wwc := &WriteWorkspaceContext{
+		Sandbox:    sb,
+		Owner:      owner,
+		Repo:       repo,
+		RepoInfo:   repoInfo,
+		UseSession: false,
+	}
+
+	git := sandbox.NewGit(sb)
+	wwc.Git = git
+
+	// Shallow clone of the PR head branch.
+	cloneResult := git.CloneBranch(cloneURL, headRef)
+	wwc.Audit = sandbox.NewAuditLogger(factory.db, task.ID, agent.ID)
+	wwc.Audit.LogCommand("git", []string{"clone", "--depth", "1", "--branch", headRef, redactedCloneURL}, cloneResult)
+
+	if cloneResult.Error != nil {
+		errMsg := cloneResult.Stderr
+		if errMsg == "" {
+			errMsg = cloneResult.Error.Error()
+		}
+		sb.Cleanup()
+		return nil, fmt.Errorf("clone repo: %s", errMsg)
+	}
+
+	return wwc, nil
+}

@@ -273,8 +273,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 复用 `prepareAnalyzeWorkspace`（默认分支 shallow clone，`write_workspace.go:322`）+ OpenCode 目录绑定（`SandboxPath`→`WorkDir`）；放宽 `opencodeWriteSubType`→`opencodeSubType(taskType)`（analyze/review/reply→"dev"）；返回 `Action:"comment"`，不建 PR；`defer wwc.Sandbox.Cleanup()`。
 ✅ 已完成：`opencode_http.go` 放宽子类型映射；`hub_run.go` 新增 `ResolveHubOpenCode`；`runner_analyze.go` 加 hub-opencode 分支（制备 workspace→runViaHub→存记忆，失败降级 single-shot）；`write_workspace.go` 加 `giteaFactory==nil` 守卫；`opencode_hubbackend_test.go` 端到端验证 OpenCode 路由（probe `POST /session`）+ 降级路径。注：review/reply 子类型已映射但 runner 分支留待 2.2.2/2.2.3。
 
-- [ ] 2.2.2 **D7 第二刀**：review 带工作区给 OpenCode
+- [x] 2.2.2 **D7 第二刀**：review 带工作区给 OpenCode
   新增 `prepareReviewWorkspace`（clone PR head 到临时 sandbox），复用 OpenCode 目录绑定做代码审查。
+  ✅ 已完成：`write_workspace.go` 新增 `prepareReviewWorkspace`（`gitea.PRHeadRef` 解析 PR head → `git.CloneBranch`，`giteaFactory==nil` 守卫返回 error 而非 panic）；`runner_review.go` 在 hub-hermes 分支之前、gitea fetch 之前插入 hub-opencode 分支（制备 workspace→runViaHub(SandboxPath)→`saveReviewMemory`，失败降级 `runSingleShotReview`）；`hub_run.go` 新增 `ReviewMemoryKey` + `saveReviewMemory`（与 `saveAnalyzeMemory` 对称）；`gitea/pr.go` 新增 `PRHeadRef`。端到端测试 `TestReviewRunnerViaOpenCode`（探针记录 `POST /session`）断言真走 OpenCode 路径（`git clone --depth 1 --branch feature/review` → `opencode session created` → `res.Content == "Done."`）+ `TestReviewRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（Gitea 503 降级 `mock-single-shot`）。注：review 经 OpenCode 时 OpenCode 直接读克隆代码，未传 diff 文本（与 analyze 对称，与 hub-hermes 传 diff 不同）。
 
 - [ ] 2.2.3 **D7 第三刀**：reply 全 role（对话类，单轮，工作区非必需）
   `InteractionRunner` 加后端感知分支，复用 `executeSingleShot` 式单轮。

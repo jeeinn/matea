@@ -94,6 +94,21 @@ func (c *Client) PRGet(owner, repo string, prID int) (map[string]interface{}, er
 	return pr, nil
 }
 
+// PRHeadRef extracts the head branch ref from a PR detail map returned by
+// PRGet. It is used by workspace preparation to clone the exact branch under
+// review (task 2.2.2).
+func PRHeadRef(pr map[string]interface{}) (string, error) {
+	head, ok := pr["head"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("PR head missing or wrong type")
+	}
+	ref, ok := head["ref"].(string)
+	if !ok || ref == "" {
+		return "", fmt.Errorf("PR head ref missing")
+	}
+	return ref, nil
+}
+
 // PRDiff returns the diff of a pull request.
 func (c *Client) PRDiff(owner, repo string, prID int) (string, error) {
 	req, err := http.NewRequest("GET",
