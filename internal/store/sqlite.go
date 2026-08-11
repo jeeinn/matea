@@ -225,6 +225,20 @@ func (db *DB) migrate() error {
 			UNIQUE(repo, issue_id, key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_memories_repo_issue ON memories(repo, issue_id)`,
+		// Hub handle persistence (HubBackend contract §1.2.1): the persistable
+		// reference to a task submitted to a hub backend, keyed by task_id so
+		// the Executor can re-attach polling after a restart and idempotent
+		// re-submission can reuse the same remote run instead of double-starting.
+		`CREATE TABLE IF NOT EXISTS hub_handles (
+			task_id         INTEGER PRIMARY KEY,
+			backend         TEXT NOT NULL,
+			remote_id       TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			status          TEXT NOT NULL DEFAULT 'running',
+			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_hub_handles_status ON hub_handles(status)`,
 	}
 
 	for _, m := range migrations {

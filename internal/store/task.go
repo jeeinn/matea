@@ -398,3 +398,26 @@ func (db *DB) ResetStaleRunningTasks(threshold time.Duration) (int, error) {
 	}
 	return int(count), nil
 }
+
+// ResetStaleRunningTasksExceptHub resets stale running tasks the same way as
+// ResetStaleRunningTasks, but never touches a task that owns a non-terminal hub
+// handle. Hub runs are managed by their own poll loop (bounded by
+// hubPollTimeout); a generic stale-reset would reclaim a legitimately in-flight
+// hub task and cause the Executor to spin up a duplicate in-process poll loop
+// for the same Handle. Hub tasks that are truly orphaned (Matea crashed) are
+// recovered by ReattachHubHandles on startup, not by the scanner.
+func (db *DB) ResetStaleRunningTasksExceptHub(threshold time.Duration) (int, error) {
+	cutoff := time.Now().Add(-threshold)
+	result, err := db.Exec(`UPDATE tasks SET status='pending', started_at=NULL
+		WHERE status='running' AND started_at < ?
+		  AND id NOT IN (SELECT task_id FROM hub_handles WHERE status NOT IN (?, ?, ?))`,
+		cutoff, HubHandleStatusDone, HubHandleStatusFailed, HubHandleStatusCanceled)
+	if err != nil {
+		return 0, fmt.Errorf("reset stale tasks except hub: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return int(count), nil
+}
