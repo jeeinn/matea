@@ -225,17 +225,23 @@ func (d *Dispatcher) Shutdown() {
 
 // Start initializes the executor workers, loads pending tasks, and starts the queue scanner.
 func (d *Dispatcher) Start() error {
-	// Mark orphaned running tasks as failed (e.g. previous process killed with Ctrl+C)
-	if n, err := d.db.FailOrphanedRunningTasks("matea restarted; interrupted running task"); err != nil {
+	// Mark orphaned running tasks as failed (e.g. previous process killed with Ctrl+C),
+	// except hub tasks that own a non-terminal Handle — those are re-attached (below)
+	// rather than failed, so a hub run in flight at crash time is resumed, not lost.
+	if n, err := d.db.FailOrphanedRunningTasksExceptHub("matea restarted; interrupted running task"); err != nil {
 		log.Printf("[WARN] Failed to clear orphaned running tasks: %v", err)
 	} else if n > 0 {
-		log.Printf("[INFO] Marked %d orphaned running task(s) as failed after restart", n)
+		log.Printf("[INFO] Marked %d orphaned running task(s) as failed after restart (hub tasks preserved for re-attach)", n)
 	}
 
 	// Load pending tasks from DB before starting workers
 	if err := d.queue.LoadPending(); err != nil {
 		return fmt.Errorf("load pending tasks: %w", err)
 	}
+
+	// Re-attach hub tasks whose poll loop was lost on restart: rebuild the
+	// in-process poll from the persisted Handle instead of re-submitting.
+	d.executor.ReattachHubHandles(d.queue)
 
 	// Start executor workers
 	d.executor.Start(d.queue)
