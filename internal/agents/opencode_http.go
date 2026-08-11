@@ -531,8 +531,17 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 // Poll returns the cached terminal outcome for a Handle produced by Submit.
 // The cache is instance-local (see the struct doc); an unknown RemoteID is an
 // error, never a silent pending.
+//
+// Restart re-attach: when the cache miss is caused by a Matea restart (the
+// instance-local cache is gone but the opencode sidecar is a separate process
+// that may still hold the session), Poll attempts to recover the result
+// directly from the sidecar via GET /session/{id}/message. This is the recovery
+// half of the Handle persistence contract — without it, a persisted Handle
+// after restart would always report "unknown handle" and the task would fail
+// despite the sidecar having finished. If the sidecar no longer has the session
+// (GC'd or also restarted), Poll falls back to the unknown-handle error, which
+// lets the executor retry / re-submit as appropriate.
 func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResult, State, error) {
-	_ = ctx
 	if h == nil {
 		return nil, "", fmt.Errorf("hub-opencode backend %q: nil Handle", b.name)
 	}
@@ -542,13 +551,25 @@ func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResu
 	b.hubMu.Lock()
 	out, ok := b.hubResults[h.RemoteID]
 	b.hubMu.Unlock()
-	if !ok {
-		return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)
+	if ok {
+		if out.err != nil {
+			return nil, StateFailed, out.err
+		}
+		return out.result, StateDone, nil
 	}
-	if out.err != nil {
-		return nil, StateFailed, out.err
+
+	// Cache miss — try to re-attach to the still-living sidecar session.
+	if summary, rerr := b.getLastAssistantMessage(ctx, h.RemoteID); rerr == nil && summary != "" {
+		res := &BackendResult{Summary: summary}
+		// Re-populate the cache so subsequent Polls are cheap and consistent.
+		b.hubMu.Lock()
+		b.hubResults[h.RemoteID] = hubOutcome{result: res}
+		b.hubMu.Unlock()
+		log.Printf("[INFO] hub-opencode backend %q: re-attached to sidecar session %q after cache miss", b.name, h.RemoteID)
+		return res, StateDone, nil
 	}
-	return out.result, StateDone, nil
+
+	return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)
 }
 
 // Cancel aborts the opencode session referenced by the Handle (best effort,

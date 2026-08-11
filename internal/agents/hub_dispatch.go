@@ -119,9 +119,10 @@ func supportedBackendTypes() string {
 // The two share ResolveHubBackend's normalization, so the duplicated lookup is
 // intentional (correctness over saving a map read).
 //
-// TODO: Handle persistence and executor re-attach on restart are still
-// missing; runViaHub only polls in-process (see HubBackend.Poll contract and
-// the 1.2.1 design note).
+// Handle persistence and executor re-attach on restart are implemented in
+// runViaHub (HubBackend contract §1.2.1): the Handle is persisted to SQLite
+// immediately after Submit and re-attached on re-entry, so a Matea restart
+// resumes the hub run instead of losing or double-submitting it.
 func (f *RunnerFactory) validateHubDispatch(agent *store.Agent) error {
 	_, err := f.ResolveHubBackend(agent)
 	return err

@@ -139,8 +139,20 @@ func TestOpenCodeHubSubmitValidation(t *testing.T) {
 
 // TestOpenCodeHubPollErrors pins Poll strictness: nil handles, handles owned
 // by another backend, and unknown session ids are all errors.
+//
+// Note: since Poll now re-attaches from the sidecar on a cache miss, the
+// "unknown handle" case requires the sidecar itself to reject the session
+// (404) — a realistic sidecar returns 404 for a non-existent session, so the
+// error surfaces; a sidecar that answers for any session id would instead
+// recover the result (see TestOpenCodeHubPollReattachesAfterCacheMiss).
 func TestOpenCodeHubPollErrors(t *testing.T) {
-	srv := newTestOpenCodeServer(t, nil)
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		// Realistic sidecar: an unknown session id 404s, so Poll's re-attach
+		// correctly reports "unknown handle" rather than fabricating a result.
+		"/session/sess-ghost/message": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
+		},
+	})
 	backend := newTestBackend(t, srv.URL)
 
 	_, _, err := backend.Poll(context.Background(), nil)
@@ -200,6 +212,38 @@ func TestOpenCodeHubCapabilities(t *testing.T) {
 	assert.False(t, caps.SupportsMCPClient)
 	assert.False(t, caps.HasIMChannels)
 	assert.False(t, caps.HandlesGit)
+}
+
+// TestOpenCodeHubPollReattachesAfterCacheMiss pins the restart-recovery half of
+// the Handle persistence contract: when the instance-local outcome cache is gone
+// (a Matea restart), Poll must recover the result from the still-living opencode
+// sidecar via GET /session/{id}/message, rather than reporting "unknown handle"
+// and losing the already-completed run.
+func TestOpenCodeHubPollReattachesAfterCacheMiss(t *testing.T) {
+	srv := newTestOpenCodeServer(t, nil)
+	backend := newTestBackend(t, srv.URL)
+
+	h, err := backend.Submit(context.Background(), &TaskContext{
+		TaskType:    "solve_issue",
+		Provider:    "mock",
+		Model:       "m",
+		UserPrompt:  "fix it",
+		SandboxPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	// Simulate a Matea restart: wipe the instance-local outcome cache.
+	backend.hubMu.Lock()
+	backend.hubResults = map[string]hubOutcome{}
+	backend.hubMu.Unlock()
+
+	// Poll must re-attach to the sidecar and return the terminal result.
+	res, state, err := backend.Poll(context.Background(), h)
+	require.NoError(t, err)
+	assert.Equal(t, StateDone, state)
+	require.NotNil(t, res)
+	assert.Equal(t, "Done.", res.Summary, "re-attach must recover the sidecar's assistant message")
 }
 
 // --- D7 first cut: AnalyzeRunner via hub-opencode (task 2.2.1) ----------------

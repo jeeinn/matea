@@ -114,18 +114,57 @@ func (f *RunnerFactory) ResolveHubOpenCode(agent *store.Agent) (HubBackend, bool
 // and maps the resulting BackendResult back into a Runner Result. It polls
 // until the handle reaches a terminal state or the context is cancelled.
 //
-// Persistence of the Handle for restart-recovery (HubBackend contract §1.2.1)
-// is intentionally out of scope for this Phase 2 wiring pass; the in-process
-// poll loop satisfies the async contract for live executions. Executor
-// re-attach on restart is a follow-up hardening task.
+// Reliability (HubBackend contract §1.2.1): the Handle is persisted to SQLite
+// immediately after Submit, and on re-entry the function reuses any persisted
+// non-terminal Handle for the task instead of re-submitting. That single branch
+// delivers two guarantees:
+//   - Idempotency: executor whole-task retries (and the stale-scanner's re-enqueue,
+//     which is suppressed for hub tasks) never double-submit the same task.
+//   - Restart re-attach: if Matea crashes mid-run, the Executor re-enqueues the
+//     orphaned task on startup; this function rebuilds the in-process poll loop
+//     from the persisted Handle and the backend re-attaches to the still-living
+//     remote run (see OpenCodeHTTPBackend.Poll, which re-reads the sidecar
+//     session when its instance-local cache was lost on restart).
 func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *store.Agent, backend HubBackend, tc *TaskContext) (*Result, error) {
 	if tc == nil {
 		return nil, fmt.Errorf("hub execution: nil TaskContext")
 	}
 
-	handle, err := backend.Submit(ctx, tc)
-	if err != nil {
-		return nil, fmt.Errorf("hub submit: %w", err)
+	// Idempotency + restart re-attach: reuse a persisted non-terminal Handle
+	// for this task instead of re-submitting. Skipping Submit here is what
+	// prevents a duplicate remote run when the task is retried or re-attached.
+	var handle *Handle
+	if f.db != nil {
+		if existing, gerr := f.db.GetHubHandle(task.ID); gerr == nil && existing != nil && !store.IsTerminalHubStatus(existing.Status) {
+			handle = &Handle{
+				Backend:        existing.Backend,
+				RemoteID:       existing.RemoteID,
+				IdempotencyKey: existing.IdempotencyKey,
+			}
+			log.Printf("[INFO] hub execution task %d: re-attaching to persisted handle (backend=%q remote=%q)",
+				task.ID, existing.Backend, existing.RemoteID)
+		}
+	}
+
+	if handle == nil {
+		var err error
+		handle, err = backend.Submit(ctx, tc)
+		if err != nil {
+			return nil, fmt.Errorf("hub submit: %w", err)
+		}
+		// Persist the Handle immediately after Submit so a crash before the
+		// poll loop finishes is recoverable on restart (re-attach, not re-run).
+		if f.db != nil {
+			if serr := f.db.SaveHubHandle(&store.HubHandle{
+				TaskID:         task.ID,
+				Backend:        handle.Backend,
+				RemoteID:       handle.RemoteID,
+				IdempotencyKey: handle.IdempotencyKey,
+				Status:         store.HubHandleStatusRunning,
+			}); serr != nil {
+				log.Printf("[WARN] hub execution task %d: failed to persist handle: %v", task.ID, serr)
+			}
+		}
 	}
 
 	// pollCtx is derived from ctx, so an executor-side cancel propagates here
@@ -135,6 +174,29 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 
 	for {
 		res, state, err := backend.Poll(pollCtx, handle)
+		// A terminal state takes precedence over any accompanying error:
+		// backends report failure as (nil, StateFailed, err) — the error
+		// describes why, but the run is over and the Handle must be marked
+		// terminal so it is never re-attached or re-submitted.
+		if state.IsTerminal() {
+			switch state {
+			case StateFailed:
+				f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
+				if err != nil {
+					return nil, fmt.Errorf("hub backend %q reported task failure: %w", backend.Name(), err)
+				}
+				return nil, fmt.Errorf("hub backend %q reported task failure", backend.Name())
+			case StateCanceled:
+				f.markHubHandleTerminal(task.ID, store.HubHandleStatusCanceled)
+				if err != nil {
+					return nil, fmt.Errorf("hub backend %q cancelled the task: %w", backend.Name(), err)
+				}
+				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
+			default: // StateDone
+				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
+				return f.mapHubResult(backend, res), nil
+			}
+		}
 		if err != nil {
 			// A cancelled/expired context surfaces as a transport error from
 			// Poll. Attribute it correctly and tell the hub to stop, instead
@@ -144,21 +206,23 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			}
 			return nil, fmt.Errorf("hub poll: %w", err)
 		}
-		if state.IsTerminal() {
-			switch state {
-			case StateFailed:
-				return nil, fmt.Errorf("hub backend %q reported task failure", backend.Name())
-			case StateCanceled:
-				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
-			default: // StateDone
-				return f.mapHubResult(backend, res), nil
-			}
-		}
 		select {
 		case <-pollCtx.Done():
 			return nil, abortHubRun(ctx, pollCtx, backend, handle)
 		case <-time.After(hubPollInterval):
 		}
+	}
+}
+
+// markHubHandleTerminal records the terminal status of a persisted hub handle.
+// Best-effort: when db is nil or no handle was persisted, it is a no-op so a
+// missing row never fails an otherwise-successful run.
+func (f *RunnerFactory) markHubHandleTerminal(taskID int64, status string) {
+	if f.db == nil {
+		return
+	}
+	if err := f.db.UpdateHubHandleStatus(taskID, status); err != nil {
+		log.Printf("[WARN] hub handle task %d: failed to mark %q: %v", taskID, status, err)
 	}
 }
 
