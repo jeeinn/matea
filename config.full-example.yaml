@@ -280,3 +280,17 @@ mcp:
     # filesystem:
     #   base_url: "http://localhost:8082/mcp"
     #   timeout: "15s"
+
+# ===== 出站扇出配置 (task 2.3.3) =====
+# 把 Agent 完成事件（task_completed 等）以 JSON POST 到外部 webhook。
+# 仅出站、无入站模块：Hermes Poll / OpenCode 同步均不向 Matea 推送完成事件，由 Matea 主动发。
+# webhook_url 留空 = 关闭（结果只落 Gitea，不通知）。
+# OpenCode 无自带 IM 渠道，配置后 Analyze/Review/Reply 结果才会通知人类（见 2.2.4）。
+# Hermes 自带飞书/企微原生渠道，可不配（结果经 Hermes 自身回传）。
+# 指向建议：自建 bridge（飞书/企微机器人）→ 或由 Hub 接收端统一分发。
+deliver:
+  webhook_url: ""
+  # 单次 POST 超时；留空或非法 → 默认 10s
+  timeout: "10s"
+  # 首次失败后的额外重试次数（网络错误/5xx 才重试；4xx 不重试）；0 = 仅一次
+  max_retries: 1

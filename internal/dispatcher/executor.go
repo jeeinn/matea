@@ -12,6 +12,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/mcp"
@@ -46,6 +47,7 @@ type Executor struct {
 	defaultLoop      config.AgentLoopConfig
 	sandboxCfg       sandbox.SandboxConfig
 	mcpCfg           config.MCPConfig
+	deliverCfg       config.DeliverConfig
 	onComplete       TaskCompleteCallback
 	onFailed         TaskFailedCallback
 
@@ -178,6 +180,37 @@ func (e *Executor) SetGiteaClientFactory(factory GiteaClientFactory, getDebugCon
 	mcpReg := mcp.NewRegistry(e.mcpCfg)
 	gatewayDir, _ := os.Getwd()
 	e.runnerFactory = agents.NewRunnerFactory(e.llmRegistry, factory, e.db, e.agentDefaults, e.defaultLoop, getDebugConfig, backends, nil, e.sandboxCfg, mcpReg, gatewayDir)
+	// (Re)inject the outbound deliver client whenever the runner factory is
+	// rebuilt (task 2.3.3). A disabled config (empty webhook_url) yields a
+	// no-op client.
+	e.runnerFactory.SetDeliverClient(buildDeliverClient(e.deliverCfg))
+}
+
+// SetDeliverConfig updates the outbound deliver configuration. The new client
+// is applied immediately to the live runner factory.
+func (e *Executor) SetDeliverConfig(cfg config.DeliverConfig) {
+	e.deliverCfg = cfg
+	if e.runnerFactory != nil {
+		e.runnerFactory.SetDeliverClient(buildDeliverClient(cfg))
+	}
+}
+
+// buildDeliverClient converts the parsed deliver config into a deliver.Client,
+// resolving the timeout string with a sane default.
+func buildDeliverClient(cfg config.DeliverConfig) *deliver.Client {
+	timeout := deliver.DefaultTimeout
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
+			timeout = d
+		} else {
+			log.Printf("[WARN] deliver.timeout %q invalid; using default %s", cfg.Timeout, deliver.DefaultTimeout)
+		}
+	}
+	return deliver.New(deliver.Config{
+		WebhookURL: cfg.WebhookURL,
+		Timeout:    timeout,
+		MaxRetries: cfg.MaxRetries,
+	})
 }
 
 // SetModelMetaProvider sets the model metadata provider for adaptive token limits.

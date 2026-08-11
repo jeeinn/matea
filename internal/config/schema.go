@@ -17,6 +17,24 @@ type Config struct {
 	Sandbox    SandboxConfig    `yaml:"sandbox"`
 	MCP        MCPConfig        `yaml:"mcp"`
 	Debug      DebugConfig      `yaml:"debug"`
+	Deliver    DeliverConfig    `yaml:"deliver"`
+}
+
+// DeliverConfig controls the outbound event fan-out module (task 2.3.3).
+// When WebhookURL is empty, deliver is disabled and outbound events are
+// silently dropped (an OpenCode result then only lands on Gitea).
+type DeliverConfig struct {
+	// WebhookURL is the single destination for outbound events. Point it at a
+	// user-built IM bridge (feishu/wecom robot) or a hub receiver. OpenCode
+	// has no IM of its own, so this is required for OpenCode-backed tasks to
+	// notify humans; Hermes brings its own native channels and may leave this
+	// empty.
+	WebhookURL string `yaml:"webhook_url"`
+	// Timeout bounds a single POST attempt (default 10s when zero).
+	Timeout string `yaml:"timeout"`
+	// MaxRetries is the number of additional attempts after the first failure
+	// (network error or 5xx). Best-effort only; 0 means a single attempt.
+	MaxRetries int `yaml:"max_retries"`
 }
 
 // DebugConfig contains optional debug/diagnostic settings (default off).

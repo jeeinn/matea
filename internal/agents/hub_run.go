@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/store"
 )
@@ -150,7 +151,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			case StateCanceled:
 				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
 			default: // StateDone
-				return mapHubResult(backend, res), nil
+				return f.mapHubResult(backend, res), nil
 			}
 		}
 		select {
@@ -195,11 +196,10 @@ func abortHubRun(ctx, pollCtx context.Context, backend HubBackend, handle *Handl
 // Phase 2 scope: only the free-text Summary is consumed and the action is
 // always a Gitea comment, because the wired task types are read/reply
 // (analyze / review / reply_comment). The richer BackendResult fields —
-// GiteaActions (e.g. a hub-requested create_pr) and Deliver (IM fan-out) —
-// are deliberately ignored here and warned about, so a hub asking for them
-// fails visibly in the log rather than silently doing nothing. Honoring them
-// belongs to the write-task wiring pass.
-func mapHubResult(backend HubBackend, res *BackendResult) *Result {
+// GiteaActions (e.g. a hub-requested create_pr) — are still ignored here and
+// warned about; Deliver (IM fan-out, task 2.3.3) is now honored by emitting
+// an outbound event when a deliver client is configured.
+func (f *RunnerFactory) mapHubResult(backend HubBackend, res *BackendResult) *Result {
 	if res == nil {
 		return &Result{Action: "comment"}
 	}
@@ -208,14 +208,42 @@ func mapHubResult(backend HubBackend, res *BackendResult) *Result {
 			backend.Name(), len(res.GiteaActions))
 	}
 	if res.Deliver != nil {
-		log.Printf("[WARN] hub backend %q returned a deliver request (event=%q channel=%q); ignored in the Phase 2 read/reply path",
-			backend.Name(), res.Deliver.Event, res.Deliver.Channel)
+		f.emitDeliver(backend, res.Deliver)
 	}
 	if res.ExternallyHandled {
 		log.Printf("[WARN] hub backend %q set externally_handled on a read/reply task; ignored (no git work to skip)",
 			backend.Name())
 	}
 	return &Result{Content: res.Summary, Action: "comment"}
+}
+
+// emitDeliver fans out a hub backend's DeliverRequest to the configured
+// webhook (task 2.3.3). It is best-effort: failure is logged, never fatal.
+// When no deliver client is configured (webhook_url empty), the request is
+// logged and dropped so a misconfiguration fails visibly rather than silently.
+func (f *RunnerFactory) emitDeliver(backend HubBackend, d *DeliverRequest) {
+	if f.deliverClient == nil {
+		log.Printf("[WARN] hub backend %q returned a deliver request (event=%q channel=%q) but no deliver client is configured (deliver.webhook_url empty); dropping",
+			backend.Name(), d.Event, d.Channel)
+		return
+	}
+	e := deliver.Event{
+		Event:    d.Event,
+		Channel:  d.Channel,
+		ThreadID: d.ThreadID,
+		Repo:     d.Repo,
+		IssueID:  d.IssueID,
+		PRID:     d.PRID,
+		Action:   d.Action,
+		Content:  d.Content,
+	}
+	if err := f.deliverClient.Emit(context.Background(), e); err != nil {
+		log.Printf("[WARN] deliver emit failed (backend=%q event=%q channel=%q): %v",
+			backend.Name(), d.Event, d.Channel, err)
+		return
+	}
+	log.Printf("[INFO] deliver event %q fanned out to channel %q via webhook (backend=%q)",
+		d.Event, d.Channel, backend.Name())
 }
 
 // toCommentSnapshots converts Gitea issue/PR comments into the serializable

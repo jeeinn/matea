@@ -295,8 +295,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [ ] 2.3.2 （可选）MCP 入站鉴权：API Key 或 mTLS
   默认仅监听 localhost，公网配合反向代理。
 
-- [ ] 2.3.3 实现 `deliver` 模块：**仅出站事件扇出**
+- [x] 2.3.3 实现 `deliver` 模块：**仅出站事件扇出**
   `event/channel/thread_id/repo/issue_id/pr_id/action/content` → POST `deliver.webhook_url`。**无入站接收模块**（Hermes Poll / OpenCode 同步均不推完成事件）。
+  ⚠️ 验收（2026-08-11）：新增 `internal/deliver` 包（Config/Event/Client，Emit 空 URL=no-op、2xx 成功、5xx/网络错误按 max_retries 退避重试、4xx 不重试）；`RunnerFactory` 加 `deliverClient` 字段 + `SetDeliverClient`（不改 `NewRunnerFactory` 签名，避免 ~30 处调用点破坏）；`mapHubResult` 从「忽略 res.Deliver」改为真正 `Emit`；`executor.SetGiteaClientFactory` 重建 factory 时一并注入（含 timeout 字符串解析）；`main.go` 接 `d.SetDeliverConfig(activeCfg.Deliver)`；`config.schema.go` 加 `DeliverConfig`，`config.example.yaml`/`config.full-example.yaml` 加 `deliver:` 块。测试：`deliver_test.go`（5 例）+ `agents/deliver_wiring_test.go`（hub 返回 DeliverRequest 真 POST 到 httptest 且字段正确 / 无客户端不 panic）全 PASS。
 
 - [ ] 2.3.4 配置 `deliver.webhook_url`：可指向用户自建 IM bridge 或 Hub 接收端
   Hermes 自带渠道时可选不配；OpenCode 无 IM 时必配（2.2.4）。

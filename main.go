@@ -124,6 +124,7 @@ func main() {
 		return cfgManager.Get().Debug
 	})
 	d.SetModelMetaProvider(cfgManager)
+	d.SetDeliverConfig(activeCfg.Deliver)
 
 	// Initialize v2 workflow components
 	registry := agents.NewRegistry()

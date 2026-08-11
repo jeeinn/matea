@@ -118,6 +118,14 @@ func (d *Dispatcher) SetModelMetaProvider(m agents.ModelMetaProvider) {
 	}
 }
 
+// SetDeliverConfig updates the outbound deliver configuration (task 2.3.3).
+// Applied immediately to the live executor / runner factory.
+func (d *Dispatcher) SetDeliverConfig(cfg config.DeliverConfig) {
+	if d.executor != nil {
+		d.executor.SetDeliverConfig(cfg)
+	}
+}
+
 // SetGiteaConfig updates Gitea settings used for admin clients / writeback (hot reload).
 func (d *Dispatcher) SetGiteaConfig(cfg *config.GiteaConfig) {
 	if cfg == nil {
