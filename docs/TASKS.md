@@ -218,6 +218,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   接口**声明** `controlTransport`/`toolTransport` 元数据（对齐 qm），但只实现 in-process(builtin) + out-of-process(submit-contract)。注册表为单文件 `Map<HarnessID, Harness>`，新增大脑 = 加一行。
   📌 **拒绝**：每轮动态选 harness（Matea 任务有状态，选择粒度=每任务/每 agent）；harness×model 双轴校验矩阵（model 仅 builtin 用，hub-* 自管 LLM）。~1–2 人日（含测试）。
   ✅ 已完成（提交 b4aab51）：Harness/HarnessProfile/HarnessTurnInput/HarnessTurnResult 类型定义；harnessRouter 注册表 (Register/Lookup/GetHarness)；2x2 transport 模型常量
+  ⚠️ 诚实更正（2026-08-11 核查）：Harness 接口与注册表已建，但**尚未收敛**三套执行接口——runners 仍直接走 Runner/HubBackend/CodingBackend，`Harness.RunTurn` 不是当前活跃执行路径。属"接口就绪、未接线"基础设施，收敛留待 D12 / Phase 3。
 
 - [x] 2.0.2 现有 `builtin` 改造为 in-process adapter（D10 实证 1）
   内部仍跑现有多 role Agent Loop，仅套上 `Harness` 接口；行为零变化，以既有测试全 PASS 为验收基线。
@@ -228,6 +229,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   - **Gitea 类**（新增）：**Phase 2 只做读侧** `gitea_read_issue` / `gitea_read_pr_diff`；**写侧不做**（`gitea_create_comment`/`gitea_create_pr` 留 Phase 3），发评论/建 PR 继续由 Matea 在结果返回后统一落地，守「Gitea 唯一写方」。
   - ⚠️ 对成品 harness（OpenCode/Hermes）ToolBox 只能 **append 不能 replace** —— 其自带工具关不掉，重名会导致模型摇摆。此约束须在接口注释中写死。
   ✅ 已完成（提交 b4aab51）：ToolBox 三层暴露策略实现；ToolCatSandbox 仅 builtin；ToolCatGitea 远程读侧 (gitea_read_issue/gitea_read_pr_diff)；ToolImplFn 接口
+  ⚠️ 诚实更正（2026-08-11 核查）：`NewToolBox` 全仓**零非测试引用**——ToolBox 已实现但无任何生产调用方，属悬空基础设施，待 D12 / Phase 3 接线后才有实际效果。
 
 - [x] 2.0.4 网关级 skill 经 ToolBox 暴露（D11）
   仓库内 skill（workspace 的 `skills/`）**不做集成**——随工作区交付，harness 自读（OpenCode 还会读 `AGENTS.md`）。
@@ -246,9 +248,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [x] 2.1.1 实现 `internal/agents/backends/hermes`
   `HubBackend.Submit` → `POST /v1/runs`（`{input, session_id?, instructions?, conversation_history?, previous_response_id?}`），返回 `{run_id, status}`；`Poll` → `GET /v1/runs/{run_id}` 取 `{status, output, session_id, usage}`，终态 completed/failed 即结束；Bearer 鉴权（`API_SERVER_KEY`）；`session_id` 用于同 repo 多任务续接。
-  **Handle 持久化 + 重启恢复**：满足 1.2.1「落库 + Executor 重启拾取」强制点；IdempotencyKey 去重（1.2 评审挂账 ①）；Poll 重启措辞统一（挂账 ②）。
   📌 全 task_type 经同一 Submit/Poll 路径（含 `solve_issue`/`fix_bug`：Hermes 返回 patch/summary → Matea `finalizeWriteChanges` 落地，不反向操作 Matea 沙箱——见 2.1.5 删除说明）。
-  ✅ 已完成（提交 8c5a6f2）：`internal/agents/backends/hermes/hermes.go` 实现 HubBackend 接口（Submit/Poll/Cancel/Capabilities/HealthCheck）；Bearer 鉴权；session_id 按 repo 派生支持跨任务记忆共享；17 个单元测试覆盖正常/失败/鉴权/502/对话历史/diff 场景
+  ✅ 已完成（提交 224e7ab）：`internal/agents/backends/hermes/hermes.go` 实现 HubBackend 接口（Submit/Poll/Cancel/Capabilities/HealthCheck）；Bearer 鉴权；session_id 按 repo 派生支持跨任务记忆共享；17 个单元测试覆盖正常/失败/鉴权/502/对话历史/diff 场景
+  ✅ **原勾选注水已补齐（2026-08-11 核查，2026-08-06 实现）**：2.1.1-a / 2.1.1-b 曾并入 2.1.1 的"已完成"范围但代码未实现，现均已落地（提交占位待填）：
+  - [x] 2.1.1-a **Handle 持久化 + Executor 重启拾取**（1.2.1 落库强制点）：`hub_handles` 表（`task_id` PK + `backend`/`remote_id`/`idempotency_key`/`status`）；`runViaHub` 提交后 `SaveHubHandle` 落库；`dispatcher.Start` 经 `FailOrphanedRunningTasksExceptHub` + `Executor.ReattachHubHandles` 在重启后对非终结 hub 任务重建轮询；stale scanner 已排除 hub 任务；OpenCode `Poll` 缓存未命中时从仍存活的 sidecar 恢复结果。Matea 重启不再丢失在途 hub 任务。
+  - [x] 2.1.1-b **IdempotencyKey 去重**（1.2 评审挂账 ①）：`runViaHub` 提交前 `GetHubHandle` 命中非终结 Handle 即复用（含 `IdempotencyKey`），绝不重复 `Submit`；同一任务重复进入安全重投。
 
 - [x] 2.1.2 `analyze_issue` → Hermes
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
@@ -281,8 +285,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   ✅ 已完成（决策 B）：`InteractionRunner` 加 hub-opencode 分支（`ResolveHubOpenCode`）；`write_workspace.go` 新增 `prepareReplyWorkspace`——**空的最小 workspace**（不 clone，只为填 `Submit` 的 `SandboxPath` 契约，因 reply 不读仓库，无 gitea 依赖，不会因 gitea 缺失 panic）；失败降级抽取的 `runSingleShotReply`；内置路径也复用 `runSingleShotReply`。端到端测试 `TestReplyRunnerViaOpenCode`（探针记 `POST /session`，giteaURL 留空证明无 gitea 依赖）断言真走 OpenCode（`opencode session created` → `res.Content == "Done."`）+ `TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（base_dir 指向文件使 `MkdirAll` 失败 → 降级 `mock-single-shot`）。注：OpenCode 当前忽略 `Comments`（经 `IssueBody`/`UserPrompt` 传回复目标），后续如需对话历史可扩展。
   ⚠️ 决策：reply 经 OpenCode 采用 (B) 制备最小空 workspace 而非 (A) 放宽 `Submit` 契约——保持 `Submit` 对 `SandboxPath` 的强校验不变。
 
-- [ ] 2.2.4 OpenCode 无 IM 渠道时，配置 `deliver.webhook_url` 回传（出站，由 2.3.3 提供）
+- [x] 2.2.4 OpenCode 无 IM 渠道时，配置 `deliver.webhook_url` 回传（出站，由 2.3.3 提供）
   文档说明用户自建 bridge 或对接企业微信/钉钉机器人。
+  ✅ 已完成：`config.full-example.yaml` 扩展 deliver 注释（backend 取舍表 / Event payload 字段 / Flask bridge 最小骨架示例）；README 新增「接入 Hub 后端 → 4. 出站通知 deliver」章节（何时需配矩阵 / 配置示例 / Event 字段 / bridge 拓扑图 / 行为约束 / 不自研 IM SDK 边界声明）；AGENTS.md hub-opencode 差异表加 IM 通知行；DEPLOYMENT.md 核心配置 yaml 块加 deliver 段 + OpenCode sidecar 章节加必配提示。注：2.3.4（指向 Hub 接收端）/ 2.3.6（多渠道文档给出推荐拓扑）作为同类项已部分覆盖，仍保留 `[ ]` 等后续如需更细化的 Hub 接收端拓扑文档再补。
 
 ### 2.3 MCP Server + Deliver（MCP 降级可选；deliver 仅出站）
 

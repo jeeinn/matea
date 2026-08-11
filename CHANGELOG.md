@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Phase 2 Hub 后端接入（branch `phase2/hub-ecosystem`，未合入 master）：
+
+### Added
+- **Hub 后端抽象**：`HubBackend` 异步 Submit/Poll/Cancel 契约 + `init()` 注册制绕开包循环依赖；`hub-hermes`（官方 Runs API）与 `hub-opencode`（OpenCode sidecar HTTP）两类后端落地
+- **大脑可插拔骨架（D10/D11）**：统一 `Harness` 接口 + `harnessRouter` 注册表；`ToolBox` 三层工具暴露策略（沙箱类 / Gitea 读侧 / 网关级 skill）；配置新增 `workspace_transport` 语义位（`shared_path`）
+- **hub-hermes 接线（2.1.x）**：analyze / review / reply 经 Hermes 跑；repo/issue 级 `memories` 表实现跨任务记忆共享（D3）
+- **hub-opencode 三刀（2.2.1–2.2.3）**：analyze（默认分支 shallow clone）/ review（clone PR head）/ reply（最小空 workspace，决策 B）经 OpenCode 跑；失败降级 single-shot LLM
+- **deliver 出站扇出（2.3.3）**：`internal/deliver` 包把 hub 返回的 `DeliverRequest` 以 JSON POST 到 `deliver.webhook_url`（仅出站；5xx/网络错误按 `max_retries` 退避重试，4xx 不重试；空 URL = no-op）
+
+### Fixed
+- **P0 可靠性地基（2.1.1-a / 2.1.1-b）**：Hub Handle 持久化 + Executor 重启拾取 + IdempotencyKey 幂等去重。`hub_handles` 表落库 Handle（`backend`/`remote_id`/`idempotency_key`/`status`）；`runViaHub` 提交前命中非终结 Handle 即复用（防重复 `Submit`），提交后 `SaveHubHandle` 落库；`dispatcher.Start` 经 `FailOrphanedRunningTasksExceptHub` + `Executor.ReattachHubHandles` 在重启后重建轮询；stale scanner 排除 hub 任务；OpenCode `Poll` 缓存未命中时从仍存活的 sidecar 恢复结果。新增单测覆盖 store / `runViaHub` / reattach 路径。
+
+### Known gaps (intentionally deferred, tracked in docs/TASKS.md)
+- `Harness` / `ToolBox` 已建但未接入执行路径（零生产调用），收敛留待 D12 / Phase 3
+
 ## [0.11.4] - 2026-07-31
 
 WebUI 任务页交互补丁：任务详情与 Agent 对话日志拆成独立对话框。  

@@ -43,6 +43,7 @@ Gitea Webhook → Matea Dispatcher → builtin Agent Loop → 写回 Gitea
 | 连接参数 | 无 | 在 `agents.backends.<name>` 统一设置 |
 | Agent 页字段 | Provider/Model/Temperature/Loop Config 全显 | 仅显 System Prompt/User Template + `opencode_model`/`opencode_provider`/`opencode_agent` 覆盖 |
 | 沙箱/PR | Matea 负责 | Matea 准备路径并负责 git/PR，OpenCode 在该路径工作 |
+| IM 通知 | 评论已写回 Gitea，按需配 `deliver` | **OpenCode 无自带 IM**，必须配 `deliver.webhook_url` 才能通知人类（见 README §接入 Hub 后端 → 出站通知） |
 
 ### 如何启用 hub-opencode
 

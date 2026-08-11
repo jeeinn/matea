@@ -183,7 +183,16 @@ agents:
     total_timeout: "30m"      # 多轮任务总超时
     no_progress_limit: 3      # 连续 N 轮无进展退出（0=关闭）
     verify_commands: []       # 编码后、commit/PR 前执行的校验命令
+
+# 出站通知（task 2.3.3 / 2.2.4）：OpenCode backend 无自带 IM 渠道，必须配置
+# 才能向飞书/企微/钉钉通知；builtin 评论已写回 Gitea 按需开启；Hermes 自带渠道可不配
+deliver:
+  webhook_url: ""                # 留空 = 关闭；OpenCode backend 必配，指向自建 bridge
+  timeout: "10s"                 # 单次 POST 超时
+  max_retries: 1                 # 网络错误/5xx 重试次数；4xx 不重试
 ```
+
+> `deliver.webhook_url` 的指向、Event payload 字段、自建 bridge 拓扑示例见 README 「接入 Hub 后端 → 出站通知」一节。Matea **不自研 IM SDK，也不内置 bridge**——多渠道分发靠用户自建 bridge 扇出。
 
 ### Harness 验证门禁
 
@@ -570,6 +579,8 @@ agents:
 ```
 
 Agent 侧设置 `backend: opencode-local`（仅 solve / fix_bug 写任务生效；analyze/review 强制 builtin）。
+
+> **OpenCode 无自带 IM 渠道**：若需向飞书/企微/钉钉通知任务完成事件，必须配置 `deliver.webhook_url` 指向自建 bridge（见 README「接入 Hub 后端 → 出站通知」）。否则结果只写回 Gitea 评论，不会 IM 推送。
 
 ### 行为说明
 
