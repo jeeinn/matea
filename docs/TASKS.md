@@ -277,8 +277,9 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   新增 `prepareReviewWorkspace`（clone PR head 到临时 sandbox），复用 OpenCode 目录绑定做代码审查。
   ✅ 已完成：`write_workspace.go` 新增 `prepareReviewWorkspace`（`gitea.PRHeadRef` 解析 PR head → `git.CloneBranch`，`giteaFactory==nil` 守卫返回 error 而非 panic）；`runner_review.go` 在 hub-hermes 分支之前、gitea fetch 之前插入 hub-opencode 分支（制备 workspace→runViaHub(SandboxPath)→`saveReviewMemory`，失败降级 `runSingleShotReview`）；`hub_run.go` 新增 `ReviewMemoryKey` + `saveReviewMemory`（与 `saveAnalyzeMemory` 对称）；`gitea/pr.go` 新增 `PRHeadRef`。端到端测试 `TestReviewRunnerViaOpenCode`（探针记录 `POST /session`）断言真走 OpenCode 路径（`git clone --depth 1 --branch feature/review` → `opencode session created` → `res.Content == "Done."`）+ `TestReviewRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（Gitea 503 降级 `mock-single-shot`）。注：review 经 OpenCode 时 OpenCode 直接读克隆代码，未传 diff 文本（与 analyze 对称，与 hub-hermes 传 diff 不同）。
 
-- [ ] 2.2.3 **D7 第三刀**：reply 全 role（对话类，单轮，工作区非必需）
-  `InteractionRunner` 加后端感知分支，复用 `executeSingleShot` 式单轮。
+- [x] 2.2.3 **D7 第三刀**：reply 全 role（对话类，单轮，工作区非必需）
+  ✅ 已完成（决策 B）：`InteractionRunner` 加 hub-opencode 分支（`ResolveHubOpenCode`）；`write_workspace.go` 新增 `prepareReplyWorkspace`——**空的最小 workspace**（不 clone，只为填 `Submit` 的 `SandboxPath` 契约，因 reply 不读仓库，无 gitea 依赖，不会因 gitea 缺失 panic）；失败降级抽取的 `runSingleShotReply`；内置路径也复用 `runSingleShotReply`。端到端测试 `TestReplyRunnerViaOpenCode`（探针记 `POST /session`，giteaURL 留空证明无 gitea 依赖）断言真走 OpenCode（`opencode session created` → `res.Content == "Done."`）+ `TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（base_dir 指向文件使 `MkdirAll` 失败 → 降级 `mock-single-shot`）。注：OpenCode 当前忽略 `Comments`（经 `IssueBody`/`UserPrompt` 传回复目标），后续如需对话历史可扩展。
+  ⚠️ 决策：reply 经 OpenCode 采用 (B) 制备最小空 workspace 而非 (A) 放宽 `Submit` 契约——保持 `Submit` 对 `SandboxPath` 的强校验不变。
 
 - [ ] 2.2.4 OpenCode 无 IM 渠道时，配置 `deliver.webhook_url` 回传（出站，由 2.3.3 提供）
   文档说明用户自建 bridge 或对接企业微信/钉钉机器人。

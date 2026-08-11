@@ -422,6 +422,91 @@ func TestReviewRunnerViaOpenCodeFallsBackOnWorkspaceFailure(t *testing.T) {
 	assert.Contains(t, res.Content, "mock-single-shot")
 }
 
+// --- D7 third cut: InteractionRunner (reply) via hub-opencode (task 2.2.3) ----
+
+// TestReplyRunnerViaOpenCode verifies the D7 third-cut routing contract: when
+// the agent's backend is hub-opencode, InteractionRunner resolves it, prepares a
+// minimal (empty) workspace purely to satisfy the OpenCode Submit SandboxPath
+// contract (decision B), and forwards the sandbox path to OpenCode. The
+// assertion requires that OpenCode's Submit (POST /session) was actually
+// reached — degenerating to single-shot is NOT accepted. The reply path has no
+// Gitea dependency, so giteaURL is empty here (proving it works without a gitea
+// block configured).
+func TestReplyRunnerViaOpenCode(t *testing.T) {
+	// Probe: record that the OpenCode sidecar actually received a session
+	// create (POST /session). This is the contract we must verify — the reply
+	// task must route through hub-opencode's Submit, not silently degrade to
+	// single-shot LLM.
+	opencodeSessionCreated := false
+	hs := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session": func(w http.ResponseWriter, r *http.Request) {
+			opencodeSessionCreated = true
+			defaultSessionCreateHandler(w, r)
+		},
+	})
+	// giteaURL is "" — the reply-via-OpenCode path has no Gitea dependency
+	// (minimal empty workspace, decision B).
+	f := newOpenCodeTestFactory(t, hs.URL, "")
+	f.llmRegistry = newOpencodeMockLLMRegistry(t)
+	runner := NewInteractionRunner(f)
+
+	task := &store.Task{ID: 47, Repo: "o/r", IssueID: 7, TaskType: "reply_comment", Event: "Reply", Context: "please reply to this"}
+	agent := &store.Agent{Backend: "opencode-local", Provider: "mock", SystemPrompt: "be concise"}
+
+	res, err := runner.Run(context.Background(), task, agent)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "comment", res.Action)
+	// The routing contract: InteractionRunner must reach hub-opencode's Submit
+	// (createSession), not fall back to single-shot reply.
+	assert.True(t, opencodeSessionCreated,
+		"reply_comment with hub-opencode backend must route through OpenCode Submit, not degrade to single-shot")
+	// And the sidecar's assistant message is returned verbatim.
+	assert.Equal(t, "Done.", res.Content,
+		"OpenCode path must return the sidecar assistant message, not single-shot output")
+}
+
+// TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure verifies that when the
+// minimal workspace preparation fails (sandbox Setup cannot create the working
+// directory), the hub-opencode reply path degrades to a single-shot result
+// rather than failing the task outright. The failure is induced by pointing the
+// fixed-mode sandbox base dir at a regular file, which makes os.MkdirAll fail
+// reliably on every OS.
+func TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure(t *testing.T) {
+	// A fixed-mode base dir that is a regular file makes the sandbox Setup
+	// (os.MkdirAll(.../task_N)) fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+
+	sbCfg := sandbox.DefaultSandboxConfig()
+	sbCfg.Mode = sandbox.ModeFixed
+	sbCfg.BaseDir = blocker
+
+	backends := &config.AgentBackendsConfig{
+		Backends: map[string]config.BackendConfig{
+			"opencode-local": {
+				Type:               config.BackendTypeHubOpenCode,
+				BaseURL:            "http://unused",
+				Auth:               config.BackendAuthConfig{Password: "test-key"},
+				WorkspaceTransport: config.WorkspaceTransportSharedPath,
+			},
+		},
+	}
+	f := NewRunnerFactory(nil, nil, nil, config.AgentDefaultsConfig{},
+		config.DefaultAgentLoopConfig(), nil, backends, nil, sbCfg, nil, "")
+	f.llmRegistry = newOpencodeMockLLMRegistry(t)
+	runner := NewInteractionRunner(f)
+
+	task := &store.Task{ID: 48, Repo: "o/r", IssueID: 7, TaskType: "reply_comment", Event: "Reply", Context: "fallback"}
+	agent := &store.Agent{Backend: "opencode-local", Provider: "mock", SystemPrompt: "be concise"}
+
+	res, err := runner.Run(context.Background(), task, agent)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "comment", res.Action)
+	assert.Contains(t, res.Content, "mock-single-shot")
+}
+
 // newOpenCodeTestFactory builds a RunnerFactory with a hub-opencode backend
 // named "opencode-local" registered, plus the supplied gitea/mock URLs.
 func newOpenCodeTestFactory(t *testing.T, opencodeURL, giteaURL string) *RunnerFactory {

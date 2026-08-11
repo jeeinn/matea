@@ -474,3 +474,42 @@ func prepareReviewWorkspace(ctx context.Context, task *store.Task, agent *store.
 
 	return wwc, nil
 }
+
+// prepareReplyWorkspace sets up a temporary sandbox directory with NO repository
+// clone (task 2.2.3, D7 third cut, decision B). A reply is a pure conversation
+// and OpenCode does not need the repository contents, so we create an empty
+// temporary workspace solely to satisfy the OpenCode Submit contract's
+// SandboxPath requirement (opencode_http.go Submit rejects an empty
+// SandboxPath). The caller always cleans up the workspace.
+//
+// Unlike prepareAnalyzeWorkspace / prepareReviewWorkspace, this function never
+// touches Gitea: the workspace is empty by design, so a nil giteaFactory is
+// fine and can never panic here. On sandbox setup failure an error is returned
+// so the runner can fall back to a single-shot reply.
+func prepareReplyWorkspace(ctx context.Context, task *store.Task, agent *store.Agent, factory *RunnerFactory) (*WriteWorkspaceContext, error) {
+	_ = ctx
+
+	// Parse repo owner/name (kept for consistency with the sibling prepare*
+	// helpers; not used for a network clone here).
+	parts := strings.SplitN(task.Repo, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid repo format: %s", task.Repo)
+	}
+
+	// No Gitea dependency: the workspace is empty by design, so a nil
+	// giteaFactory is fine and never panics here (unlike analyze/review which
+	// clone the repository).
+	sb := sandbox.New(factory.sandboxCfg, task.ID)
+	if err := sb.Setup(); err != nil {
+		return nil, fmt.Errorf("setup sandbox: %w", err)
+	}
+
+	wwc := &WriteWorkspaceContext{
+		Sandbox:    sb,
+		Owner:      parts[0],
+		Repo:       parts[1],
+		UseSession: false,
+	}
+	wwc.Audit = sandbox.NewAuditLogger(factory.db, task.ID, agent.ID)
+	return wwc, nil
+}

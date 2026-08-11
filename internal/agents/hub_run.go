@@ -84,9 +84,9 @@ func (f *RunnerFactory) ResolveHubExecution(agent *store.Agent) (HubBackend, boo
 // but matches on BackendTypeHubOpenCode. Returns the resolved HubBackend and
 // true when the task should run through OpenCode.
 //
-// Phase 2 (D7 first cut) uses this only for analyze_issue; review_pr and
-// reply_comment follow in 2.2.2/2.2.3 once their workspace/single-shot paths
-// are wired.
+// Phase 2 (D7) wires analyze (2.2.1), review (2.2.2) and reply (2.2.3) through
+// OpenCode. Review clones the PR head; reply uses a minimal empty workspace
+// (decision B) since it needs no repository contents.
 func (f *RunnerFactory) ResolveHubOpenCode(agent *store.Agent) (HubBackend, bool) {
 	name := config.NormalizeBackend(agent.Backend)
 	if name == "" {

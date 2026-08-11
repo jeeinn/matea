@@ -567,8 +567,8 @@ func (b *OpenCodeHTTPBackend) Cancel(ctx context.Context, h *Handle) error {
 // workspace is prepared by Matea and cleaned up after, so the read-only
 // contract is preserved regardless of what OpenCode does inside the sandbox.
 //
-// Phase 2 (D7 first cut) wires analyze through OpenCode; review/reply follow
-// in 2.2.2/2.2.3. Unknown task types are rejected.
+// Wired in 2.2.1 (analyze), 2.2.2 (review) and 2.2.3 (reply); unknown task
+// types are rejected.
 func opencodeSubType(taskType string) (string, error) {
 	switch taskType {
 	case "solve_issue", "solve_comment":
