@@ -36,6 +36,9 @@ var configKeys = []string{
 	"debug.conversation_log.max_content_chars",
 	"workflow.preset",
 	"workflow.gates",
+	"deliver.webhook_url",
+	"deliver.timeout",
+	"deliver.max_retries",
 }
 
 // IsConfigKey returns true if the key is a recognized config field (not a data key like prompt.templates).
@@ -104,6 +107,14 @@ func parseConfigValue(key, value string) (interface{}, error) {
 			return nil, err
 		}
 		return b, nil
+	case "deliver.max_retries":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, fmt.Errorf("not a number: %s", value)
+		}
+		return n, nil
+	case "deliver.webhook_url", "deliver.timeout":
+		return value, nil
 	default:
 		return value, nil
 	}
@@ -167,6 +178,12 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Workflow.Preset
 	case "workflow.gates":
 		return cfg.Workflow.Gates
+	case "deliver.webhook_url":
+		return cfg.Deliver.WebhookURL
+	case "deliver.timeout":
+		return cfg.Deliver.Timeout
+	case "deliver.max_retries":
+		return cfg.Deliver.MaxRetries
 	default:
 		return ""
 	}
@@ -310,6 +327,16 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
 		cfg.Workflow.Gates = gates
+	case "deliver.webhook_url":
+		cfg.Deliver.WebhookURL = value
+	case "deliver.timeout":
+		cfg.Deliver.Timeout = value
+	case "deliver.max_retries":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("not a number: %s", value)
+		}
+		cfg.Deliver.MaxRetries = n
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
@@ -373,6 +400,12 @@ func getConfigEntry(cfg *Config, key string) string {
 		return strconv.FormatBool(cfg.Debug.ConversationLog.Enabled)
 	case "debug.conversation_log.max_content_chars":
 		return strconv.Itoa(cfg.Debug.ConversationLog.MaxContentChars)
+	case "deliver.webhook_url":
+		return cfg.Deliver.WebhookURL
+	case "deliver.timeout":
+		return cfg.Deliver.Timeout
+	case "deliver.max_retries":
+		return strconv.Itoa(cfg.Deliver.MaxRetries)
 	default:
 		return ""
 	}
