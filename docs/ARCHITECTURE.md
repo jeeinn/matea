@@ -684,15 +684,73 @@ web/src/                             # Vue 3 前端
     └── index.js
 ```
 
-## OpenCode CodingBackend（可选 Path A）
+## Phase 2 — HubBackend 双轨架构
 
-写任务路径：`prepareWriteWorkspace → CodingBackend.Run → finalizeWriteChanges`。
+Phase 2 引入「可插拔脑」抽象 `HubBackend`，使任务可选择走 **hub 后端**（远程异步执行 + 重启恢复）或 **内置内部 loop**（同步本地执行）。这构成了 Matea 的核心「双轨」执行模型，贯穿执行、写任务与出站通知三处。
 
-| Backend | 说明 |
-|---------|------|
-| `builtin`（默认） | 内置 `AgentLoop` + 沙箱工具 |
-| `hub-opencode` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR |
+### HubBackend 抽象与持久化
 
-约束：Analyze / Review **永不**走 OpenCode。Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_builtin: true` 才降级 builtin。
+`HubBackend` 定义异步契约：
+
+```go
+type HubBackend interface {
+    Submit(ctx, *SubmitRequest) (*Handle, error)
+    Poll(ctx, *Handle) (*BackendResult, error)
+    Cancel(ctx, *Handle) error
+}
+```
+
+- `Handle` 持久化于 SQLite `hub_handles` 表（`SaveHubHandle` / `GetHubHandle` / `UpdateHubHandleStatus`）
+- 任务启动时 `SaveHubHandle(Running)`；终态（`done` / `failed` / `canceled`）由 `markHubHandleTerminal` 落库
+- 重启时 `ReattachHubHandles` 重接仍存活的远程 run；未持久化 Handle 的孤儿 run 由 `FailOrphanedRunningTasksExceptHub` 兜底标记 `failed`
+- `IdempotencyKey` 去重，避免重复提交
+
+已实现后端：
+
+| 后端 | 用途 | 协议 |
+|------|------|------|
+| `hub-hermes` | 分析 / 审查 / 回复三类 | Hermes Runs API：`POST /v1/runs` + `GET /v1/runs/{id}` 轮询 |
+| `hub-opencode` | 分析 / 审查 / 回复三类（D7 三刀）+ 写任务 | OpenCode 协议 |
+
+### 双轨一：非写任务（analyze / review / interaction）
+
+```mermaid
+flowchart TD
+    T[Task] --> R{ResolveHubExecution /<br/>ResolveHubOpenCode 命中?}
+    R -->|是| H[runViaHub:<br/>HubBackend Submit/Poll<br/>+ Handle 持久化 + 重启重接]
+    R -->|否| B[内置内部 loop:<br/>AnalyzeRunner / ReviewRunner /<br/>InteractionRunner 同步执行, 无 Handle]
+```
+
+- **Hub 路径**：`runner_analyze.go` / `runner_review.go` / `runner_interaction.go` 的 `ResolveHubExecution` 分支构建 `TaskContext` 并调用 `runViaHub`
+- **内置路径**：默认；直接返回 `*Result`
+- 两路径互斥：同一任务至多走一条
+
+### 双轨二：写任务（solve_issue / fix_bug）
+
+写任务有独立的双轨。**Phase 2 评审（Problem B / E-2 修复）后，两条轨道均已具备 Handle 持久化与重启恢复**：
+
+| 轨道 | 入口 | 执行后端 | Handle 持久化 |
+|------|------|----------|---------------|
+| `builtin`（默认） | `ResolveCodingBackend` → `CodingBackend.Run` | 内置 `AgentLoop` + 沙箱工具 | 经 `runViaHub` 兼容层落库（E-2） |
+| `hub-opencode` | `ResolveHubOpenCode` → `runViaHub` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR | `SaveHubHandle(Running)` → `done`/`failed` |
+
+- **幂等 / 重启重接**：DB 中已存在非终结态 Handle 时，`runWriteTask` 经 `hb.Poll` 重接仍存活的 sidecar session 恢复 summary，绝不建第二个 session（杜绝「重复入队触发重复 sidecar session」）
+- **不可恢复**：session 工作区丢失（非 session 工作区重入会重新 clone）时标 `failed`，防空 PR
+- Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_builtin: true` 才降级 builtin
 
 Session 工作目录通过 `?directory=` + `X-Opencode-Directory` 绑定到 Gateway workspace（[archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。运维步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#opencode-sidecar可选-path-a)。
+
+### 双轨三：deliver 出站通知
+
+`deliver` 模块（2.3.3）为出站事件扇出（`webhook_url`）。两条执行轨的投递触发点不同，但语义一致——单次任务至多一次投递：
+
+| 轨道 | 触发点 | 实现 | 未配置 `deliverClient` 时行为 |
+|------|--------|------|-------------------------------|
+| hub | `mapHubResult` → `emitDeliver(backend, req)` | hub 后端显式请求投递（决定 Event/Channel） | WARN（配置错误：订阅者缺失） |
+| builtin | 各 Runner 返回 `*Result` 后 → `emitBuiltinDeliver(task, res)` | 从 task + Result 合成 `task_completed` 事件 | 静默 no-op（可选增强，非必需） |
+
+- hub 路径：后端返回的 `DeliverRequest` 决定投递内容，缺 `deliverClient` 视为配置错误
+- builtin 路径：可选 IM 通知（与 `config.full-example.yaml` 注释一致），未配置 `webhook_url` 时安静跳过
+- `deliver.*` 段已加入 `internal/config/keys.go` 热更新白名单（D 修复）：`deliver.webhook_url` / `deliver.timeout` / `deliver.max_retries` 支持运行时变更
+
+> **双轨状态小结**：Phase 2 三处双轨均已落地且测试通过。HubBackend 抽象（D1/D2/D9）、Hermes 读/回复三类 + 跨任务记忆（2.1）、OpenCode 三刀（2.2）、deliver 出站（2.3.3）构成可用产品主体；写任务双轨的 Handle 持久化（E-2）、deliver builtin 触发（S1）、deliver 热更新白名单（D）为合入前置修复。Harness / ToolBox 仍为阶段性悬空基础设施（见评审报告），暂未接入 Runner。

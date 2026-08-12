@@ -179,7 +179,7 @@
 
 - **S1**：builtin 路径补 deliver 调用，使文档注释与行为一致。
 - **S2**：SystemConfig.vue 补 Deliver Tab（仅 webhook_url/timeout/max_retries 三字段，MCP 可延后）。
-- **S3**：在 ARCHITECTURE.md 新增「当前执行双轨状态」说明，记录 Harness/ToolBox 将于 Phase 3 收敛的计划。
+- ~~**S3**：在 ARCHITECTURE.md 新增「当前执行双轨状态」说明，记录 Harness/ToolBox 将于 Phase 3 收敛的计划~~ → 已落地（见第八节）。
 - **S4**（可选）：Hermes Cancel endpoint 核实与接线。
 
 ---
@@ -219,7 +219,7 @@
 - **测试**：`internal/config` 包测试通过。
 
 ### 仍需合入后跟的（非阻塞）
-- ~~S1：builtin 路径补 `emitDeliver`（与文档语义一致）~~ → 已落地（见第七节）；S2：`SystemConfig.vue` 补 Deliver Tab；S3：`ARCHITECTURE.md` 记录双轨状态；S4：Hermes 真实 cancel endpoint 核实与接线。
+- ~~S1：builtin 路径补 `emitDeliver`（与文档语义一致）~~ → 已落地（见第七节）；S2：`SystemConfig.vue` 补 Deliver Tab；~~S3：`ARCHITECTURE.md` 记录双轨状态~~ → 已落地（见第八节）；S4：Hermes 真实 cancel endpoint 核实与接线。
 
 ---
 
@@ -242,3 +242,19 @@
 - 既有 `TestMapHubResultEmitsDeliver` / `TestMapHubResultNoDeliverClient` 仍 PASS，确认 hub 路径行为未变。
 
 **验证**：`go build ./...` ✅；`internal/agents`（emit/hub/opencode/abort/reattach 过滤子集）✅；`internal/deliver` 全包 ✅；`go vet ./internal/agents/` ✅。
+
+---
+
+## 八、S3 落地记录（2026-08-12）
+
+**问题**：Phase 2 引入 HubBackend「可插拔脑」抽象后，Matea 出现三处执行双轨（非写任务 hub/内置、写任务 builtin/hub-opencode、deliver 出站 hub/builtin），但 `docs/ARCHITECTURE.md` 仅有一节零散的 `OpenCode CodingBackend（可选 Path A）`，未系统记录双轨状态与 Harness/ToolBox 的悬空计划，后人易误判 D10/D11 已收敛（见 4.2 节建议）。
+
+**文件与改动**：`docs/ARCHITECTURE.md`
+- 将原「OpenCode CodingBackend（可选 Path A）」一节扩写为 **「Phase 2 — HubBackend 双轨架构」**，下含四个小节：
+  1. **HubBackend 抽象与持久化**：`HubBackend` 接口（Submit/Poll/Cancel）、`Handle` 持久化（`hub_handles` 表 + `SaveHubHandle`/`GetHubHandle`/`UpdateHubHandleStatus`）、重启重接（`ReattachHubHandles` / `FailOrphanedRunningTasksExceptHub`）、`IdempotencyKey` 去重；已实现后端表（`hub-hermes` / `hub-opencode`）。
+  2. **双轨一：非写任务**（analyze/review/interaction）——`ResolveHubExecution`/`ResolveHubOpenCode` 命中走 `runViaHub`（含 Handle 持久化 + 重启重接），否则走内置内部 loop；两路径互斥。
+  3. **双轨二：写任务**（solve_issue/fix_bug）——`builtin`（`ResolveCodingBackend`→`CodingBackend.Run`）与 `hub-opencode`（`ResolveHubOpenCode`→`runViaHub`）两条轨道均具备 Handle 持久化与重启恢复（E-2 修复后收敛）；含幂等重接（绝不建第二个 sidecar session）、不可恢复标 `failed`、Health 探活前置、`allow_fallback_builtin` 降级约束；保留 Session 工作目录 `?directory=` + `X-Opencode-Directory` 绑定与运维链接。
+  4. **双轨三：deliver 出站通知**——hub 路径 `mapHubResult`→`emitDeliver`（缺订阅者 WARN）与 builtin 路径 `emitBuiltinDeliver`（未配置静默 no-op）的触发点对照，单次任务至多一次投递；`deliver.*` 热更新白名单（D 修复）说明。
+- 章节末尾「双轨状态小结」明确：三处双轨均已落地且测试通过；Harness/ToolBox 仍为阶段性悬空基础设施（Phase 3 收敛），不构成误判。
+
+**验证**：纯文档变更，无代码改动；`go build ./...` 不受影响。评审报告 4.3 的 S3 建议项与本「仍需合入后跟」清单同步标记完成。
