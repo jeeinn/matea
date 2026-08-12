@@ -133,3 +133,29 @@ func TestRunViaHubNilDBNoPersistence(t *testing.T) {
 	assert.Equal(t, "ok", res.Content)
 	assert.Equal(t, 1, backend.submitCalls)
 }
+
+// TestRunViaHubAbortMarksHandleCanceled verifies E-1: when a hub run is aborted
+// (executor cancel / poll safety timeout) before reaching a terminal state,
+// abortHubRun marks the persisted Handle terminal (canceled). Without this, a
+// Matea restart would re-attach and re-run the orphaned hub task. The backend
+// here never reports a terminal state, so the poll loop drops into the
+// pollCtx.Done() branch and calls abortHubRun.
+func TestRunViaHubAbortMarksHandleCanceled(t *testing.T) {
+	db := newHubRunTestDB(t)
+	// Never-terminal poll outcome forces the loop into the cancel branch.
+	backend := &testHubBackend{name: "test-hub", pollState: StateRunning, pollRes: nil, pollErr: nil}
+	f := &RunnerFactory{db: db}
+
+	task := &store.Task{ID: 1, Repo: "o/r", IssueID: 1, TaskType: "analyze_issue"}
+	tc := &TaskContext{TaskType: "analyze_issue", Repo: "o/r", IssueID: 1, TaskID: 1, SandboxPath: t.TempDir()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate an executor-side abort before polling begins
+	_, err := f.runViaHub(ctx, task, &store.Agent{}, backend, tc)
+	require.Error(t, err, "aborted run must return an error")
+
+	h, gerr := db.GetHubHandle(1)
+	require.NoError(t, gerr)
+	require.NotNil(t, h, "handle must remain persisted after abort")
+	assert.Equal(t, store.HubHandleStatusCanceled, h.Status, "aborted run must mark handle canceled (E-1)")
+}

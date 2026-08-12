@@ -201,14 +201,14 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			// A cancelled/expired context surfaces as a transport error from
 			// Poll. Attribute it correctly and tell the hub to stop, instead
 			// of reporting it as a backend failure.
-			if pollCtx.Err() != nil {
-				return nil, abortHubRun(ctx, pollCtx, backend, handle)
-			}
+		if pollCtx.Err() != nil {
+			return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
+		}
 			return nil, fmt.Errorf("hub poll: %w", err)
 		}
 		select {
 		case <-pollCtx.Done():
-			return nil, abortHubRun(ctx, pollCtx, backend, handle)
+			return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
 		case <-time.After(hubPollInterval):
 		}
 	}
@@ -229,12 +229,17 @@ func (f *RunnerFactory) markHubHandleTerminal(taskID int64, status string) {
 // abortHubRun handles a hub run that must stop before reaching a terminal
 // state. It attributes the cause (executor cancel vs. task deadline vs. the
 // local poll safety timeout), asks the backend to stop the remote run on a
-// best-effort basis, and returns the resulting error.
+// best-effort basis, marks the persisted Handle terminal locally (so a
+// restart never re-attaches or re-submits this run), and returns the resulting
+// error.
 //
 // The Cancel call uses a fresh context: both ctx and pollCtx are already done
 // by the time we get here, so reusing them would make Cancel a guaranteed
-// no-op and leave the hub-side run orphaned.
-func abortHubRun(ctx, pollCtx context.Context, backend HubBackend, handle *Handle) error {
+// no-op and leave the hub-side run orphaned. Even when Cancel is a no-op on
+// the backend (e.g. Hermes' minimal contract has no cancel endpoint), marking
+// the Handle canceled here is what actually prevents a restart re-pickup of
+// the orphaned run (Phase 2 review Problem E-1).
+func abortHubRun(f *RunnerFactory, task *store.Task, ctx, pollCtx context.Context, backend HubBackend, handle *Handle) error {
 	cause := ctx.Err()
 	reason := "task cancelled by executor"
 	switch {
@@ -251,6 +256,11 @@ func abortHubRun(ctx, pollCtx context.Context, backend HubBackend, handle *Handl
 		log.Printf("[WARN] hub backend %q: cancel run %q failed after abort: %v",
 			backend.Name(), handle.RemoteID, err)
 	}
+
+	// Mark the Handle terminal so a Matea restart never re-attaches or
+	// re-submits this aborted run (the hub-side run may yet finish on its own,
+	// but Matea must not treat it as in-flight).
+	f.markHubHandleTerminal(task.ID, store.HubHandleStatusCanceled)
 
 	return fmt.Errorf("hub run aborted (%s): %w", reason, cause)
 }
