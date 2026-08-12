@@ -304,11 +304,13 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   `event/channel/thread_id/repo/issue_id/pr_id/action/content` → POST `deliver.webhook_url`。**无入站接收模块**（Hermes Poll / OpenCode 同步均不推完成事件）。
   ⚠️ 验收（2026-08-11）：新增 `internal/deliver` 包（Config/Event/Client，Emit 空 URL=no-op、2xx 成功、5xx/网络错误按 max_retries 退避重试、4xx 不重试）；`RunnerFactory` 加 `deliverClient` 字段 + `SetDeliverClient`（不改 `NewRunnerFactory` 签名，避免 ~30 处调用点破坏）；`mapHubResult` 从「忽略 res.Deliver」改为真正 `Emit`；`executor.SetGiteaClientFactory` 重建 factory 时一并注入（含 timeout 字符串解析）；`main.go` 接 `d.SetDeliverConfig(activeCfg.Deliver)`；`config.schema.go` 加 `DeliverConfig`，`config.example.yaml`/`config.full-example.yaml` 加 `deliver:` 块。测试：`deliver_test.go`（5 例）+ `agents/deliver_wiring_test.go`（hub 返回 DeliverRequest 真 POST 到 httptest 且字段正确 / 无客户端不 panic）全 PASS。
 
-- [ ] 2.3.4 配置 `deliver.webhook_url`：可指向用户自建 IM bridge 或 Hub 接收端
+- [x] 2.3.4 配置 `deliver.webhook_url`：可指向用户自建 IM bridge 或 Hub 接收端
   Hermes 自带渠道时可选不配；OpenCode 无 IM 时必配（2.2.4）。
+  ✅ 已完成（2026-08-12，S2）：`SystemConfig.vue` 新增「Deliver」Tab，可配置 `deliver.webhook_url` / `deliver.timeout` / `deliver.max_retries` 三字段（复用 `saveAll()` → `PUT /api/config`；空字符串自动跳过，对应「未配置=关闭」语义）。后端 `internal/config/keys.go` 白名单（D 修复）已含此三键，配置可持久化并热更新。前端已 `npm run build` 并经 `go build ./...` 嵌入最新 UI。
 
 - [ ] 2.3.5 系统配置页增加 MCP + Deliver 配置块（评审新增，工作量小）
   SystemConfig 新增「MCP Server」Tab（enable + listen + auth）与「Deliver」Tab（webhook_url）。即便 2.3.1 可选，配置块保留以便启用。
+  🔶 进度（2026-08-12，S2）：「Deliver」Tab 已落地（webhook_url/timeout/max_retries 三字段，见 2.3.4）。「MCP Server」Tab **未做**——2.3.1（MCP Server 实现）仍为可选且未落地，后端无 `mcp.*` schema，做 UI 即无后端支撑的死 UI；待 2.3.1 落定后再补对应 Tab 与 keys.go 白名单。
 
 - [ ] 2.3.6 飞书/企微/钉钉等渠道**不自研 SDK**，通过 Hub 或用户自配 bridge 解决
   文档给出推荐拓扑。

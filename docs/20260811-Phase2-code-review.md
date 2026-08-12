@@ -258,3 +258,30 @@
 - 章节末尾「双轨状态小结」明确：三处双轨均已落地且测试通过；Harness/ToolBox 仍为阶段性悬空基础设施（Phase 3 收敛），不构成误判。
 
 **验证**：纯文档变更，无代码改动；`go build ./...` 不受影响。评审报告 4.3 的 S3 建议项与本「仍需合入后跟」清单同步标记完成。
+
+---
+
+## 九、S2 / 2.3.4–2.3.5 落地记录（2026-08-12）
+
+**问题**：评审 4.3 建议 S2 = `SystemConfig.vue` 补 Deliver Tab，使 `deliver.webhook_url` 等三字段可在 UI 配置（对应 TASKS 2.3.4「配置 deliver.webhook_url」与 2.3.5「系统配置页增加 … Deliver 配置块」）。此前 deliver 模块（2.3.3）已实现出站，`internal/config/keys.go` 白名单（D 修复）已含三键，但**唯一缺失的是前端配置入口**——用户只能在 YAML 里手写 `deliver:` 块。
+
+**文件与改动**：`web/src/views/SystemConfig.vue`
+- 在「调试」页签之后、「Prompt 模板」页签之前，新增 **「Deliver」页签**（`el-tab-pane name="deliver"`），含三个字段：
+  - `deliver.webhook_url`：`el-input`，占位符给出企业微信/飞书/钉钉机器人 Webhook 与自建 Hub 接收端示例；留空 = 关闭通知。
+  - `deliver.timeout`：`el-input`，占位符 `10s（Go duration，默认 10s）`。
+  - `deliver.max_retries`：`el-input-number`，`:min="0" :max="10"`，0 = 仅尝试一次（默认）。
+  - 三字段均复用既有 `form['key']` + `saveAll()` → `PUT /api/config` 机制；空字符串自动跳过（对应「未配置 = 关闭」语义）；各带 `sourceTag` 来源标签（数据库/配置文件）。
+- 复用既有 `saveAll()` 的「空字符串跳过」逻辑，无需新增 API。
+
+**验证**：
+- `web/`：`npm run build` ✅（vite + fix-embed 重命名 `_` 前缀资源，`SystemConfig` chunk 48.32 kB 正常产出；`@vueuse/core` 的 `/* #__PURE__ */` 位置告警与 chunk size 告警均无害）。
+- `go build ./...` ✅：新 `web/dist` 已通过 `//go:embed web/dist/*` 嵌入二进制。
+- 前端无独立测试套件；改动复用既有 `saveAll()` 路径（已有行为），风险面仅限新增模板片段，构建通过即主信号。
+
+**TASKS.md 勾选结果（诚实口径）**：
+- **2.3.4 → [x]**：`deliver.webhook_url` 现已可在 SystemConfig UI 配置，且后端 keys.go 白名单（D 修复）保证可持久化/热更新，满足「可指向 IM bridge / Hub 接收端」。
+- **2.3.5 → 保留 [ ]**：本轮仅交付「Deliver」Tab；「MCP Server」Tab **未做**——2.3.1（MCP Server 实现）仍为可选且未落地，后端无 `mcp.*` schema，提前做 UI 即无后端支撑的死 UI。故 2.3.5 仍标记未完整完成，待 2.3.1 落定后补对应 Tab 与 keys.go 白名单。
+
+**待跟（非阻塞）**：
+- 2.3.5 的「MCP Server」Tab：待 2.3.1 决策落地后补。
+- **S4（可选）**：Hermes 真实 cancel endpoint 核实与接线（当前 `Cancel` 仍为 best-effort no-op，但 E-1 已保证 Matea 侧 Handle 终态正确，孤儿 run 问题已规避）。
