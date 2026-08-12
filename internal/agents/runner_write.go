@@ -259,6 +259,7 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	if opencodeHandle != nil {
 		factory.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 	}
+	factory.emitBuiltinDeliver(task, finalResult)
 	return finalResult, nil
 }
 

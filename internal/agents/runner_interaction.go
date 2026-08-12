@@ -187,8 +187,10 @@ func (r *InteractionRunner) runSingleShotReply(ctx context.Context, task *store.
 	log.Printf("[INFO] Task %d LLM response: %d tokens used", task.ID, resp.Usage.TotalTokens)
 	r.factory.recordTaskUsage(task.ID, agent.Provider, agent.Model, resp.Usage)
 
-	return &Result{
+	res := &Result{
 		Content: resp.Content,
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }

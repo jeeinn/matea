@@ -296,11 +296,6 @@ func (f *RunnerFactory) mapHubResult(backend HubBackend, res *BackendResult) *Re
 // When no deliver client is configured (webhook_url empty), the request is
 // logged and dropped so a misconfiguration fails visibly rather than silently.
 func (f *RunnerFactory) emitDeliver(backend HubBackend, d *DeliverRequest) {
-	if f.deliverClient == nil {
-		log.Printf("[WARN] hub backend %q returned a deliver request (event=%q channel=%q) but no deliver client is configured (deliver.webhook_url empty); dropping",
-			backend.Name(), d.Event, d.Channel)
-		return
-	}
 	e := deliver.Event{
 		Event:    d.Event,
 		Channel:  d.Channel,
@@ -311,13 +306,52 @@ func (f *RunnerFactory) emitDeliver(backend HubBackend, d *DeliverRequest) {
 		Action:   d.Action,
 		Content:  d.Content,
 	}
-	if err := f.deliverClient.Emit(context.Background(), e); err != nil {
-		log.Printf("[WARN] deliver emit failed (backend=%q event=%q channel=%q): %v",
-			backend.Name(), d.Event, d.Channel, err)
+	// Hub backends explicitly request delivery, so a missing subscriber is a
+	// misconfiguration worth surfacing (warnIfMissing=true).
+	f.emitDeliverEvent(backend.Name(), e, true)
+}
+
+// emitBuiltinDeliver fans out a builtin task's completion as a deliver event
+// (task 2.3.3). Unlike the hub path, the builtin runner produces no
+// DeliverRequest, so we synthesize one from the task + Result. Delivery is
+// optional: when no webhook subscriber is configured (deliver.webhook_url
+// empty) this is a silent no-op, so builtin tasks never warn on every run.
+func (f *RunnerFactory) emitBuiltinDeliver(task *store.Task, res *Result) {
+	if f.deliverClient == nil {
 		return
 	}
-	log.Printf("[INFO] deliver event %q fanned out to channel %q via webhook (backend=%q)",
-		d.Event, d.Channel, backend.Name())
+	e := deliver.Event{
+		Event:   "task_completed",
+		Repo:    task.Repo,
+		IssueID: task.IssueID,
+		PRID:    task.PRID,
+		Action:  res.Action,
+		Content: res.Content,
+	}
+	f.emitDeliverEvent("builtin", e, false)
+}
+
+// emitDeliverEvent fans out a deliver.Event to the configured webhook (task
+// 2.3.3). Best-effort: failure is logged, never fatal. When no deliver client
+// is configured, warnIfMissing controls whether the drop is surfaced — hub
+// backends explicitly request delivery (a missing subscriber is a
+// misconfiguration worth surfacing), while the builtin path treats delivery
+// as optional and stays silent.
+func (f *RunnerFactory) emitDeliverEvent(source string, e deliver.Event, warnIfMissing bool) {
+	if f.deliverClient == nil {
+		if warnIfMissing {
+			log.Printf("[WARN] source %q produced a deliver event (event=%q channel=%q) but no deliver client is configured (deliver.webhook_url empty); dropping",
+				source, e.Event, e.Channel)
+		}
+		return
+	}
+	if err := f.deliverClient.Emit(context.Background(), e); err != nil {
+		log.Printf("[WARN] deliver emit failed (source=%q event=%q channel=%q): %v",
+			source, e.Event, e.Channel, err)
+		return
+	}
+	log.Printf("[INFO] deliver event %q fanned out to channel %q via webhook (source=%q)",
+		e.Event, e.Channel, source)
 }
 
 // toCommentSnapshots converts Gitea issue/PR comments into the serializable

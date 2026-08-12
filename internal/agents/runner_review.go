@@ -179,10 +179,12 @@ func (r *ReviewRunner) Run(ctx context.Context, task *store.Task, agent *store.A
 	log.Printf("[INFO] Task %d LLM response: %d tokens used", task.ID, resp.Usage.TotalTokens)
 	r.factory.recordTaskUsage(task.ID, agent.Provider, agent.Model, resp.Usage)
 
-	return &Result{
+	res := &Result{
 		Content: resp.Content,
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }
 
 // runSingleShotReview is the fallback single-shot LLM review used when the
@@ -225,8 +227,10 @@ func (r *ReviewRunner) runSingleShotReview(ctx context.Context, task *store.Task
 	log.Printf("[INFO] Task %d LLM response: %d tokens used", task.ID, resp.Usage.TotalTokens)
 	r.factory.recordTaskUsage(task.ID, agent.Provider, agent.Model, resp.Usage)
 
-	return &Result{
+	res := &Result{
 		Content: resp.Content,
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }

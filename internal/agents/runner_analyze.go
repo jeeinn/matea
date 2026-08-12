@@ -160,10 +160,12 @@ func (r *AnalyzeRunner) runSingleShot(ctx context.Context, task *store.Task, age
 	log.Printf("[INFO] Task %d LLM response: %d tokens used", task.ID, resp.Usage.TotalTokens)
 	r.factory.recordTaskUsage(task.ID, agent.Provider, agent.Model, resp.Usage)
 
-	return &Result{
+	res := &Result{
 		Content: appendAnalysisLandingNote(resp.Content),
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }
 
 // runAnalyzeLoop runs a short read-only AgentLoop on a prepared workspace.
@@ -262,8 +264,10 @@ func (r *AnalyzeRunner) runAnalyzeLoop(ctx context.Context, task *store.Task, ag
 
 	log.Printf("[INFO] Task %d analyze loop completed", task.ID)
 
-	return &Result{
+	res := &Result{
 		Content: appendAnalysisLandingNote(result),
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }

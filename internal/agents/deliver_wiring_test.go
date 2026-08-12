@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jeeinn/matea/internal/deliver"
+	"github.com/jeeinn/matea/internal/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,4 +73,48 @@ func TestMapHubResultNoDeliverClient(t *testing.T) {
 	out := f.mapHubResult(backend, res)
 	require.NotNil(t, out)
 	assert.Equal(t, "ok", out.Content)
+}
+
+// TestEmitBuiltinDeliver verifies the builtin (non-hub) runner path also fans
+// a completion event out to the configured webhook (Phase 2 review S1). Before
+// this, builtin tasks never triggered deliver, so a configured webhook_url
+// looked broken for analyze/review/reply/write tasks.
+func TestEmitBuiltinDeliver(t *testing.T) {
+	var mu sync.Mutex
+	var got deliver.Event
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hits++
+		_ = json.Unmarshal(body, &got)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := &RunnerFactory{}
+	f.SetDeliverClient(deliver.New(deliver.Config{WebhookURL: srv.URL}))
+
+	f.emitBuiltinDeliver(&store.Task{Repo: "o/r", IssueID: 7, PRID: 12}, &Result{Content: "analysis summary", Action: "comment"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, hits, "webhook must be POSTed exactly once")
+	assert.Equal(t, "task_completed", got.Event)
+	assert.Equal(t, "o/r", got.Repo)
+	assert.Equal(t, 7, got.IssueID)
+	assert.Equal(t, 12, got.PRID)
+	assert.Equal(t, "comment", got.Action)
+	assert.Equal(t, "analysis summary", got.Content)
+}
+
+// TestEmitBuiltinDeliverNoClient must not panic and must stay silent (no
+// webhook POST) when no deliver client is configured — builtin delivery is
+// optional, unlike the hub path which warns on a missing subscriber.
+func TestEmitBuiltinDeliverNoClient(t *testing.T) {
+	f := &RunnerFactory{} // deliverClient nil
+	require.NotPanics(t, func() {
+		f.emitBuiltinDeliver(&store.Task{Repo: "o/r", IssueID: 1}, &Result{Content: "x", Action: "comment"})
+	})
 }
