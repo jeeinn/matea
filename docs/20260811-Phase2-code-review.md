@@ -219,4 +219,26 @@
 - **测试**：`internal/config` 包测试通过。
 
 ### 仍需合入后跟的（非阻塞）
-- S1：builtin 路径补 `emitDeliver`（与文档语义一致）；S2：`SystemConfig.vue` 补 Deliver Tab；S3：`ARCHITECTURE.md` 记录双轨状态；S4：Hermes 真实 cancel endpoint 核实与接线。
+- ~~S1：builtin 路径补 `emitDeliver`（与文档语义一致）~~ → 已落地（见第七节）；S2：`SystemConfig.vue` 补 Deliver Tab；S3：`ARCHITECTURE.md` 记录双轨状态；S4：Hermes 真实 cancel endpoint 核实与接线。
+
+---
+
+## 七、S1 落地记录（2026-08-12）
+
+**问题**：`config.full-example.yaml` 注释写"builtin — 可选 IM 通知按需"，但实际 builtin 执行路径（`runAnalyzeLoop` / `runSingleShot` / `ReviewRunner.Run` 内联返回 / `runSingleShotReview` / `runSingleShotReply` / `runWriteTask` finalize 成功）**完全没有** `emitDeliver` 调用点。用户配了 `deliver.webhook_url` 后 builtin 任务无通知，误以为 deliver 模块坏了。hub 路径经 `mapHubResult` 已触发，唯独 builtin 这条腿没接上。
+
+**文件与改动**：
+- `internal/agents/hub_run.go`：重构 `emitDeliver` 为共享私有方法 `emitDeliverEvent(source, e, warnIfMissing)`；新增 `emitBuiltinDeliver(task *store.Task, res *Result)`——从 `task`（Repo/IssueID/PRID）+ `*Result`（Action/Content）合成 `deliver.Event{Event:"task_completed", ...}`。
+  - **未配置 `deliverClient` 时静默 no-op**（不刷 WARN），与 hub 路径区分：hub 显式请求投递，缺失订阅者是配置错误需告警；builtin 投递是可选增强，未配置则安静跳过。
+- `internal/agents/runner_analyze.go`：`runAnalyzeLoop` 与 `runSingleShot` 两处内置返回点均接入；
+- `internal/agents/runner_review.go`：`ReviewRunner.Run` 内联返回与 `runSingleShotReview` 返回（两处文本相同，统一替换）接入；
+- `internal/agents/runner_interaction.go`：`runSingleShotReply` 返回接入；
+- `internal/agents/runner_write.go`：`runWriteTask` 在 `finalizeWriteChanges` 成功后接入（覆盖 builtin 与 hub-opencode 写任务，二者均不经 `runViaHub`，故不重复触发）。
+- **不重复触发保证**：hub 读/回复路径经 `runViaHub`→`mapHubResult`→`emitDeliver` 发出；builtin 路径经上述返回点发。两条路径互斥，单次任务至多一次投递。写任务无论后端都走 `finalizeWriteChanges`，仅此一处发出。
+
+**测试**：
+- 新增 `TestEmitBuiltinDeliver`：配置 `deliver.New(WebhookURL=httptest)` 后调用，断言 webhook 恰好 POST 一次，且 `Event=task_completed` / `Repo` / `IssueID` / `PRID` / `Action` / `Content` 正确透传；
+- 新增 `TestEmitBuiltinDeliverNoClient`：未配置 `deliverClient` 时调用不 panic、静默跳过；
+- 既有 `TestMapHubResultEmitsDeliver` / `TestMapHubResultNoDeliverClient` 仍 PASS，确认 hub 路径行为未变。
+
+**验证**：`go build ./...` ✅；`internal/agents`（emit/hub/opencode/abort/reattach 过滤子集）✅；`internal/deliver` 全包 ✅；`go vet ./internal/agents/` ✅。
