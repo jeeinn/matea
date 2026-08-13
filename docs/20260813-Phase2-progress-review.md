@@ -158,7 +158,51 @@ go test ./... -count=1    ✅ 17/17 包 PASS（含 agents 60s、store 30s、inte
 
 ---
 
-## 七、全量测试阶段复查：发现并修复 2 处缺陷（2026-08-13）
+## 七、全量测试结论（2026-08-13 晚）
+
+### 7.1 运行方式
+- 命令：`go test ./... -count=1`
+- 环境：**关闭沙箱**（用户授权完全本地访问，拿真实 git 环境）；后台运行（task `IxnwST`），完整跑完。
+- 工作区状态：干净，分支 `phase2/hub-ecosystem`，最新提交含 2.4.3 `pr_merged`、`dispatcher.deliverClient` 原子化（F-2）、deliver 热更新运行时生效（F-1）等。
+
+### 7.2 结果：EXIT=0，全绿
+
+| 包 | 结果 | 耗时 |
+|----|------|------|
+| internal/agent | ok | 5.1s |
+| internal/agents | ok | 51.5s |
+| internal/agents/backends/hermes | ok | 1.1s |
+| internal/api | ok | 10.3s |
+| internal/auth | ok | 0.7s |
+| internal/config | ok | 0.2s |
+| internal/deliver | ok | 2.1s |
+| internal/dispatcher | ok | 18.2s |
+| internal/gitea | ok | 0.1s |
+| internal/ingress/gitea | ok | 0.3s |
+| internal/llm | ok | 1.2s |
+| internal/logging | ok | 0.2s |
+| internal/mcp | ok | 0.1s |
+| internal/sandbox | ok | 21.2s |
+| internal/store | ok | 27.6s |
+| internal/workflow | ok | 29.5s |
+| tests/integration | ok | 46.3s |
+| github.com/jeeinn/matea（根包） | no test files | — |
+
+**19 个包：18 ok + 1 no-test-files，零 FAIL、零 panic。**
+
+### 7.3 关键结论
+1. **「9 个 Windows git 环境失败」是沙箱产物，非代码问题。** 此前在 Windows 沙箱下跑完整 `internal/agents/...` 与 `tests/integration` 会因 git 环境（`git rev-parse` exit 128）被拦截致进程被杀；拿到真实 git 环境（关闭沙箱）后，之前被拦截的 `agents`/`integration`/`sandbox`/`store`/`workflow` **全部通过**。即该现象是环境问题，与 Phase 2 代码改动无关。
+2. **Phase 2 必做代码项经全量测试验证无回归。** 含 2.4.3 `pr_merged`、P0 前置 E-1/E-2/D、S1 builtin `emitDeliver`、S2 Deliver Tab、S3 ARCHITECTURE 双轨、2.3.4 deliver 配置等，均随对应包测试通过。
+3. **工具层注意（长时前台命令会被截杀）**：前台重跑 `go test ./...` 会在约 51s（`internal/agent` 完成后）被工具进程杀（输出丢失、退出码 1）——**非测试失败**，系工具对长时前台命令的截断。完整套件应走 `run_in_background`，勿前台跑；权威结果以后台完整跑完的 `EXIT=0` 为准。
+
+### 7.4 收尾状态
+- Phase 2 产品主体 + 评审发现项（E-1/E-2/D/S1/S2/S3/2.4.3）均已代码落地且经全量测试验证。
+- 非阻塞剩余项：2.4.1/2.4.2（飞书用户流，需真实 Hermes 实例人工验收）、S4（Hermes 真实 cancel endpoint 核实）、2.3.1/2.3.2/MCP Tab（已决策本期延迟）。
+- 后续建议：补 CHANGELOG `Unreleased` 条目后合入 master；Phase 3 第一刀为 Harness 接线（`builtin analyze` 切 `RunTurn`）。
+
+---
+
+## 八、全量测试阶段复查：发现并修复 2 处缺陷（2026-08-13）
 
 pr_merged 落地后经复查，实现本身与声明一致（常量 / dispatcher 层 emit / 三测试均真实有效），但复查暴露出 **D 修复（deliver 热更新）链路上的两处遗留缺陷**——均非本轮 pr_merged 新引入，而是 2.3.3/D 修复时遗留：
 
