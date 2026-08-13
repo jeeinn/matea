@@ -50,6 +50,15 @@ type Event struct {
 	Content  string `json:"content"`
 }
 
+// Event types fanned out by Matea. task_completed is emitted by runners when a
+// task finishes; pr_merged is emitted by the dispatcher when a PR is merged —
+// the merge webhook never reaches a runner, so it is handled at the
+// lifecycle/dispatcher layer (task 2.4.3).
+const (
+	EventTaskCompleted = "task_completed"
+	EventPrMerged      = "pr_merged"
+)
+
 // Client emits Events to the configured webhook. A Client built from a Config
 // with an empty WebhookURL is disabled and its Emit is a no-op.
 type Client struct {

@@ -321,7 +321,7 @@ func (f *RunnerFactory) emitBuiltinDeliver(task *store.Task, res *Result) {
 		return
 	}
 	e := deliver.Event{
-		Event:   "task_completed",
+		Event:   deliver.EventTaskCompleted,
 		Repo:    task.Repo,
 		IssueID: task.IssueID,
 		PRID:    task.PRID,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
@@ -34,6 +35,10 @@ type Dispatcher struct {
 	sessionSvc *workflow.SessionService
 	wfPolicy   *workflow.WorkflowPolicy
 	lifecycle  *workflow.SessionLifecycle
+
+	// deliverClient fans out lifecycle-side outbound events (task 2.4.3),
+	// e.g. pr_merged when a PR is merged. nil = delivery disabled.
+	deliverClient *deliver.Client
 
 	// In-flight lock: prevents concurrent tasks on the same (repo, issue)
 	inFlight sync.Map // map[string]bool — key is "repo#issueID"
@@ -119,11 +124,15 @@ func (d *Dispatcher) SetModelMetaProvider(m agents.ModelMetaProvider) {
 }
 
 // SetDeliverConfig updates the outbound deliver configuration (task 2.3.3).
-// Applied immediately to the live executor / runner factory.
+// Applied immediately to the live executor / runner factory, and to the
+// dispatcher's own client used to fan out lifecycle events (pr_merged).
 func (d *Dispatcher) SetDeliverConfig(cfg config.DeliverConfig) {
 	if d.executor != nil {
 		d.executor.SetDeliverConfig(cfg)
 	}
+	// The dispatcher itself also needs a client to fan out lifecycle events
+	// (pr_merged). Reuse the same builder as the executor (same package).
+	d.deliverClient = buildDeliverClient(cfg)
 }
 
 // SetGiteaConfig updates Gitea settings used for admin clients / writeback (hot reload).

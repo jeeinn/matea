@@ -322,7 +322,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [ ] 2.4.1 飞书用户「帮我看看 issue #12」 → Hermes 经 runs API 查 Gitea 上下文（若 MCP 落地则 `matea_get_issue_status`）→ 回飞书
 - [ ] 2.4.2 飞书用户「让 AI 改」 → Hermes `matea_assign_agent`（或 Matea HTTP API）→ Matea 执行 → 写回 Gitea
-- [ ] 2.4.3 PR 合并后，Matea deliver 出站事件 → 用户飞书（经 outbound deliver 或 Hermes gateway `deliver` 回传）
+- [x] 2.4.3 PR 合并后，Matea deliver 出站事件 → 用户飞书（经 outbound deliver 或 Hermes gateway `deliver` 回传）
+  🔶 进度（2026-08-13）：代码路径已落地——`dispatcher.handleLifecycleEvent` 在 `OnPRClosed(merged=true)` 后经 `emitPrMerged` 发出 `pr_merged` 事件（deliver 包新增 `EventPrMerged` 常量；deliver 客户端由 `Dispatcher.SetDeliverConfig` 复用 `buildDeliverClient` 构建；未配置 `webhook_url` 静默 no-op）。跨系统「Hermes gateway `deliver` 回传飞书」腿仍需真实 Hermes 实例人工验收（属 2.4 跨系统部分，不阻塞本期）。
 - [ ] 2.4.4 Gitea Assign `@matea-coder`（backend=hub-opencode）→ OpenCode 执行 → 结果写回 Gitea
 
 ---

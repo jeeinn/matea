@@ -1,10 +1,12 @@
 package dispatcher
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
 
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
@@ -277,6 +279,13 @@ func (d *Dispatcher) handleLifecycleEvent(result *workflow.ResolveResult, repo s
 			if err := d.lifecycle.OnPRClosed(repo, result.PRID, result.IssueID, result.Merged); err != nil {
 				log.Printf("[WARN] PR lifecycle error: %v", err)
 			}
+			// PR merged → fan out a deliver event (task 2.4.3). The merge
+			// webhook never reaches a runner, so the completion-style
+			// task_completed event cannot cover it; emit it here instead.
+			// A nil/disabled client is a silent no-op.
+			if result.Merged {
+				d.emitPrMerged(repo, result.PRID, result.IssueID)
+			}
 		} else if result.IssueID > 0 {
 			// Issue closed
 			if err := d.lifecycle.OnIssueClosed(repo, result.IssueID); err != nil {
@@ -285,4 +294,27 @@ func (d *Dispatcher) handleLifecycleEvent(result *workflow.ResolveResult, repo s
 		}
 	}
 	return true
+}
+
+// emitPrMerged fans out a deliver event when a PR is merged. task_completed
+// (task finish) is emitted by the runners; pr_merged is the lifecycle-side
+// counterpart emitted here because the merge event never reaches a runner.
+// Safe to call with a nil/disabled deliver client (no-op).
+func (d *Dispatcher) emitPrMerged(repo string, prID, issueID int) {
+	if d.deliverClient == nil {
+		return
+	}
+	e := deliver.Event{
+		Event:   deliver.EventPrMerged,
+		Repo:    repo,
+		PRID:    prID,
+		IssueID: issueID,
+		Action:  "notify",
+		Content: fmt.Sprintf("PR %s#%d merged", repo, prID),
+	}
+	if err := d.deliverClient.Emit(context.Background(), e); err != nil {
+		log.Printf("[WARN] deliver emit (pr_merged) failed for %s#%d: %v", repo, prID, err)
+		return
+	}
+	log.Printf("[INFO] deliver event pr_merged fanned out for %s#%d", repo, prID)
 }

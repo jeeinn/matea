@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
@@ -379,4 +381,116 @@ func TestTaskQueuePersistence(t *testing.T) {
 	}
 
 	t.Logf("Task persistence and recovery working correctly")
+}
+
+// mockDeliverServer returns an httptest server that records the last delivered
+// event body, plus a channel to await receipt.
+func mockDeliverServer(t *testing.T) (*httptest.Server, *deliver.Event, chan struct{}) {
+	t.Helper()
+	var mu sync.Mutex
+	var got deliver.Event
+	received := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e deliver.Event
+		if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		got = e
+		mu.Unlock()
+		received <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &got, received
+}
+
+// TestHandleLifecycleEventPrMergedEmits verifies task 2.4.3: when a PR is
+// merged, the dispatcher fans out a pr_merged deliver event.
+func TestHandleLifecycleEventPrMergedEmits(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	srv, got, received := mockDeliverServer(t)
+
+	giteaCfg := &config.GiteaConfig{URL: "http://localhost:0"}
+	dispatcherCfg := &config.DispatcherConfig{MaxConcurrent: 1, QueueSize: 10}
+	sandboxCfg := sandbox.DefaultConfig()
+	d := NewDispatcher(db, giteaCfg, dispatcherCfg, nil, nil, sandboxCfg, config.DefaultMCPConfig())
+
+	// Real lifecycle (issueID 0 → no context archive; merged → schedules
+	// workspace deletion which is harmless on a temp db).
+	lifecycle := workflow.NewSessionLifecycle(db, nil, workflow.NewSessionService(db, t.TempDir()), nil, t.TempDir())
+	d.SetDeliverConfig(config.DeliverConfig{WebhookURL: srv.URL})
+	d.SetWorkflowComponents(nil, nil, nil, nil, workflow.NewSessionService(db, t.TempDir()), nil, lifecycle)
+
+	d.handleLifecycleEvent(&workflow.ResolveResult{
+		PRID:      42,
+		IssueID:   0,
+		Merged:    true,
+		Lifecycle: "archive",
+	}, "owner/repo")
+
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pr_merged deliver event")
+	}
+
+	if got.Event != deliver.EventPrMerged {
+		t.Errorf("expected event %q, got %q", deliver.EventPrMerged, got.Event)
+	}
+	if got.PRID != 42 {
+		t.Errorf("expected PRID 42, got %d", got.PRID)
+	}
+	if got.Repo != "owner/repo" {
+		t.Errorf("expected repo owner/repo, got %q", got.Repo)
+	}
+}
+
+// TestHandleLifecycleEventPrClosedNoEmit verifies that a PR closed without merge
+// does NOT emit a deliver event.
+func TestHandleLifecycleEventPrClosedNoEmit(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	srv, _, received := mockDeliverServer(t)
+
+	giteaCfg := &config.GiteaConfig{URL: "http://localhost:0"}
+	dispatcherCfg := &config.DispatcherConfig{MaxConcurrent: 1, QueueSize: 10}
+	sandboxCfg := sandbox.DefaultConfig()
+	d := NewDispatcher(db, giteaCfg, dispatcherCfg, nil, nil, sandboxCfg, config.DefaultMCPConfig())
+
+	lifecycle := workflow.NewSessionLifecycle(db, nil, workflow.NewSessionService(db, t.TempDir()), nil, t.TempDir())
+	d.SetDeliverConfig(config.DeliverConfig{WebhookURL: srv.URL})
+	d.SetWorkflowComponents(nil, nil, nil, nil, workflow.NewSessionService(db, t.TempDir()), nil, lifecycle)
+
+	d.handleLifecycleEvent(&workflow.ResolveResult{
+		PRID:      42,
+		IssueID:   0,
+		Merged:    false,
+		Lifecycle: "archive",
+	}, "owner/repo")
+
+	select {
+	case <-received:
+		t.Fatal("unexpected deliver event for PR closed without merge")
+	case <-time.After(500 * time.Millisecond):
+		// expected: no event
+	}
+}
+
+// TestEmitPrMergedNilClientNoop verifies a nil/disabled deliver client is a
+// silent no-op (no panic, no emit).
+func TestEmitPrMergedNilClientNoop(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	giteaCfg := &config.GiteaConfig{URL: "http://localhost:0"}
+	dispatcherCfg := &config.DispatcherConfig{MaxConcurrent: 1, QueueSize: 10}
+	sandboxCfg := sandbox.DefaultConfig()
+	d := NewDispatcher(db, giteaCfg, dispatcherCfg, nil, nil, sandboxCfg, config.DefaultMCPConfig())
+	// No SetDeliverConfig → deliverClient nil.
+	d.emitPrMerged("owner/repo", 7, 0)
 }
