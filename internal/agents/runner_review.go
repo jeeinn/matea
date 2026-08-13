@@ -70,6 +70,7 @@ func (r *ReviewRunner) Run(ctx context.Context, task *store.Task, agent *store.A
 
 		res, err := r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "review",
 			Backend:      hb.Name(),
 			Repo:         task.Repo,
@@ -136,6 +137,7 @@ func (r *ReviewRunner) Run(ctx context.Context, task *store.Task, agent *store.A
 	if hb, ok := r.factory.ResolveHubExecution(agent); ok {
 		return r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "review",
 			Backend:      hb.Name(),
 			Repo:         task.Repo,

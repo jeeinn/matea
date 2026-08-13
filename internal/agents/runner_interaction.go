@@ -84,6 +84,7 @@ func (r *InteractionRunner) Run(ctx context.Context, task *store.Task, agent *st
 	if viaHub {
 		return r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "interaction",
 			Backend:      hb.Name(),
 			Repo:         task.Repo,
@@ -114,6 +115,7 @@ func (r *InteractionRunner) Run(ctx context.Context, task *store.Task, agent *st
 		defer wwc.Sandbox.Cleanup()
 		res, err := r.factory.runViaHub(ctx, task, agent, ocHB, &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "interaction",
 			Backend:      ocHB.Name(),
 			Repo:         task.Repo,

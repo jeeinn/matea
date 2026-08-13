@@ -52,6 +52,7 @@ func (r *AnalyzeRunner) Run(ctx context.Context, task *store.Task, agent *store.
 	if hb, ok := r.factory.ResolveHubExecution(agent); ok {
 		tc := &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "analyze",
 			Backend:      hb.Name(),
 			Repo:         task.Repo,
@@ -93,6 +94,7 @@ func (r *AnalyzeRunner) Run(ctx context.Context, task *store.Task, agent *store.
 
 		res, err := r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
 			TaskType:     task.TaskType,
+			TaskID:       task.ID,
 			Role:         "analyze",
 			Backend:      hb.Name(),
 			Repo:         task.Repo,
