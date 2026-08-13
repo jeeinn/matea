@@ -296,9 +296,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   📌 降级原因：Matea↔Hermes 主链路为 HTTP Runs API，人类渠道由 Hermes gateway `deliver`（feishu/wecom 原生）承担；2.4 验收不依赖 MCP Server。
   ⚠️ **不可复用现有代码**：`internal/agent/tools_mcp.go` 是 MCP **Client**（Matea 消费外部 MCP），此处需要的是 MCP **Server**（Matea 暴露工具），方向相反，属全新实现，工作量按「从零起」计。
   📌 若落地，暴露的工具集须遵循 2.0.3 分层策略（Gitea 读侧 + 网关级 skill script；沙箱类默认不给）。
+  🔶 决策（2026-08-13）：本期（phase2/hub-ecosystem 收尾）**不做，向后延迟至后续周期**。理由：MCP Server 为可选项（降级原因已说明 2.4 验收不依赖），且实现需从零起步（Server 与现有 Client 反向），投入产出比低；不影响 Phase 2 主进度与全量测试。
 
 - [ ] 2.3.2 （可选）MCP 入站鉴权：API Key 或 mTLS
   默认仅监听 localhost，公网配合反向代理。
+  🔶 决策（2026-08-13）：随 2.3.1 一并**向后延迟**；2.3.1 不做则本项无承载对象。
 
 - [x] 2.3.3 实现 `deliver` 模块：**仅出站事件扇出**
   `event/channel/thread_id/repo/issue_id/pr_id/action/content` → POST `deliver.webhook_url`。**无入站接收模块**（Hermes Poll / OpenCode 同步均不推完成事件）。
@@ -310,10 +312,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [ ] 2.3.5 系统配置页增加 MCP + Deliver 配置块（评审新增，工作量小）
   SystemConfig 新增「MCP Server」Tab（enable + listen + auth）与「Deliver」Tab（webhook_url）。即便 2.3.1 可选，配置块保留以便启用。
-  🔶 进度（2026-08-12，S2）：「Deliver」Tab 已落地（webhook_url/timeout/max_retries 三字段，见 2.3.4）。「MCP Server」Tab **未做**——2.3.1（MCP Server 实现）仍为可选且未落地，后端无 `mcp.*` schema，做 UI 即无后端支撑的死 UI；待 2.3.1 落定后再补对应 Tab 与 keys.go 白名单。
+  🔶 进度（2026-08-13，S2 + 决策更新）：「Deliver」Tab 已落地（webhook_url/timeout/max_retries 三字段，见 2.3.4）。「MCP Server」Tab **本期不做、向后延迟**——随 2.3.1 决策（MCP Server 实现延迟），后端无 `mcp.*` schema，做 UI 即无后端支撑的死 UI；待后续周期 2.3.1 落定后再补对应 Tab 与 keys.go 白名单。
 
 - [ ] 2.3.6 飞书/企微/钉钉等渠道**不自研 SDK**，通过 Hub 或用户自配 bridge 解决
   文档给出推荐拓扑。
+  🔶 备注（2026-08-13）：属文档/架构决策项，非代码阻塞点；「不自研 SDK、走 Hub 或用户 bridge」的立场已在 2.2.4 / 2.3.3 / review 报告多处落地，推荐拓扑文档可在后续周期补，不阻塞本期全量测试。
 
 ### 2.4 验证场景（mock Hub 验收，不依赖真实飞书）
 
