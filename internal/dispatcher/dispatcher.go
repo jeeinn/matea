@@ -38,7 +38,9 @@ type Dispatcher struct {
 
 	// deliverClient fans out lifecycle-side outbound events (task 2.4.3),
 	// e.g. pr_merged when a PR is merged. nil = delivery disabled.
-	deliverClient *deliver.Client
+	// Atomic because hot reload (API goroutine) writes it while webhook
+	// handler goroutines read it — same convention as giteaCfg above.
+	deliverClient atomic.Pointer[deliver.Client]
 
 	// In-flight lock: prevents concurrent tasks on the same (repo, issue)
 	inFlight sync.Map // map[string]bool — key is "repo#issueID"
@@ -132,7 +134,7 @@ func (d *Dispatcher) SetDeliverConfig(cfg config.DeliverConfig) {
 	}
 	// The dispatcher itself also needs a client to fan out lifecycle events
 	// (pr_merged). Reuse the same builder as the executor (same package).
-	d.deliverClient = buildDeliverClient(cfg)
+	d.deliverClient.Store(buildDeliverClient(cfg))
 }
 
 // SetGiteaConfig updates Gitea settings used for admin clients / writeback (hot reload).

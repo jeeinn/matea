@@ -301,7 +301,8 @@ func (d *Dispatcher) handleLifecycleEvent(result *workflow.ResolveResult, repo s
 // counterpart emitted here because the merge event never reaches a runner.
 // Safe to call with a nil/disabled deliver client (no-op).
 func (d *Dispatcher) emitPrMerged(repo string, prID, issueID int) {
-	if d.deliverClient == nil {
+	client := d.deliverClient.Load()
+	if client == nil {
 		return
 	}
 	e := deliver.Event{
@@ -312,7 +313,7 @@ func (d *Dispatcher) emitPrMerged(repo string, prID, issueID int) {
 		Action:  "notify",
 		Content: fmt.Sprintf("PR %s#%d merged", repo, prID),
 	}
-	if err := d.deliverClient.Emit(context.Background(), e); err != nil {
+	if err := client.Emit(context.Background(), e); err != nil {
 		log.Printf("[WARN] deliver emit (pr_merged) failed for %s#%d: %v", repo, prID, err)
 		return
 	}
