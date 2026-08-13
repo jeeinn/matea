@@ -194,7 +194,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
 			default: // StateDone
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
-				return f.mapHubResult(backend, res), nil
+				return f.mapHubResult(backend, res, task), nil
 			}
 		}
 		if err != nil {
@@ -271,9 +271,12 @@ func abortHubRun(f *RunnerFactory, task *store.Task, ctx, pollCtx context.Contex
 // always a Gitea comment, because the wired task types are read/reply
 // (analyze / review / reply_comment). The richer BackendResult fields —
 // GiteaActions (e.g. a hub-requested create_pr) — are still ignored here and
-// warned about; Deliver (IM fan-out, task 2.3.3) is now honored by emitting
-// an outbound event when a deliver client is configured.
-func (f *RunnerFactory) mapHubResult(backend HubBackend, res *BackendResult) *Result {
+// warned about; Deliver (IM fan-out, task 2.3.3) is honored by emitting an
+// outbound event. When the hub returns no explicit DeliverRequest (channel-less
+// hubs like OpenCode never do), a task_completed event is synthesized so the
+// deliver.webhook_url promise of task 2.2.4 holds for hub results too; like the
+// builtin path, the synthesized event is a silent no-op when unconfigured.
+func (f *RunnerFactory) mapHubResult(backend HubBackend, res *BackendResult, task *store.Task) *Result {
 	if res == nil {
 		return &Result{Action: "comment"}
 	}
@@ -283,6 +286,15 @@ func (f *RunnerFactory) mapHubResult(backend HubBackend, res *BackendResult) *Re
 	}
 	if res.Deliver != nil {
 		f.emitDeliver(backend, res.Deliver)
+	} else if task != nil {
+		f.emitDeliverEvent(backend.Name(), deliver.Event{
+			Event:   deliver.EventTaskCompleted,
+			Repo:    task.Repo,
+			IssueID: task.IssueID,
+			PRID:    task.PRID,
+			Action:  "comment",
+			Content: res.Summary,
+		}, false)
 	}
 	if res.ExternallyHandled {
 		log.Printf("[WARN] hub backend %q set externally_handled on a read/reply task; ignored (no git work to skip)",
@@ -338,7 +350,7 @@ func (f *RunnerFactory) emitBuiltinDeliver(task *store.Task, res *Result) {
 // misconfiguration worth surfacing), while the builtin path treats delivery
 // as optional and stays silent.
 func (f *RunnerFactory) emitDeliverEvent(source string, e deliver.Event, warnIfMissing bool) {
-	if f.deliverClient == nil {
+	if f.deliverClient == nil || !f.deliverClient.Enabled() {
 		if warnIfMissing {
 			log.Printf("[WARN] source %q produced a deliver event (event=%q channel=%q) but no deliver client is configured (deliver.webhook_url empty); dropping",
 				source, e.Event, e.Channel)

@@ -46,7 +46,7 @@ func TestMapHubResultEmitsDeliver(t *testing.T) {
 			Content: "3 issues found",
 		},
 	}
-	out := f.mapHubResult(backend, res)
+	out := f.mapHubResult(backend, res, &store.Task{Repo: "o/r", PRID: 42})
 	require.NotNil(t, out)
 	assert.Equal(t, "review done", out.Content)
 	assert.Equal(t, "comment", out.Action)
@@ -70,9 +70,59 @@ func TestMapHubResultNoDeliverClient(t *testing.T) {
 		Summary: "ok",
 		Deliver: &DeliverRequest{Event: "task_completed", Channel: "feishu", Content: "x"},
 	}
-	out := f.mapHubResult(backend, res)
+	out := f.mapHubResult(backend, res, nil)
 	require.NotNil(t, out)
 	assert.Equal(t, "ok", out.Content)
+}
+
+// TestMapHubResultSynthesizesDeliverWithoutRequest covers the 2.2.4 promise:
+// channel-less hubs (OpenCode) never return a DeliverRequest, so mapHubResult
+// synthesizes a task_completed event from the task + summary — otherwise a
+// configured deliver.webhook_url would never fire for hub read/reply tasks
+// (found by the Phase 2 E2E: opencode/hermes completions reached no sink).
+func TestMapHubResultSynthesizesDeliverWithoutRequest(t *testing.T) {
+	var mu sync.Mutex
+	var got deliver.Event
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		hits++
+		_ = json.Unmarshal(body, &got)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := &RunnerFactory{}
+	f.SetDeliverClient(deliver.New(deliver.Config{WebhookURL: srv.URL}))
+
+	backend := &fakeHubBackend{name: "opencode-local"}
+	res := &BackendResult{Summary: "analysis via opencode"} // no DeliverRequest
+	out := f.mapHubResult(backend, res, &store.Task{Repo: "o/r", IssueID: 35})
+	require.NotNil(t, out)
+	assert.Equal(t, "analysis via opencode", out.Content)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, hits, "synthesized task_completed must be POSTed exactly once")
+	assert.Equal(t, deliver.EventTaskCompleted, got.Event)
+	assert.Equal(t, "o/r", got.Repo)
+	assert.Equal(t, 35, got.IssueID)
+	assert.Equal(t, "comment", got.Action)
+	assert.Equal(t, "analysis via opencode", got.Content)
+}
+
+// TestEmitDeliverEventDisabledClientSilent: a configured-but-empty webhook_url
+// (disabled client) must neither POST nor log the misleading "fanned out" line
+// — and, with warnIfMissing=false, stay fully silent.
+func TestEmitDeliverEventDisabledClientSilent(t *testing.T) {
+	f := &RunnerFactory{}
+	f.SetDeliverClient(deliver.New(deliver.Config{})) // empty URL = disabled
+	require.NotPanics(t, func() {
+		f.emitDeliverEvent("builtin", deliver.Event{Event: deliver.EventTaskCompleted}, false)
+		f.emitDeliverEvent("hub", deliver.Event{Event: deliver.EventTaskCompleted}, true)
+	})
 }
 
 // TestEmitBuiltinDeliver verifies the builtin (non-hub) runner path also fans

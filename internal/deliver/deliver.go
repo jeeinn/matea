@@ -80,6 +80,12 @@ func New(cfg Config) *Client {
 	}
 }
 
+// Enabled reports whether the client will actually POST events (non-empty
+// webhook_url). A nil or zero-config Client is disabled; Emit on it is a no-op.
+func (c *Client) Enabled() bool {
+	return c != nil && c.cfg.WebhookURL != ""
+}
+
 // Emit POSTs the event as JSON to the configured webhook. It is safe to call
 // on a disabled client (returns nil without sending). On failure it retries up
 // to cfg.MaxRetries times with a short backoff, then returns the last error.
