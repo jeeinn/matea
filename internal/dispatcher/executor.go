@@ -12,6 +12,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/mcp"
@@ -46,6 +47,7 @@ type Executor struct {
 	defaultLoop      config.AgentLoopConfig
 	sandboxCfg       sandbox.SandboxConfig
 	mcpCfg           config.MCPConfig
+	deliverCfg       config.DeliverConfig
 	onComplete       TaskCompleteCallback
 	onFailed         TaskFailedCallback
 
@@ -100,6 +102,71 @@ func NewExecutor(maxConcurrent, retryCount int, agentConcurrency string, llmRegi
 func (e *Executor) Shutdown() {
 	if e.rootCancel != nil {
 		e.rootCancel()
+	}
+}
+
+// ReattachHubHandles recovers hub tasks whose in-process poll loop was lost on
+// restart. For each persisted non-terminal hub handle it loads the task and:
+//   - task still running (orphaned by the crash) → reset to pending and enqueue,
+//     so the Executor rebuilds the poll loop from the persisted Handle; runViaHub
+//     reuses the Handle instead of re-submitting, and the backend re-attaches to
+//     the still-living remote run (HubBackend contract §1.2.1).
+//   - task pending → already loaded by LoadPending; skipped to avoid double-enqueue.
+//   - task terminal → the run concluded without updating the handle; the handle
+//     is reconciled (marked terminal) and cleaned up.
+//
+// Call this after LoadPending: orphaned-running hub tasks are the only set it
+// enqueues, so a task is enqueued at most once (no duplicate poll). The stale
+// scanner additionally excludes hub tasks, so no parallel reclaim occurs within
+// a live process.
+func (e *Executor) ReattachHubHandles(queue *TaskQueue) {
+	if e.db == nil || queue == nil {
+		return
+	}
+	handles, err := e.db.ListNonTerminalHubHandles()
+	if err != nil {
+		log.Printf("[WARN] ReattachHubHandles: list handles: %v", err)
+		return
+	}
+	if len(handles) == 0 {
+		return
+	}
+
+	var reattached, cleaned int
+	for _, h := range handles {
+		task, err := e.db.GetTask(h.TaskID)
+		if err != nil {
+			log.Printf("[WARN] ReattachHubHandles: load task %d: %v; marking handle terminal", h.TaskID, err)
+			e.db.UpdateHubHandleStatus(h.TaskID, store.HubHandleStatusFailed)
+			cleaned++
+			continue
+		}
+		switch {
+		case task.Status == store.StatusPending:
+			// Already enqueued by LoadPending; re-attaching would double-run.
+			continue
+		case task.Status == store.StatusRunning:
+			if err := e.db.UpdateTaskStatus(h.TaskID, store.StatusPending, "", ""); err != nil {
+				log.Printf("[WARN] ReattachHubHandles: reset task %d: %v", h.TaskID, err)
+				continue
+			}
+			queue.push(task)
+			reattached++
+		default:
+			// Terminal task with a stale non-terminal handle: reconcile.
+			status := store.HubHandleStatusFailed
+			if task.Status == store.StatusSuccess || task.Status == store.StatusPartial {
+				status = store.HubHandleStatusDone
+			}
+			e.db.UpdateHubHandleStatus(h.TaskID, status)
+			cleaned++
+		}
+	}
+	if reattached > 0 {
+		log.Printf("[INFO] Reattached %d hub task(s) after restart (rebuilt poll loop from persisted Handle)", reattached)
+	}
+	if cleaned > 0 {
+		log.Printf("[INFO] Reconciled %d stale hub handle(s) after restart", cleaned)
 	}
 }
 
@@ -178,6 +245,37 @@ func (e *Executor) SetGiteaClientFactory(factory GiteaClientFactory, getDebugCon
 	mcpReg := mcp.NewRegistry(e.mcpCfg)
 	gatewayDir, _ := os.Getwd()
 	e.runnerFactory = agents.NewRunnerFactory(e.llmRegistry, factory, e.db, e.agentDefaults, e.defaultLoop, getDebugConfig, backends, nil, e.sandboxCfg, mcpReg, gatewayDir)
+	// (Re)inject the outbound deliver client whenever the runner factory is
+	// rebuilt (task 2.3.3). A disabled config (empty webhook_url) yields a
+	// no-op client.
+	e.runnerFactory.SetDeliverClient(buildDeliverClient(e.deliverCfg))
+}
+
+// SetDeliverConfig updates the outbound deliver configuration. The new client
+// is applied immediately to the live runner factory.
+func (e *Executor) SetDeliverConfig(cfg config.DeliverConfig) {
+	e.deliverCfg = cfg
+	if e.runnerFactory != nil {
+		e.runnerFactory.SetDeliverClient(buildDeliverClient(cfg))
+	}
+}
+
+// buildDeliverClient converts the parsed deliver config into a deliver.Client,
+// resolving the timeout string with a sane default.
+func buildDeliverClient(cfg config.DeliverConfig) *deliver.Client {
+	timeout := deliver.DefaultTimeout
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
+			timeout = d
+		} else {
+			log.Printf("[WARN] deliver.timeout %q invalid; using default %s", cfg.Timeout, deliver.DefaultTimeout)
+		}
+	}
+	return deliver.New(deliver.Config{
+		WebhookURL: cfg.WebhookURL,
+		Timeout:    timeout,
+		MaxRetries: cfg.MaxRetries,
+	})
 }
 
 // SetModelMetaProvider sets the model metadata provider for adaptive token limits.

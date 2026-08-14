@@ -45,12 +45,81 @@ func (r *AnalyzeRunner) Run(ctx context.Context, task *store.Task, agent *store.
 		return nil, err
 	}
 
+	// Hub execution branch (task 2.1.2): when the agent's backend is a
+	// hub-hermes instance, route the analyze task through Hermes via
+	// Submit/Poll instead of the in-process LLM loop. Hermes owns its own
+	// execution environment, so no workspace clone is prepared here.
+	if hb, ok := r.factory.ResolveHubExecution(agent); ok {
+		tc := &TaskContext{
+			TaskType:     task.TaskType,
+			TaskID:       task.ID,
+			Role:         "analyze",
+			Backend:      hb.Name(),
+			Repo:         task.Repo,
+			IssueID:      task.IssueID,
+			PRID:         task.PRID,
+			IssueTitle:   task.Event,
+			IssueBody:    task.Context,
+			SystemPrompt: agent.SystemPrompt,
+			UserPrompt:   task.Context,
+			MemoryKeys:   r.factory.loadMemoryKeys(task),
+		}
+		res, err := r.factory.runViaHub(ctx, task, agent, hb, tc)
+		if err != nil {
+			return nil, err
+		}
+		// Record the conclusion for later tasks on the same repo+issue
+		// (D3 cross-task memory sharing, task 2.1.5).
+		r.factory.saveAnalyzeMemory(task, res.Content)
+		return res, nil
+	}
+
+	// Hub execution branch (task 2.2.1, D7 first cut): when the agent's backend
+	// is a hub-opencode instance, route analyze through OpenCode with a prepared
+	// workspace (shallow clone, read-only). OpenCode operates the files itself
+	// via shared-path directory binding; the sandbox is cleaned up after.
+	if hb, ok := r.factory.ResolveHubOpenCode(agent); ok {
+		wwc, err := prepareAnalyzeWorkspace(ctx, task, agent, r.factory)
+		if err != nil {
+			// Workspace prep failed — fall back to single-shot LLM. This needs
+			// the provider, so fetch it only here (opencode itself never does).
+			log.Printf("[WARN] Task %d: hub-opencode workspace prep failed (%v); falling back to single-shot", task.ID, err)
+			provider, getErr := r.factory.llmRegistry.Get(agent.Provider)
+			if getErr != nil {
+				return nil, fmt.Errorf("get provider: %w", getErr)
+			}
+			return r.runSingleShot(ctx, task, agent, provider)
+		}
+		defer wwc.Sandbox.Cleanup()
+
+		res, err := r.factory.runViaHub(ctx, task, agent, hb, &TaskContext{
+			TaskType:     task.TaskType,
+			TaskID:       task.ID,
+			Role:         "analyze",
+			Backend:      hb.Name(),
+			Repo:         task.Repo,
+			IssueID:      task.IssueID,
+			PRID:         task.PRID,
+			IssueTitle:   task.Event,
+			IssueBody:    task.Context,
+			SystemPrompt: agent.SystemPrompt,
+			UserPrompt:   task.Context,
+			SandboxPath:  wwc.Sandbox.WorkDir,
+			MemoryKeys:   r.factory.loadMemoryKeys(task),
+		})
+		if err != nil {
+			return nil, err
+		}
+		r.factory.saveAnalyzeMemory(task, res.Content)
+		return res, nil
+	}
+
 	provider, err := r.factory.llmRegistry.Get(agent.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("get provider: %w", err)
 	}
 
-	// Try read-only workspace + short loop for richer analysis
+	// Builtin path: Try read-only workspace + short loop for richer analysis
 	wwc, err := prepareAnalyzeWorkspace(ctx, task, agent, r.factory)
 	if err != nil {
 		log.Printf("[WARN] Task %d analyze workspace failed (%v); falling back to single-shot", task.ID, err)
@@ -93,10 +162,12 @@ func (r *AnalyzeRunner) runSingleShot(ctx context.Context, task *store.Task, age
 	log.Printf("[INFO] Task %d LLM response: %d tokens used", task.ID, resp.Usage.TotalTokens)
 	r.factory.recordTaskUsage(task.ID, agent.Provider, agent.Model, resp.Usage)
 
-	return &Result{
+	res := &Result{
 		Content: appendAnalysisLandingNote(resp.Content),
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }
 
 // runAnalyzeLoop runs a short read-only AgentLoop on a prepared workspace.
@@ -195,8 +266,10 @@ func (r *AnalyzeRunner) runAnalyzeLoop(ctx context.Context, task *store.Task, ag
 
 	log.Printf("[INFO] Task %d analyze loop completed", task.ID)
 
-	return &Result{
+	res := &Result{
 		Content: appendAnalysisLandingNote(result),
 		Action:  "comment",
-	}, nil
+	}
+	r.factory.emitBuiltinDeliver(task, res)
+	return res, nil
 }

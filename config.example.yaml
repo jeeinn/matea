@@ -39,3 +39,11 @@ llm:
 auth:
   jwt_secret: "${JWT_SECRET:-change-me-in-production}"
   default_admin_password: "${ADMIN_PASSWORD:-admin123}"
+
+# 出站扇出（task 2.3.3）：把 Agent 完成事件 POST 到外部 webhook（飞书/企微机器人、自建 bridge、Hub 接收端）
+# 仅出站、无入站；OpenCode 无自带 IM 渠道，配置后 Analyze/Review/Reply 结果才会通知人类；Hermes 自带渠道可留空
+# 留空 = 关闭（结果只落 Gitea，不通知）
+deliver:
+  webhook_url: ""
+  timeout: "10s"
+  max_retries: 1

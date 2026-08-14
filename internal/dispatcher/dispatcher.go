@@ -9,6 +9,7 @@ import (
 
 	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
@@ -34,6 +35,12 @@ type Dispatcher struct {
 	sessionSvc *workflow.SessionService
 	wfPolicy   *workflow.WorkflowPolicy
 	lifecycle  *workflow.SessionLifecycle
+
+	// deliverClient fans out lifecycle-side outbound events (task 2.4.3),
+	// e.g. pr_merged when a PR is merged. nil = delivery disabled.
+	// Atomic because hot reload (API goroutine) writes it while webhook
+	// handler goroutines read it — same convention as giteaCfg above.
+	deliverClient atomic.Pointer[deliver.Client]
 
 	// In-flight lock: prevents concurrent tasks on the same (repo, issue)
 	inFlight sync.Map // map[string]bool — key is "repo#issueID"
@@ -116,6 +123,18 @@ func (d *Dispatcher) SetModelMetaProvider(m agents.ModelMetaProvider) {
 	if d.executor != nil {
 		d.executor.SetModelMetaProvider(m)
 	}
+}
+
+// SetDeliverConfig updates the outbound deliver configuration (task 2.3.3).
+// Applied immediately to the live executor / runner factory, and to the
+// dispatcher's own client used to fan out lifecycle events (pr_merged).
+func (d *Dispatcher) SetDeliverConfig(cfg config.DeliverConfig) {
+	if d.executor != nil {
+		d.executor.SetDeliverConfig(cfg)
+	}
+	// The dispatcher itself also needs a client to fan out lifecycle events
+	// (pr_merged). Reuse the same builder as the executor (same package).
+	d.deliverClient.Store(buildDeliverClient(cfg))
 }
 
 // SetGiteaConfig updates Gitea settings used for admin clients / writeback (hot reload).
@@ -217,17 +236,23 @@ func (d *Dispatcher) Shutdown() {
 
 // Start initializes the executor workers, loads pending tasks, and starts the queue scanner.
 func (d *Dispatcher) Start() error {
-	// Mark orphaned running tasks as failed (e.g. previous process killed with Ctrl+C)
-	if n, err := d.db.FailOrphanedRunningTasks("matea restarted; interrupted running task"); err != nil {
+	// Mark orphaned running tasks as failed (e.g. previous process killed with Ctrl+C),
+	// except hub tasks that own a non-terminal Handle — those are re-attached (below)
+	// rather than failed, so a hub run in flight at crash time is resumed, not lost.
+	if n, err := d.db.FailOrphanedRunningTasksExceptHub("matea restarted; interrupted running task"); err != nil {
 		log.Printf("[WARN] Failed to clear orphaned running tasks: %v", err)
 	} else if n > 0 {
-		log.Printf("[INFO] Marked %d orphaned running task(s) as failed after restart", n)
+		log.Printf("[INFO] Marked %d orphaned running task(s) as failed after restart (hub tasks preserved for re-attach)", n)
 	}
 
 	// Load pending tasks from DB before starting workers
 	if err := d.queue.LoadPending(); err != nil {
 		return fmt.Errorf("load pending tasks: %w", err)
 	}
+
+	// Re-attach hub tasks whose poll loop was lost on restart: rebuild the
+	// in-process poll from the persisted Handle instead of re-submitting.
+	d.executor.ReattachHubHandles(d.queue)
 
 	// Start executor workers
 	d.executor.Start(d.queue)

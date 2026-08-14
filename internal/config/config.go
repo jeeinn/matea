@@ -303,6 +303,27 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 	} else {
 		backends.Backends[BackendNameBuiltin] = BackendConfig{Type: BackendTypeBuiltin}
 	}
+	// Default workspace_transport to shared_path (Phase 2 only implementation).
+	for name, b := range backends.Backends {
+		if b.WorkspaceTransport == "" {
+			b.WorkspaceTransport = WorkspaceTransportSharedPath
+			backends.Backends[name] = b
+		}
+	}
+}
+
+// ValidateBackendWorkspaceTransport checks that a backend's workspace_transport
+// is compatible with its type. hub-opencode only supports shared_path (L0/L1);
+// mcp is rejected until Phase 3.
+//
+// Returns nil on success, error describing the incompatibility otherwise.
+func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
+	// Phase 2: only shared_path is implemented.
+	if cfg.WorkspaceTransport != "" && cfg.WorkspaceTransport != WorkspaceTransportSharedPath {
+		return fmt.Errorf("backend type %q: workspace_transport %q is not supported in Phase 2 (only %q)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportSharedPath)
+	}
+	return nil
 }
 
 func applySandboxDefaults(cfg *SandboxConfig) {

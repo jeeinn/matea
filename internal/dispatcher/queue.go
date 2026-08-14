@@ -53,6 +53,19 @@ func (q *TaskQueue) Dequeue() <-chan *store.Task {
 	return q.ch
 }
 
+// push enqueues an already-persisted task onto the in-memory channel without
+// touching the DB. Used by restart re-attach (ReattachHubHandles), which has
+// already set the task's DB status to pending. If the channel is full, the
+// pending task is still recoverable on the next scanner scan.
+func (q *TaskQueue) push(t *store.Task) {
+	select {
+	case q.ch <- t:
+		log.Printf("[INFO] Task re-enqueued for re-attach: id=%d agent=%d type=%s", t.ID, t.AgentID, t.TaskType)
+	default:
+		log.Printf("[WARN] Task queue full, re-attach task %d will be picked up by the next scanner scan", t.ID)
+	}
+}
+
 // LoadPending loads pending tasks from DB into the queue on startup.
 func (q *TaskQueue) LoadPending() error {
 	tasks, err := q.db.ListPendingTasks()
@@ -123,9 +136,11 @@ func (q *TaskQueue) scanPendingTasks() {
 	}
 }
 
-// resetStaleRunningTasks resets tasks that have been in "running" state too long.
+// resetStaleRunningTasks resets tasks that have been in "running" state too long,
+// leaving hub tasks (those with a non-terminal handle) to their own poll loop so
+// the Executor never spins up a duplicate in-process poll for the same Handle.
 func (q *TaskQueue) resetStaleRunningTasks(threshold time.Duration) {
-	count, err := q.db.ResetStaleRunningTasks(threshold)
+	count, err := q.db.ResetStaleRunningTasksExceptHub(threshold)
 	if err != nil {
 		log.Printf("[ERROR] Failed to reset stale tasks: %v", err)
 		return

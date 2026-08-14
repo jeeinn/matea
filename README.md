@@ -355,6 +355,91 @@ agents:
 
 > **注意**：`hub-hermes` / `hub-openclaw` / `hub-api` 在 Phase 1 尚未实现，选择这些 backend 会返回明确错误；完整 Hub 后端支持是 Phase 2 目标。
 
+### 4. 出站通知：`deliver` 配置（OpenCode 必备）
+
+OpenCode backend **没有自带 IM 渠道**——分析/审查/回复结果只会写回 Gitea 评论，不会主动通知飞书/企微/钉钉。要让人类在 IM 上收到通知，必须配置 `deliver` 把完成事件 POST 出去。
+
+> Hermes backend 自带飞书/企微原生渠道，可留空不配；builtin backend 评论已写回 Gitea，IM 通知按需开启。
+
+#### 何时需要配
+
+| 场景 | 是否需要配 `deliver.webhook_url` |
+|------|----------------------------------|
+| 全部 Agent 走 `builtin`，团队看 Gitea 通知即可 | 不需要 |
+| 至少一个 Agent 走 `hub-opencode`，希望 IM 通知 | **必配** |
+| Agent 走 `hub-hermes` | 不需要（Hermes 自带渠道） |
+| 希望统一多渠道分发（飞书+企微+钉钉） | 配置，指向自建 bridge 做扇出 |
+
+#### 配置示例
+
+在 `config.yaml` 或 Web UI **系统配置** 添加：
+
+```yaml
+deliver:
+  webhook_url: "http://localhost:9090/event"   # 你的 bridge 接收端
+  timeout: "10s"                               # 单次 POST 超时
+  max_retries: 1                               # 网络错误/5xx 重试 1 次，4xx 不重试
+```
+
+`webhook_url` 留空 = 关闭（事件被丢弃，仅落 Gitea）。
+
+#### Event payload（Matea POST 出去的 JSON）
+
+```json
+{
+  "event":     "task_completed",
+  "channel":   "feishu",
+  "thread_id": "issue_42",
+  "repo":      "owner/repo",
+  "issue_id":  42,
+  "pr_id":     0,
+  "action":    "comment",
+  "content":   "..."
+}
+```
+
+字段含义：
+- `channel` / `thread_id`：路由提示，由 bridge 自行解释（Matea 不强制语义）
+- `action`：`comment`（评论已写）/ `create_pr`（PR 已建）/ `none`（无 Gitea 写回）
+- `content`：事件正文（评论内容 / PR 链接等）
+
+#### 自建 bridge 拓扑（推荐）
+
+Matea **只 POST 到单个 `webhook_url`**——多渠道分发靠 bridge 扇出。推荐拓扑：
+
+```
+Matea ──POST Event──► 你的 bridge ──┬──► 飞书机器人
+                                   ├──► 企微机器人
+                                   └──► 钉钉机器人
+```
+
+bridge 最小骨架示例（Flask，把 Event 转飞书 text 消息）：
+
+```python
+from flask import Flask, request
+import requests
+
+app = Flask(__name__)
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx"
+
+@app.post("/event")
+def event():
+    e = request.json
+    msg = {"msg_type": "text", "content": {"text": f"[{e['repo']}] {e['content']}"}}
+    r = requests.post(FEISHU_WEBHOOK, json=msg)
+    return ("", r.status_code)
+```
+
+把 `deliver.webhook_url` 指向 `http://localhost:9090/event` 即可。企微/钉钉机器人同理，仅消息格式不同。
+
+> Matea **不自研 IM SDK**，也不内置 bridge——这是一个有意的边界：IM 协议频繁变更、各家鉴权机制差异大，自研 SDK 是净负债。用户自建 bridge 或对接 Hub gateway 自带的 `deliver` 是推荐路径。
+
+#### 行为约束
+
+- **best-effort**：deliver 失败不会阻塞或失败它伴随的任务——通知发不出去时分析/审查结果仍会写回 Gitea
+- **重试策略**：仅网络错误 / 5xx 重试 `max_retries` 次；4xx（鉴权失败 / payload 格式错误）立即停止，避免无效重试
+- **无入站**：Hermes Poll / OpenCode 同步都不会向 Matea 推完成事件，Matea 是唯一的发起方
+
 ## 文档
 
 - [技术架构](docs/ARCHITECTURE.md)

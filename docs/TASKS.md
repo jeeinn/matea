@@ -1,10 +1,11 @@
 # 任务清单
 
-> 更新：2026-08-05（Phase 1 全部收官；Phase 2 待启动）  
-> 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · 可插拔 Hub 后端（OpenCode / Hermes / OpenClaw / 自定义） · 不自研 IM SDK  
+> 更新：2026-08-06（Phase 1 全部收官；**Phase 2 方案 D1–D12 全部拍板、方案冻结**，待开分支实施）  
+> 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · **可插拔 harness 执行内核**（builtin / OpenCode / Hermes / Phase 3 的 Pi·Codex·Claude） · Matea 是 Gitea 唯一写方 · 不自研 IM SDK · 不引入外部 harness SDK  
 > 决策：  
 > - [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md)  
 > - 已归档 v0.11.4 任务清单 → [archived/20260803-TASKS.md](archived/20260803-TASKS.md)  
+> - Phase 2 整体方案（D1–D12：Hermes Runs API 核实 + D10 Harness 抽象 + D11 ToolBox 分层 + D12 out-of-process）→ [20260805-Phase2-plan.md](20260805-Phase2-plan.md)  
 > 已归档交付记录：  
 > - P0–P2 核心演进 → [archived/20260716-TASKS.md](archived/20260716-TASKS.md)  
 > - P3 开源 + 开源后加固 → [archived/20260723-TASKS.md](archived/20260723-TASKS.md)  
@@ -19,7 +20,7 @@
 P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review / 逻辑 Issue 归一 / Agent 并发 / 可观测性（已交付）
         │
         ├─► Phase 1：HubBackend 抽象 + Gitea 触发入口整理 + 体验简化
-        ├─► Phase 2：Hub 后端接入（analyze/review → Hermes/OpenCode → code → MCP/deliver）
+        ├─► Phase 2：大脑可插拔地基（Harness+ToolBox）→ Hub 后端接入（OpenCode 全 role / Hermes）→ deliver 出站
         ├─► Phase 3：多触发形态（REST/CLI）+ 策略配置化
         └─► Phase 4：可选 matea gateway serve + 拆包评估
 ```
@@ -199,65 +200,130 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ## Phase 2：Hub 后端接入（2–3 月）
 
-目标：让 Matea 可以把 Agent 思考/执行外包给 Hermes / OpenCode 等 Hub，并实现 IM 触发/回传。
+> 方案：[20260805-Phase2-plan.md](20260805-Phase2-plan.md)（**D1–D12 全部拍板，方案已冻结**）
+> 关键收束（评审 + Hermes 官方 API 核实 + 代码现状核对）：
+> - D2 完成通知 = **Poll**（官方 `/v1/runs` 轮询，复用 1.2.1），**无入站完成端点**
+> - D4 MCP Server **降级可选**（最小 4 工具）；⚠️ 与现有 MCP **Client** 方向相反，属**全新实现**
+> - D5 deliver **仅出站扇出**（无入站）
+> - 2.1.5（原「Hermes 经 MCP 操作 Matea 沙箱」）**删除**——Hermes 自带沙箱，结果经 Poll 回传 patch，由 Matea 落地
+> - **D10/D11/D12 为大脑可插拔三支柱**：统一 `Harness` 抽象 · `ToolBox` 分层暴露 · 统一 out-of-process 集成（不引入外部 SDK）
+>
+> **实施顺序（D9）**：2.0 机制骨架 → 2.2.1（D7 第一刀，最早可验证）→ 2.1（hermes）→ 2.3（deliver）→ 2.4（mock 验收）
 
-### 2.1 hub-hermes 实现
+### 2.0 机制骨架：大脑可插拔地基（D10 + D11 + D12，先于 2.1/2.2）
 
-- [ ] 2.1.1 实现 `internal/agents/backends/hermes`  
-  `HubBackend.Submit` 按 task_type 分支；HTTP/API 调用 Hermes；Handle 持久化与重启恢复。  
-  重启恢复须满足 1.2.1 的「落库 + Executor 重启拾取」要求，不得仅做 Runner 内串行 Poll。  
-  📌 Phase 1.2 评审挂账（20260804-Phase1.2-code-review 🟡）：  
-  ① **IdempotencyKey 去重落地**——1.2 两个实现均以 RemoteID 为缓存键，IdempotencyKey 已计算未消费；Handle 持久化时须以其防重复提交。  
-  ② **Poll 重启措辞统一**——接口注释已按「重启安全只约束 Handle 落库的异步后端」收紧（hub_backend.go），持久化接管时复核实现/测试措辞一致。
+- [x] 2.0.1 抽出统一 `Harness` 接口 + `harnessRouter` 注册表（D10）
+  收敛现有三套接口（`Runner` 同步 / `CodingBackend` 写入 / `HubBackend` 异步 Submit/Poll）为：`Profile() HarnessProfile` + `RunTurn(ctx, HarnessTurnInput) (*HarnessTurnResult, error)` + `Close()` + `ResetSession(id)`。
+  `HarnessTurnInput` = `Task TaskContext` + `Tools ToolContext` + `Model string`；`HarnessTurnResult` = `Reply` + `Action`(`comment`/`create_pr`/`none`) + `PendingApprovals`。
+  接口**声明** `controlTransport`/`toolTransport` 元数据（对齐 qm），但只实现 in-process(builtin) + out-of-process(submit-contract)。注册表为单文件 `Map<HarnessID, Harness>`，新增大脑 = 加一行。
+  📌 **拒绝**：每轮动态选 harness（Matea 任务有状态，选择粒度=每任务/每 agent）；harness×model 双轴校验矩阵（model 仅 builtin 用，hub-* 自管 LLM）。~1–2 人日（含测试）。
+  ✅ 已完成（提交 b4aab51）：Harness/HarnessProfile/HarnessTurnInput/HarnessTurnResult 类型定义；harnessRouter 注册表 (Register/Lookup/GetHarness)；2x2 transport 模型常量
+  ⚠️ 诚实更正（2026-08-11 核查）：Harness 接口与注册表已建，但**尚未收敛**三套执行接口——runners 仍直接走 Runner/HubBackend/CodingBackend，`Harness.RunTurn` 不是当前活跃执行路径。属"接口就绪、未接线"基础设施，收敛留待 D12 / Phase 3。
 
-- [ ] 2.1.2 `analyze_issue` → Hermes  
+- [x] 2.0.2 现有 `builtin` 改造为 in-process adapter（D10 实证 1）
+  内部仍跑现有多 role Agent Loop，仅套上 `Harness` 接口；行为零变化，以既有测试全 PASS 为验收基线。
+  ✅ 已完成（提交 b4aab51）：BuiltinHarness 实现 Harness 接口，Profile 声明 in_process + tool_direct
+
+- [x] 2.0.3 定义 `ToolContext`/`ToolBox` 并按**三层策略**暴露（D11）
+  - **沙箱类**（现有 10 个：`read_file`/`write_file`/`list_files`/`search_code`/`rg`/`run_command`/`apply_diff`/`tree`/`git_log`/`git_blame`）：builtin 直连 Go 函数；**对远程 harness 默认不暴露**（成品 harness 自带同名工具，且直接操作共享工作区更快）。
+  - **Gitea 类**（新增）：**Phase 2 只做读侧** `gitea_read_issue` / `gitea_read_pr_diff`；**写侧不做**（`gitea_create_comment`/`gitea_create_pr` 留 Phase 3），发评论/建 PR 继续由 Matea 在结果返回后统一落地，守「Gitea 唯一写方」。
+  - ⚠️ 对成品 harness（OpenCode/Hermes）ToolBox 只能 **append 不能 replace** —— 其自带工具关不掉，重名会导致模型摇摆。此约束须在接口注释中写死。
+  ✅ 已完成（提交 b4aab51）：ToolBox 三层暴露策略实现；ToolCatSandbox 仅 builtin；ToolCatGitea 远程读侧 (gitea_read_issue/gitea_read_pr_diff)；ToolImplFn 接口
+  ⚠️ 诚实更正（2026-08-11 核查）：`NewToolBox` 全仓**零非测试引用**——ToolBox 已实现但无任何生产调用方，属悬空基础设施，待 D12 / Phase 3 接线后才有实际效果。
+
+- [x] 2.0.4 网关级 skill 经 ToolBox 暴露（D11）
+  仓库内 skill（workspace 的 `skills/`）**不做集成**——随工作区交付，harness 自读（OpenCode 还会读 `AGENTS.md`）。
+  网关级 skill（gatewayDir 的 `skills/`）分两半：**正文（body）** 作为 system prompt 片段注入（任何 harness 通吃）；**script 工具** 经 ToolBox 导出、在 **Matea 侧沙箱内执行**。
+  远程 harness 自身的 skill/plugin 机制（OpenCode plugin、Claude Code skills）**不接管**，各管各的。
+  ⚠️ 安全前置（Phase 3 落 MCP 时强制）：script 为任意 shell，导出即 RCE 面 → 必须同时满足「沙箱工作目录内执行 + API Key 鉴权 + 单 workflow 作用域绑定」。
+  ✅ 已完成（提交 b4aab51）：RegisterGatewaySkills/GetGatewaySkillBody/ListGatewaySkillNames；skillToolToDecl 工具转换；matea_skill_ 前缀避免冲突
+
+- [x] 2.0.5 配置新增 `workspace_transport` 语义位（D11 部署档位）
+  取值 `shared_path`（默认，Phase 2 唯一实现）｜ `mcp`（Phase 3）。
+  **`hub-opencode` 显式声明仅支持 L0/L1**：`opencode_http.go` 用 `filepath.Abs(req.WorkDir)` 传绝对本地路径给 `?directory=`/`X-Opencode-Directory`，事实要求同机或共享卷 —— 配置校验需拒绝 `mcp`，文档需写明「配 URL ≠ 可异地」。
+  L1 共享卷需明确「单 workflow 期间独占该工作区」。
+  ✅ 已完成（提交 b4aab51）：BackendConfig.WorkspaceTransport 字段；ApplyBackendDefaults 默认 shared_path；ValidateBackendWorkspaceTransport 验证；BackendTypeHubHermes 常量预留
+
+### 2.1 hub-hermes 实现（基于官方 Runs API：`POST /v1/runs` + `GET /v1/runs/{run_id}` Poll）
+
+- [x] 2.1.1 实现 `internal/agents/backends/hermes`
+  `HubBackend.Submit` → `POST /v1/runs`（`{input, session_id?, instructions?, conversation_history?, previous_response_id?}`），返回 `{run_id, status}`；`Poll` → `GET /v1/runs/{run_id}` 取 `{status, output, session_id, usage}`，终态 completed/failed 即结束；Bearer 鉴权（`API_SERVER_KEY`）；`session_id` 用于同 repo 多任务续接。
+  📌 全 task_type 经同一 Submit/Poll 路径（含 `solve_issue`/`fix_bug`：Hermes 返回 patch/summary → Matea `finalizeWriteChanges` 落地，不反向操作 Matea 沙箱——见 2.1.5 删除说明）。
+  ✅ 已完成（提交 224e7ab）：`internal/agents/backends/hermes/hermes.go` 实现 HubBackend 接口（Submit/Poll/Cancel/Capabilities/HealthCheck）；Bearer 鉴权；session_id 按 repo 派生支持跨任务记忆共享；17 个单元测试覆盖正常/失败/鉴权/502/对话历史/diff 场景
+  ✅ **原勾选注水已补齐（2026-08-11 核查，2026-08-06 实现）**：2.1.1-a / 2.1.1-b 曾并入 2.1.1 的"已完成"范围但代码未实现，现均已落地（提交占位待填）：
+  - [x] 2.1.1-a **Handle 持久化 + Executor 重启拾取**（1.2.1 落库强制点）：`hub_handles` 表（`task_id` PK + `backend`/`remote_id`/`idempotency_key`/`status`）；`runViaHub` 提交后 `SaveHubHandle` 落库；`dispatcher.Start` 经 `FailOrphanedRunningTasksExceptHub` + `Executor.ReattachHubHandles` 在重启后对非终结 hub 任务重建轮询；stale scanner 已排除 hub 任务；OpenCode `Poll` 缓存未命中时从仍存活的 sidecar 恢复结果。Matea 重启不再丢失在途 hub 任务。
+  - [x] 2.1.1-b **IdempotencyKey 去重**（1.2 评审挂账 ①）：`runViaHub` 提交前 `GetHubHandle` 命中非终结 Handle 即复用（含 `IdempotencyKey`），绝不重复 `Submit`；同一任务重复进入安全重投。
+
+- [x] 2.1.2 `analyze_issue` → Hermes
   验证 `TaskContext` 打包、`MemoryKeys` 传递、评论写回。
+  ✅ 已完成：runner_analyze.go 增加 hub 分支，经 `runViaHub` 提交 Hermes（gitea-free，不 clone 工作区）；验证 TaskContext 打包与记忆写入；e2e_test.go::TestAnalyzeRunnerViaHermes PASS
 
-- [ ] 2.1.3 `review_pr` → Hermes  
+- [x] 2.1.3 `review_pr` → Hermes
   验证 diff 传递、审查结论、记忆沉淀。
+  ✅ 已完成：runner_review.go 增加 hub 分支，先取 PR diff/元数据再经 runViaHub 提交；diff 注入验证（e2e_test.go::TestReviewRunnerViaHermes PASS）
 
-- [ ] 2.1.4 `reply_comment` → Hermes  
-  验证多轮 session、历史评论注入。
+- [x] 2.1.4 `reply_comment` → Hermes
+  验证多轮 session（用 `session_id` 续接）、历史评论注入。
+  ✅ 已完成：runner_interaction.go 增加 hub 分支，评论历史转 CommentSnapshot 作 conversation_history（session_id 续接）；e2e_test.go::TestInteractionRunnerViaHermes PASS
 
-- [ ] 2.1.5 `solve_issue` / `fix_bug` → Hermes + Matea MCP tools  
-  Hermes 通过 MCP 操作 Matea 沙箱文件；Matea 执行 git/PR。
+- [x] 2.1.5 验证同一 repo 上 analyze → review → code 的记忆共享（D3）
+  新增轻量 `memories` 表（repo/issue 级 KV）+ `MemoryKeys` 读写；analyze 写键、code 读键后行为一致；Hermes 侧用 `session_id` 续接同一会话上下文。
+  ✅ 已完成：新增 `memories` 表（repo/issue KV + UNIQUE）+ store `SetMemory/GetMemory/GetAllMemory`；Hermes 适配器将 `MemoryKeys` 注入请求体；analyze 写 `analysis_summary`，review/reply 读取随 TaskContext 传入；e2e_test.go::TestHermesMemorySharing PASS。注：写任务（solve_issue/fix_bug）经 Hermes 的路由与「code 读键」消费者留待下一子任务（本轮范围按决策只接通读/回复三类 + memories 表）。
+  📌 **2.1.5（原「Hermes 经 MCP 操作 Matea 沙箱」）已删除**：Hermes 自带沙箱（local/Docker/SSH/Singularity/Modal），应在自身环境跑、把结果经 Poll 回传，由 Matea 落地——既符合 Hermes 执行模型，也守住「Matea 是唯一 Gitea 写方」不变量。
 
-- [ ] 2.1.6 验证同一 repo 上 analyze → review → code 的记忆共享  
-  这是接入 Hermes 的核心价值。
+### 2.2 hub-opencode 改造（D7 三刀，第一刀最早可验证）
 
-### 2.2 hub-opencode 改造
+- [x] 2.2.1 **D7 第一刀（最小可验证）**：`AnalyzeRunner` 后端感知 + analyze 带工作区给 OpenCode
+复用 `prepareAnalyzeWorkspace`（默认分支 shallow clone，`write_workspace.go:322`）+ OpenCode 目录绑定（`SandboxPath`→`WorkDir`）；放宽 `opencodeWriteSubType`→`opencodeSubType(taskType)`（analyze/review/reply→"dev"）；返回 `Action:"comment"`，不建 PR；`defer wwc.Sandbox.Cleanup()`。
+✅ 已完成：`opencode_http.go` 放宽子类型映射；`hub_run.go` 新增 `ResolveHubOpenCode`；`runner_analyze.go` 加 hub-opencode 分支（制备 workspace→runViaHub→存记忆，失败降级 single-shot）；`write_workspace.go` 加 `giteaFactory==nil` 守卫；`opencode_hubbackend_test.go` 端到端验证 OpenCode 路由（probe `POST /session`）+ 降级路径。注：review/reply 子类型已映射但 runner 分支留待 2.2.2/2.2.3。
 
-- [ ] 2.2.1 `hub-opencode` 扩展为全 role backend  
-  在 1.2.5 基础上，从仅 coder 扩展到覆盖 analyze/review/reply 全 task_type（原「改造为 hub-opencode」与 1.2.5 重复，已去重）。
+- [x] 2.2.2 **D7 第二刀**：review 带工作区给 OpenCode
+  新增 `prepareReviewWorkspace`（clone PR head 到临时 sandbox），复用 OpenCode 目录绑定做代码审查。
+  ✅ 已完成：`write_workspace.go` 新增 `prepareReviewWorkspace`（`gitea.PRHeadRef` 解析 PR head → `git.CloneBranch`，`giteaFactory==nil` 守卫返回 error 而非 panic）；`runner_review.go` 在 hub-hermes 分支之前、gitea fetch 之前插入 hub-opencode 分支（制备 workspace→runViaHub(SandboxPath)→`saveReviewMemory`，失败降级 `runSingleShotReview`）；`hub_run.go` 新增 `ReviewMemoryKey` + `saveReviewMemory`（与 `saveAnalyzeMemory` 对称）；`gitea/pr.go` 新增 `PRHeadRef`。端到端测试 `TestReviewRunnerViaOpenCode`（探针记录 `POST /session`）断言真走 OpenCode 路径（`git clone --depth 1 --branch feature/review` → `opencode session created` → `res.Content == "Done."`）+ `TestReviewRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（Gitea 503 降级 `mock-single-shot`）。注：review 经 OpenCode 时 OpenCode 直接读克隆代码，未传 diff 文本（与 analyze 对称，与 hub-hermes 传 diff 不同）。
 
-- [ ] 2.2.2 验证 OpenCode 作为全 role backend 的接口通用性  
-  与 Hermes 并行跑，确保 `HubBackend` 抽象足够通用。
+- [x] 2.2.3 **D7 第三刀**：reply 全 role（对话类，单轮，工作区非必需）
+  ✅ 已完成（决策 B）：`InteractionRunner` 加 hub-opencode 分支（`ResolveHubOpenCode`）；`write_workspace.go` 新增 `prepareReplyWorkspace`——**空的最小 workspace**（不 clone，只为填 `Submit` 的 `SandboxPath` 契约，因 reply 不读仓库，无 gitea 依赖，不会因 gitea 缺失 panic）；失败降级抽取的 `runSingleShotReply`；内置路径也复用 `runSingleShotReply`。端到端测试 `TestReplyRunnerViaOpenCode`（探针记 `POST /session`，giteaURL 留空证明无 gitea 依赖）断言真走 OpenCode（`opencode session created` → `res.Content == "Done."`）+ `TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure`（base_dir 指向文件使 `MkdirAll` 失败 → 降级 `mock-single-shot`）。注：OpenCode 当前忽略 `Comments`（经 `IssueBody`/`UserPrompt` 传回复目标），后续如需对话历史可扩展。
+  ⚠️ 决策：reply 经 OpenCode 采用 (B) 制备最小空 workspace 而非 (A) 放宽 `Submit` 契约——保持 `Submit` 对 `SandboxPath` 的强校验不变。
 
-- [ ] 2.2.3 OpenCode 无 IM 渠道时，配置 `deliver.webhook_url` 回传  
+- [x] 2.2.4 OpenCode 无 IM 渠道时，配置 `deliver.webhook_url` 回传（出站，由 2.3.3 提供）
   文档说明用户自建 bridge 或对接企业微信/钉钉机器人。
+  ✅ 已完成：`config.full-example.yaml` 扩展 deliver 注释（backend 取舍表 / Event payload 字段 / Flask bridge 最小骨架示例）；README 新增「接入 Hub 后端 → 4. 出站通知 deliver」章节（何时需配矩阵 / 配置示例 / Event 字段 / bridge 拓扑图 / 行为约束 / 不自研 IM SDK 边界声明）；AGENTS.md hub-opencode 差异表加 IM 通知行；DEPLOYMENT.md 核心配置 yaml 块加 deliver 段 + OpenCode sidecar 章节加必配提示。注：2.3.4（指向 Hub 接收端）/ 2.3.6（多渠道文档给出推荐拓扑）作为同类项已部分覆盖，仍保留 `[ ]` 等后续如需更细化的 Hub 接收端拓扑文档再补。
 
-### 2.3 MCP Server + Deliver Webhook
+### 2.3 MCP Server + Deliver（MCP 降级可选；deliver 仅出站）
 
-- [ ] 2.3.1 实现 `internal/ingress/mcp`：Matea 作为 MCP Server  
-  暴露 `matea_create_issue` / `matea_assign_agent` / `matea_get_issue_status` / `matea_comment_on_issue` / `matea_list_open_issues` / `matea_reset_session`。
+- [ ] 2.3.1 （可选）实现 `internal/ingress/mcp`：Matea 作为 MCP Server
+  若实现则**严格最小 4 工具**：`matea_get_issue_status` / `matea_assign_agent` / `matea_list_agents` / `matea_post_comment`。不做 `create_issue`/`list_open_issues`/`reset_session`。
+  📌 降级原因：Matea↔Hermes 主链路为 HTTP Runs API，人类渠道由 Hermes gateway `deliver`（feishu/wecom 原生）承担；2.4 验收不依赖 MCP Server。
+  ⚠️ **不可复用现有代码**：`internal/agent/tools_mcp.go` 是 MCP **Client**（Matea 消费外部 MCP），此处需要的是 MCP **Server**（Matea 暴露工具），方向相反，属全新实现，工作量按「从零起」计。
+  📌 若落地，暴露的工具集须遵循 2.0.3 分层策略（Gitea 读侧 + 网关级 skill script；沙箱类默认不给）。
+  🔶 决策（2026-08-13）：本期（phase2/hub-ecosystem 收尾）**不做，向后延迟至后续周期**。理由：MCP Server 为可选项（降级原因已说明 2.4 验收不依赖），且实现需从零起步（Server 与现有 Client 反向），投入产出比低；不影响 Phase 2 主进度与全量测试。
 
-- [ ] 2.3.2 MCP 入站鉴权：API Key 或 mTLS  
+- [ ] 2.3.2 （可选）MCP 入站鉴权：API Key 或 mTLS
   默认仅监听 localhost，公网配合反向代理。
+  🔶 决策（2026-08-13）：随 2.3.1 一并**向后延迟**；2.3.1 不做则本项无承载对象。
 
-- [ ] 2.3.3 实现 `deliver` 模块：标准化事件回传  
-  `event/channel/thread_id/repo/issue_id/pr_id/action/content`。
+- [x] 2.3.3 实现 `deliver` 模块：**仅出站事件扇出**
+  `event/channel/thread_id/repo/issue_id/pr_id/action/content` → POST `deliver.webhook_url`。**无入站接收模块**（Hermes Poll / OpenCode 同步均不推完成事件）。
+  ⚠️ 验收（2026-08-11）：新增 `internal/deliver` 包（Config/Event/Client，Emit 空 URL=no-op、2xx 成功、5xx/网络错误按 max_retries 退避重试、4xx 不重试）；`RunnerFactory` 加 `deliverClient` 字段 + `SetDeliverClient`（不改 `NewRunnerFactory` 签名，避免 ~30 处调用点破坏）；`mapHubResult` 从「忽略 res.Deliver」改为真正 `Emit`；`executor.SetGiteaClientFactory` 重建 factory 时一并注入（含 timeout 字符串解析）；`main.go` 接 `d.SetDeliverConfig(activeCfg.Deliver)`；`config.schema.go` 加 `DeliverConfig`，`config.example.yaml`/`config.full-example.yaml` 加 `deliver:` 块。测试：`deliver_test.go`（5 例）+ `agents/deliver_wiring_test.go`（hub 返回 DeliverRequest 真 POST 到 httptest 且字段正确 / 无客户端不 panic）全 PASS。
 
-- [ ] 2.3.4 配置 `deliver.webhook_url`：可指向 Hub 接收端或自建 IM bridge  
-  Hermes 自带渠道时可选不配。
+- [x] 2.3.4 配置 `deliver.webhook_url`：可指向用户自建 IM bridge 或 Hub 接收端
+  Hermes 自带渠道时可选不配；OpenCode 无 IM 时必配（2.2.4）。
+  ✅ 已完成（2026-08-12，S2）：`SystemConfig.vue` 新增「Deliver」Tab，可配置 `deliver.webhook_url` / `deliver.timeout` / `deliver.max_retries` 三字段（复用 `saveAll()` → `PUT /api/config`；空字符串自动跳过，对应「未配置=关闭」语义）。后端 `internal/config/keys.go` 白名单（D 修复）已含此三键，配置可持久化并热更新。前端已 `npm run build` 并经 `go build ./...` 嵌入最新 UI。
 
-- [ ] 2.3.5 飞书/企微/钉钉等渠道**不自研 SDK**，通过 Hub 或用户自配 bridge 解决  
+- [ ] 2.3.5 系统配置页增加 MCP + Deliver 配置块（评审新增，工作量小）
+  SystemConfig 新增「MCP Server」Tab（enable + listen + auth）与「Deliver」Tab（webhook_url）。即便 2.3.1 可选，配置块保留以便启用。
+  🔶 进度（2026-08-13，S2 + 决策更新）：「Deliver」Tab 已落地（webhook_url/timeout/max_retries 三字段，见 2.3.4）。「MCP Server」Tab **本期不做、向后延迟**——随 2.3.1 决策（MCP Server 实现延迟），后端无 `mcp.*` schema，做 UI 即无后端支撑的死 UI；待后续周期 2.3.1 落定后再补对应 Tab 与 keys.go 白名单。
+
+- [ ] 2.3.6 飞书/企微/钉钉等渠道**不自研 SDK**，通过 Hub 或用户自配 bridge 解决
   文档给出推荐拓扑。
+  🔶 备注（2026-08-13）：属文档/架构决策项，非代码阻塞点；「不自研 SDK、走 Hub 或用户 bridge」的立场已在 2.2.4 / 2.3.3 / review 报告多处落地，推荐拓扑文档可在后续周期补，不阻塞本期全量测试。
 
-### 2.4 验证场景
+### 2.4 验证场景（mock Hub 验收，不依赖真实飞书）
 
-- [ ] 2.4.1 飞书用户说「帮我看看 issue #12」 → Hermes 调用 `matea_get_issue_status`
-- [ ] 2.4.2 飞书用户说「让 AI 改」 → Hermes 调用 `matea_assign_agent` → Matea 执行
-- [ ] 2.4.3 PR 合并后，Matea 推送 deliver 事件 → Hermes 回传飞书
+- [ ] 2.4.1 飞书用户「帮我看看 issue #12」 → Hermes 经 runs API 查 Gitea 上下文（若 MCP 落地则 `matea_get_issue_status`）→ 回飞书
+- [ ] 2.4.2 飞书用户「让 AI 改」 → Hermes `matea_assign_agent`（或 Matea HTTP API）→ Matea 执行 → 写回 Gitea
+- [x] 2.4.3 PR 合并后，Matea deliver 出站事件 → 用户飞书（经 outbound deliver 或 Hermes gateway `deliver` 回传）
+  🔶 进度（2026-08-13）：代码路径已落地——`dispatcher.handleLifecycleEvent` 在 `OnPRClosed(merged=true)` 后经 `emitPrMerged` 发出 `pr_merged` 事件（deliver 包新增 `EventPrMerged` 常量；deliver 客户端由 `Dispatcher.SetDeliverConfig` 复用 `buildDeliverClient` 构建；未配置 `webhook_url` 静默 no-op）。跨系统「Hermes gateway `deliver` 回传飞书」腿仍需真实 Hermes 实例人工验收（属 2.4 跨系统部分，不阻塞本期）。
 - [ ] 2.4.4 Gitea Assign `@matea-coder`（backend=hub-opencode）→ OpenCode 执行 → 结果写回 Gitea
 
 ---
@@ -279,6 +345,18 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 - [ ] 3.6 评估是否拆包：`matea-core` / `matea` / `hub-hermes` / `hub-opencode`  
   先在一个仓库内抽象，后端数量增多后再拆。
+
+- [ ] 3.7 新增 harness：Pi / Codex / Claude Code（D12，机制验证后 trivial）  
+  接入方式 = **spawn 其 CLI 或连其本地 server（out-of-process）**，**不引入任何外部 SDK**（全为 TS/Python，无法嵌进 Go 进程）。每新增一个 = 实现一个 `Harness` + 注册表加一行。
+
+- [ ] 3.8 Gitea **写侧**工具评估（D11 挂账）  
+  `gitea_create_comment` / `gitea_create_pr` 是否暴露给 harness。风险：推理中途可写 → 乱序评论、重复评论、部分失败不可回滚。需先给出幂等与回滚方案再评估。
+
+- [ ] 3.9 `workspace_transport=mcp`（L2 全隔离档，D11 部署档位）  
+  真异地/跨组织边界部署，工作区经 MCP 文件工具抵达。⚠️ 性能税：agent loop 内每次 `read_file` 一次 round-trip，大仓库比 L0 慢一个数量级 —— 是**为隔离付费，不是升级**。依赖 2.3.1 MCP Server 落地。
+
+- [ ] 3.10 MCP Server 实时工具桥 + 网关级 skill script 远程执行（D11 安全前置）  
+  必须同时满足：① 只在沙箱工作目录内执行；② API Key 鉴权；③ 单 workflow 作用域绑定。三者缺一不可。
 
 ---
 
@@ -326,6 +404,10 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | 强制用户先装 Hub 才能使用 | builtin 默认可用 |
 | 同 Agent 忙碌时硬拒绝入队 | 串行必须可排队 |
 | 自动双向同步 Matea Prompt 与 Hub Skill | Phase 2 手动 export/import，不做自动写 |
+| 接管远程 harness 自身的 skill/plugin 机制 | OpenCode plugin、Claude Code skills 各管各的；Matea 只保证自己的 skill 能被任何 harness 用到（D11） |
+| 用 ToolBox 替换成品 harness 自带工具 | 只能 append 不能 replace；重名会导致模型在两套同功能工具间摇摆（D11） |
+| 给远程 harness 塞一套沙箱文件工具 | 负收益：它自带且直读本地盘更快，经 ToolBox 多一个 round-trip（D11） |
+| 引入外部 harness 的 SDK（Pi/Codex/Claude/OpenCode） | 全为 TS/Python，无法嵌进 Go；统一 out-of-process spawn/connect（D12） |
 
 ---
 
@@ -334,10 +416,15 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | 文档 | 用途 |
 |------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 现行架构 |
+| [AGENTS.md](AGENTS.md) | Agent 配置与 role 说明（1.6.3 新增） |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 部署 |
+| [20260805-Phase2-plan.md](20260805-Phase2-plan.md) | **Phase 2 实施方案（D1–D12 已拍板，方案冻结）** |
 | [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md) | 产品定位与演进规划 |
 | [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend（待按 HubBackend 刷新） |
 | [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选增强 |
+| [archived/20260804-Phase1.5-plan.md](archived/20260804-Phase1.5-plan.md) | Phase 1.5 计划（已收官归档） |
+| [archived/20260805-Phase2-evolution-direction.md](archived/20260805-Phase2-evolution-direction.md) | Phase 2 演进方向讨论（结论已并入 Phase2-plan） |
+| [archived/20260808-IM-channel-integration-analysis.md](archived/20260808-IM-channel-integration-analysis.md) | IM 渠道接入分析（结论已并入 D5/D6） |
 | [archived/20260803-TASKS.md](archived/20260803-TASKS.md) | v0.11.4 任务清单归档 |
 | [archived/20260724-TASKS.md](archived/20260724-TASKS.md) | 写路径 / 摩擦 / Bootstrap |
 | [archived/20260723-TASKS.md](archived/20260723-TASKS.md) | P3 + 开源后加固 |

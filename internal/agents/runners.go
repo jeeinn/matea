@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/deliver"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/mcp"
@@ -85,6 +86,15 @@ type RunnerFactory struct {
 	toolPacks        config.ToolPacksConfig     // built-in + user-defined tool packs
 	mcpRegistry      *mcp.Registry              // MCP server registry (nil = no MCP)
 	gatewayDir       string                     // gateway root directory for SKILL.md scanning
+	deliverClient    *deliver.Client            // outbound event fan-out (task 2.3.3); nil = disabled
+}
+
+// SetDeliverClient injects the outbound deliver client used to fan out
+// DeliverRequest events returned by hub backends. A nil client disables
+// deliver (the events are logged and dropped). Safe to call multiple times —
+// the executor re-injects it whenever the runner factory is rebuilt.
+func (f *RunnerFactory) SetDeliverClient(c *deliver.Client) {
+	f.deliverClient = c
 }
 
 // NewRunnerFactory creates a new RunnerFactory from agent defaults and loop config.
@@ -148,15 +158,22 @@ func NewRunnerFactory(llmRegistry *llm.Registry, giteaFactory GiteaClientFactory
 	factory.hubRegistry = NewHubBackendRegistry()
 	factory.hubRegistry.Register(NewBuiltinHubBackend(factory))
 	for name, cfg := range beCfg.Backends {
-		if config.NormalizeBackend(cfg.Type) != config.BackendTypeHubOpenCode {
-			continue
+		switch config.NormalizeBackend(cfg.Type) {
+		case config.BackendTypeHubOpenCode:
+			oc, err := NewOpenCodeHTTPBackend(name, cfg)
+			if err != nil {
+				log.Printf("[WARN] hub backend %q not registered: %v", name, err)
+				continue
+			}
+			factory.hubRegistry.Register(oc)
+		case config.BackendTypeHubHermes:
+			hb, err := buildHubBackend(name, cfg)
+			if err != nil {
+				log.Printf("[WARN] hub backend %q not registered: %v", name, err)
+				continue
+			}
+			factory.hubRegistry.Register(hb)
 		}
-		oc, err := NewOpenCodeHTTPBackend(name, cfg)
-		if err != nil {
-			log.Printf("[WARN] hub backend %q not registered: %v", name, err)
-			continue
-		}
-		factory.hubRegistry.Register(oc)
 	}
 	return factory
 }

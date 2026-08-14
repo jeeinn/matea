@@ -344,6 +344,47 @@ npm test'
           </el-form>
         </el-tab-pane>
 
+        <!-- Tab: Deliver 出站通知 -->
+        <el-tab-pane label="Deliver 通知" name="deliver">
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            <template #title>出站事件通知（仅出站扇出，不自研 IM SDK）</template>
+            任务完成后，Matea 可将结果以 Webhook 形式推送到你自建的 IM 机器人（企业微信 / 飞书 / 钉钉）或 Hub 接收端。
+            <b>OpenCode 后端无自带 IM 渠道，必须配置</b>；Hermes 自带原生渠道，可留空。未配置时静默不通知（结果仍正常写回 Gitea）。
+          </el-alert>
+          <el-form label-width="160px" class="config-form">
+            <el-form-item label="Webhook URL">
+              <el-input
+                v-model="form['deliver.webhook_url']"
+                placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+              />
+              <div class="form-tip">
+                出站事件的唯一接收地址；可指向企业微信 / 飞书 / 钉钉机器人 Webhook，或自建 Hub 接收端。留空 = 关闭通知。
+                <el-tag v-if="sourceTag('deliver.webhook_url')" size="small" :type="sourceTag('deliver.webhook_url') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
+                  {{ sourceTag('deliver.webhook_url') }}
+                </el-tag>
+              </div>
+            </el-form-item>
+            <el-form-item label="单次请求超时">
+              <el-input v-model="form['deliver.timeout']" placeholder="10s（Go duration，默认 10s）" style="width: 240px" />
+              <div class="form-tip">
+                单个 POST 的超时时间（Go duration 语法，如 5s / 2m）；为空使用默认 10s。
+                <el-tag v-if="sourceTag('deliver.timeout')" size="small" :type="sourceTag('deliver.timeout') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
+                  {{ sourceTag('deliver.timeout') }}
+                </el-tag>
+              </div>
+            </el-form-item>
+            <el-form-item label="最大重试次数">
+              <el-input-number v-model.number="form['deliver.max_retries']" :min="0" :max="10" />
+              <div class="form-tip">
+                首次失败后额外重试次数（网络错误 / 5xx）；0 = 仅尝试一次（默认 0）。4xx 不重试。
+                <el-tag v-if="sourceTag('deliver.max_retries')" size="small" :type="sourceTag('deliver.max_retries') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
+                  {{ sourceTag('deliver.max_retries') }}
+                </el-tag>
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <!-- Tab 6: Prompt 模板 -->
         <el-tab-pane label="Prompt 模板" name="prompts">
           <el-alert title="管理内置 Prompt 模板。自定义模板优先级高于内置模板（DB > 内置）。" type="info" :closable="false" style="margin-bottom: 16px" />

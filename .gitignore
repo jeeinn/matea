@@ -20,3 +20,10 @@ web/dist/
 # Logs
 *.log
 *.bak
+
+# Test artifacts & caches (E2E / playwright / scratch)
+.playwright-cli/
+*.e2e.yaml
+playwright-cli.json
+# Organized non-core / scratch files (test configs, snapshots, screenshots, temp tools)
+archive/

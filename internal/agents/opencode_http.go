@@ -490,7 +490,7 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 	if tc == nil {
 		return nil, fmt.Errorf("hub-opencode backend %q: nil TaskContext", b.name)
 	}
-	subType, err := opencodeWriteSubType(tc.TaskType)
+	subType, err := opencodeSubType(tc.TaskType)
 	if err != nil {
 		return nil, err
 	}
@@ -531,8 +531,17 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 // Poll returns the cached terminal outcome for a Handle produced by Submit.
 // The cache is instance-local (see the struct doc); an unknown RemoteID is an
 // error, never a silent pending.
+//
+// Restart re-attach: when the cache miss is caused by a Matea restart (the
+// instance-local cache is gone but the opencode sidecar is a separate process
+// that may still hold the session), Poll attempts to recover the result
+// directly from the sidecar via GET /session/{id}/message. This is the recovery
+// half of the Handle persistence contract — without it, a persisted Handle
+// after restart would always report "unknown handle" and the task would fail
+// despite the sidecar having finished. If the sidecar no longer has the session
+// (GC'd or also restarted), Poll falls back to the unknown-handle error, which
+// lets the executor retry / re-submit as appropriate.
 func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResult, State, error) {
-	_ = ctx
 	if h == nil {
 		return nil, "", fmt.Errorf("hub-opencode backend %q: nil Handle", b.name)
 	}
@@ -542,13 +551,25 @@ func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResu
 	b.hubMu.Lock()
 	out, ok := b.hubResults[h.RemoteID]
 	b.hubMu.Unlock()
-	if !ok {
-		return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)
+	if ok {
+		if out.err != nil {
+			return nil, StateFailed, out.err
+		}
+		return out.result, StateDone, nil
 	}
-	if out.err != nil {
-		return nil, StateFailed, out.err
+
+	// Cache miss — try to re-attach to the still-living sidecar session.
+	if summary, rerr := b.getLastAssistantMessage(ctx, h.RemoteID); rerr == nil && summary != "" {
+		res := &BackendResult{Summary: summary}
+		// Re-populate the cache so subsequent Polls are cheap and consistent.
+		b.hubMu.Lock()
+		b.hubResults[h.RemoteID] = hubOutcome{result: res}
+		b.hubMu.Unlock()
+		log.Printf("[INFO] hub-opencode backend %q: re-attached to sidecar session %q after cache miss", b.name, h.RemoteID)
+		return res, StateDone, nil
 	}
-	return out.result, StateDone, nil
+
+	return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)
 }
 
 // Cancel aborts the opencode session referenced by the Handle (best effort,
@@ -561,15 +582,27 @@ func (b *OpenCodeHTTPBackend) Cancel(ctx context.Context, h *Handle) error {
 	return b.Abort(ctx, h.RemoteID)
 }
 
-// opencodeWriteSubType maps a hub task type to the coding sub-type, rejecting
-// non-write task types (Analyze/Review/Reply never run on OpenCode).
-func opencodeWriteSubType(taskType string) (string, error) {
+// opencodeSubType maps a hub task type to the coding sub-type OpenCode
+// understands. Write tasks (solve/fix) map to their natural sub-type; read
+// tasks (analyze/review/reply) map to "dev" as a best-effort carrier — the
+// workspace is prepared by Matea and cleaned up after, so the read-only
+// contract is preserved regardless of what OpenCode does inside the sandbox.
+//
+// Wired in 2.2.1 (analyze), 2.2.2 (review) and 2.2.3 (reply); unknown task
+// types are rejected.
+func opencodeSubType(taskType string) (string, error) {
 	switch taskType {
 	case "solve_issue", "solve_comment":
 		return "dev", nil
 	case "fix_bug":
 		return "bugfix", nil
+	case "analyze_issue":
+		return "dev", nil
+	case "review_pr":
+		return "dev", nil
+	case "reply_comment":
+		return "dev", nil
 	default:
-		return "", fmt.Errorf("hub-opencode supports write task types only (solve_issue / solve_comment / fix_bug), got %q", taskType)
+		return "", fmt.Errorf("hub-opencode backend: unsupported task type %q (supported: solve_issue, solve_comment, fix_bug, analyze_issue, review_pr, reply_comment)", taskType)
 	}
 }

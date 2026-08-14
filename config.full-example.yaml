@@ -280,3 +280,50 @@ mcp:
     # filesystem:
     #   base_url: "http://localhost:8082/mcp"
     #   timeout: "15s"
+
+# ===== 出站扇出配置 (task 2.3.3) =====
+# 把 Agent 完成事件（task_completed 等）以 JSON POST 到单个外部 webhook。
+# 仅出站、无入站模块：Hermes Poll / OpenCode 同步均不向 Matea 推送完成事件，由 Matea 主动发。
+# webhook_url 留空 = 关闭（结果只落 Gitea，不通知人类）。
+#
+# 各 backend 是否需要配 deliver：
+#   builtin       — 可选（默认结果评论已写回 Gitea，IM 通知按需）
+#   hub-opencode  — 必配（OpenCode 无自带 IM 渠道，是 2.2.4 的硬缺口）
+#   hub-hermes    — 可不配（Hermes 自带飞书/企微原生渠道，结果经 Hermes 回传）
+#
+# webhook_url 指向建议（三选一）：
+#   1) 自建 IM bridge：最常见，bridge 接收 Event 后转飞书/企微/钉钉机器人消息（见下方示例）
+#   2) Hub 接收端：Hermes gateway 或自研中转，统一分发给多渠道
+#   3) 直接对接机器人 webhook：若机器人接受任意 JSON 即可，但通常需 bridge 做格式转换
+#
+# Event payload（POST body，application/json）：
+#   {
+#     "event":     "task_completed",      // 事件类型
+#     "channel":   "feishu",              // 渠道标识，由 bridge 解释
+#     "thread_id": "issue_42",            // 可选，用于 IM 续接会话
+#     "repo":      "owner/repo",          // 可选
+#     "issue_id":  42,                    // 可选，0 表示无关联
+#     "pr_id":     0,                     // 可选，0 表示无关联
+#     "action":    "comment",             // comment | create_pr | none
+#     "content":   "..."                  // 事件正文（评论内容 / PR 链接等）
+#   }
+#
+# 自建 bridge 示例（最小骨架，把 Event 转成飞书机器人消息）：
+#   # bridge 监听 :9090/event，把 content 转飞书 text 消息
+#   from flask import Flask, request
+#   import requests
+#   app = Flask(__name__)
+#   FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx"
+#   @app.post("/event")
+#   def event():
+#       e = request.json
+#       msg = {"msg_type": "text", "content": {"text": f"[{e['repo']}] {e['content']}"}}
+#       r = requests.post(FEISHU_WEBHOOK, json=msg)
+#       return ("", r.status_code)
+#   # 然后把 matea 的 deliver.webhook_url 指向 http://localhost:9090/event
+deliver:
+  webhook_url: ""                       # 留空 = 关闭；OpenCode 必配，见 2.2.4
+  # 单次 POST 超时；留空或非法 → 默认 10s
+  timeout: "10s"
+  # 首次失败后的额外重试次数（网络错误/5xx 才重试；4xx 不重试）；0 = 仅一次
+  max_retries: 1

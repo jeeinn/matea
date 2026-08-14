@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"github.com/jeeinn/matea/internal/agents"
+	// Blank import registers the Hermes HubBackend factory (hub-hermes) via its
+	// init(). Must stay imported so agents.buildHubBackend can construct it.
+	_ "github.com/jeeinn/matea/internal/agents/backends/hermes"
 	"github.com/jeeinn/matea/internal/api"
 	"github.com/jeeinn/matea/internal/auth"
 	"github.com/jeeinn/matea/internal/config"
@@ -121,6 +124,7 @@ func main() {
 		return cfgManager.Get().Debug
 	})
 	d.SetModelMetaProvider(cfgManager)
+	d.SetDeliverConfig(activeCfg.Deliver)
 
 	// Initialize v2 workflow components
 	registry := agents.NewRegistry()
@@ -220,8 +224,9 @@ func main() {
 		manager.ReloadGitea(&newCfg.Gitea)
 		d.SetGiteaConfig(&newCfg.Gitea)
 		d.SetWorkflowPolicy(workflow.BuildPolicy(newCfg.Workflow.Preset, newCfg.Workflow.Gates))
+		d.SetDeliverConfig(newCfg.Deliver)
 		webhookHandler.SetGiteaConfig(&newCfg.Gitea)
-		log.Printf("[INFO] LLM registry, Gitea client, and workflow policy reloaded")
+		log.Printf("[INFO] LLM registry, Gitea client, workflow policy, and deliver config reloaded")
 	})
 	apiHandler.SetIssueController(d)
 	apiHandler.RegisterRoutes(mux)
