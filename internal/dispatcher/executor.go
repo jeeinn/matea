@@ -249,6 +249,12 @@ func (e *Executor) SetGiteaClientFactory(factory GiteaClientFactory, getDebugCon
 	// rebuilt (task 2.3.3). A disabled config (empty webhook_url) yields a
 	// no-op client.
 	e.runnerFactory.SetDeliverClient(buildDeliverClient(e.deliverCfg))
+	// git_sync (task A6): the deploy key issuer rides on the admin client's
+	// token (write:repository scope suffices per the A0.2 spike — no extra
+	// credential is introduced, and the hub never sees this token).
+	if admin := factory.GetAdminGiteaClient(); admin != nil {
+		e.runnerFactory.SetDeployKeyIssuer(agents.NewGiteaDeployKeyIssuer(admin))
+	}
 }
 
 // SetDeliverConfig updates the outbound deliver configuration. The new client
