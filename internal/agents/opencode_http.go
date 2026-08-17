@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -485,7 +486,14 @@ func (b *OpenCodeHTTPBackend) Capabilities() HubCapabilities {
 
 // Submit runs a write task on the opencode sidecar synchronously and returns
 // a Handle whose RemoteID is the opencode session id. Non-write task types
-// and missing sandbox paths are rejected as submission errors.
+// are rejected as submission errors.
+//
+// Workspace requirement: shared_path tasks need TaskContext.SandboxPath (a
+// Matea-prepared local directory). git_sync tasks (tc.GitSync != nil, task A4)
+// need NO Matea workspace — the sidecar clones the repo itself using the
+// deploy key carried in GitSyncInfo, into a per-task subdirectory of the
+// opencode server's own project directory (the X-Opencode-Directory header is
+// omitted so the server default applies).
 func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Handle, error) {
 	if tc == nil {
 		return nil, fmt.Errorf("hub-opencode backend %q: nil TaskContext", b.name)
@@ -494,16 +502,27 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 	if err != nil {
 		return nil, err
 	}
-	if tc.SandboxPath == "" {
+	gitSync := tc.GitSync != nil
+	if !gitSync && tc.SandboxPath == "" {
 		return nil, fmt.Errorf("hub-opencode backend %q: TaskContext.SandboxPath is required for %s tasks", b.name, tc.TaskType)
 	}
 
+	userPrompt := tc.UserPrompt
+	if gitSync {
+		// The hub clones/commits/pushes per the spike-validated contract; the
+		// instructions carry the task-scoped deploy key (base64) and the draft
+		// branch it may push. Work happens in a per-task subdirectory so
+		// concurrent sessions never share a checkout.
+		userPrompt = strings.TrimSpace(tc.UserPrompt + "\n\n" +
+			BuildGitSyncInstructions(tc.GitSync, fmt.Sprintf("matea-hub-%d", tc.TaskID)))
+	}
+
 	res, err := b.Run(ctx, CodingRequest{
-		WorkDir:      tc.SandboxPath,
+		WorkDir:      tc.SandboxPath, // empty under git_sync → default opencode project
 		Task:         &store.Task{ID: tc.TaskID, Repo: tc.Repo, Event: tc.IssueTitle, Context: tc.IssueBody},
 		Agent:        &store.Agent{Provider: tc.Provider, Model: tc.Model},
 		TaskSubType:  subType,
-		Prompt:       tc.UserPrompt,
+		Prompt:       userPrompt,
 		SystemPrompt: tc.SystemPrompt,
 	})
 	if err != nil {
@@ -522,8 +541,18 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 		RemoteID:       remoteID,
 		IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", tc.TaskType, tc.Repo, tc.IssueID, tc.PRID),
 	}
+	result := &BackendResult{Summary: res.Summary}
+	if gitSync {
+		// Report the draft branch back so runViaHub's Approve can fetch and
+		// validate it. The trailer cross-checks hub honesty; the fetched remote
+		// state is authoritative.
+		result.GitSync = &GitSyncResult{
+			DraftBranch: tc.GitSync.DraftBranch,
+			DraftHEAD:   ParseDraftHeadTrailer(res.Summary),
+		}
+	}
 	b.hubMu.Lock()
-	b.hubResults[remoteID] = hubOutcome{result: &BackendResult{Summary: res.Summary}}
+	b.hubResults[remoteID] = hubOutcome{result: result}
 	b.hubMu.Unlock()
 	return h, nil
 }

@@ -94,6 +94,17 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 		}
 	}
 
+	// git_sync write path (task A4): a hub-opencode backend configured with
+	// workspace_transport=git_sync runs through runViaHub's write channel —
+	// Matea Prepares credentials and later Approves the hub-pushed draft
+	// branch; NO local workspace is prepared (the hub clones itself), and the
+	// CodingBackend.Run / harness-verify / finalizeWriteChanges stages below
+	// are all skipped by design. shared_path backends continue unchanged.
+	if hb, isHub := factory.ResolveHubOpenCode(agentCfg); isHub && factory.gitSyncTransportFor(hb) != nil {
+		tc := buildHubWriteTaskContext(task, agentCfg, hb.Name(), taskSubType)
+		return factory.runViaHub(ctx, task, agentCfg, hb, tc)
+	}
+
 	// Phase 1: prepare workspace (sandbox / clone / branch)
 	wwc, err := prepareWriteWorkspace(ctx, task, agentCfg, factory, taskSubType)
 	if err != nil {
@@ -260,6 +271,42 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	}
 	factory.emitBuiltinDeliver(task, finalResult)
 	return finalResult, nil
+}
+
+// buildHubWriteTaskContext assembles the TaskContext for a git_sync write task
+// (task A4). Unlike the CodingBackend path there is no local sandbox, so no
+// code context is loaded — the hub clones the repo itself and builds its own
+// context. Prompts are the same Dev/Bugfix bases the builtin path uses.
+func buildHubWriteTaskContext(task *store.Task, agentCfg *store.Agent, backendName, taskSubType string) *TaskContext {
+	taskCtx := agentpkg.TaskContext{
+		IssueTitle: task.Event,
+		IssueBody:  task.Context,
+		RepoName:   task.Repo,
+		TaskType:   taskSubType,
+	}
+	var basePrompt string
+	if taskSubType == "dev" {
+		basePrompt = agentpkg.BuildDevPrompt(taskCtx, nil)
+	} else {
+		basePrompt = agentpkg.BuildBugfixPrompt(taskCtx, nil)
+	}
+	systemPrompt := agentpkg.MergeAgentSystemPrompt(basePrompt, agentCfg.SystemPrompt)
+	return &TaskContext{
+		TaskType:     task.TaskType,
+		Role:         "coder",
+		Backend:      backendName,
+		Repo:         task.Repo,
+		IssueID:      task.IssueID,
+		PRID:         task.PRID,
+		IssueTitle:   task.Event,
+		IssueBody:    task.Context,
+		BaseBranch:   task.BaseBranch,
+		Provider:     agentCfg.Provider,
+		Model:        agentCfg.Model,
+		TaskID:       task.ID,
+		SystemPrompt: systemPrompt,
+		UserPrompt:   task.Context,
+	}
 }
 
 // saveSessionBranch persists the working branch on the session for workspace reuse.

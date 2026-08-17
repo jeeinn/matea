@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -343,4 +344,54 @@ func defaultRunGit(ctx context.Context, dir string, args ...string) (string, err
 		return string(out), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, string(out))
 	}
 	return string(out), nil
+}
+
+// DraftHeadTrailer is the exact line prefix a hub must end its final response
+// with so Matea can cross-check the pushed draft head (task A4). Approve
+// treats the fetched remote state as authoritative; the trailer is the
+// hub's honesty cross-check.
+const DraftHeadTrailer = "matea-draft-head: "
+
+// ParseDraftHeadTrailer extracts the reported draft head from a hub's final
+// message. Returns "" when absent — Approve's fetch is authoritative, the
+// trailer only cross-checks when present.
+func ParseDraftHeadTrailer(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, DraftHeadTrailer) {
+			return strings.TrimSpace(strings.TrimPrefix(line, DraftHeadTrailer))
+		}
+	}
+	return ""
+}
+
+// BuildGitSyncInstructions renders the mandatory git workflow a hub must
+// follow under git_sync (validated end-to-end by the A0.1 spike against a real
+// OpenCode + Gitea). Shared by the OpenCode (A4) and Hermes (B1) integrations
+// so both hubs get byte-identical contract instructions.
+//
+// The private key travels base64-encoded on one line: PEM's multi-line shape
+// is too easy for an LLM to mangle when re-typing; base64 -d restores it
+// byte-exactly (spike finding).
+func BuildGitSyncInstructions(info *GitSyncInfo, workSubdir string) string {
+	keyB64 := base64.StdEncoding.EncodeToString([]byte(info.PrivateKey))
+	sshCmd := fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'", workSubdir)
+	return fmt.Sprintf(`## Git workflow (MANDATORY — follow exactly)
+
+You are given a task-scoped deploy key. Do ALL git work yourself; the orchestrator never commits or pushes for you.
+
+1. Create and enter the work directory: mkdir -p %[1]s && cd %[1]s
+2. Restore the deploy key (it is base64-encoded, single line):
+   printf '%%s' '%[2]s' | base64 -d > key && chmod 600 key
+   Verify: ssh-keygen -y -f key must print a public key without error.
+3. Clone the repository: %[3]s git clone %[4]s repo
+4. cd repo && git config user.email "hub@matea.local" && git config user.name "matea-hub" && git checkout -b %[5]s
+5. Do the task work inside repo/ (read, edit, write files as needed).
+6. Commit ALL changes: git add -A && git commit -m "<summary>" -m "%[6]s"
+   Every commit message MUST contain the footer line: %[6]s
+7. Push the draft branch: cd repo && GIT_SSH_COMMAND='ssh -i ../key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' git push -u origin %[5]s
+8. End your final response with a line exactly of this form (full 40-char sha):
+   matea-draft-head: <output of: cd repo && git rev-parse HEAD>
+
+Rules: push ONLY the branch %[5]s — never any other branch. Do not open pull requests yourself.`, workSubdir, keyB64, sshCmd, info.CloneURL, info.DraftBranch, info.RequiredFooter)
 }

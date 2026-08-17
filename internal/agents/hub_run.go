@@ -242,17 +242,34 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
 			default: // StateDone
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
-				if writeViaGitSync && res != nil && res.GitSync != nil {
-					// Write path (task A3): the hub already committed and pushed
-					// the draft branch; Approve fetches, validates the three
-					// elements and opens the PR. finalizeWriteChanges' commit/
-					// push stage is intentionally bypassed.
+				if writeViaGitSync {
+					// Write path (task A3/A4): the hub already committed and
+					// pushed the draft branch; Approve fetches, validates the
+					// three elements and opens the PR. finalizeWriteChanges'
+					// commit/push stage is intentionally bypassed.
 					if gitSyncInfo == nil {
 						f.cleanupGitSyncKey(transport, task, issuedKey)
-						return nil, fmt.Errorf("hub backend %q returned git_sync result but no prepare state is available for task %d", backend.Name(), task.ID)
+						return nil, fmt.Errorf("hub backend %q completed write task %d but no git_sync prepare state is available", backend.Name(), task.ID)
+					}
+					summary := ""
+					var gitSyncRes *GitSyncResult
+					if res != nil {
+						summary = res.Summary
+						gitSyncRes = res.GitSync
+					}
+					if gitSyncRes == nil {
+						// The draft branch name is deterministic and Approve's
+						// fetch is authoritative, so a hub that reports no
+						// explicit git_sync result (e.g. re-attached via Poll
+						// after a restart) still completes — a hub that pushed
+						// nothing fails at the fetch ("not found on remote").
+						gitSyncRes = &GitSyncResult{
+							DraftBranch: gitSyncInfo.DraftBranch,
+							DraftHEAD:   ParseDraftHeadTrailer(summary),
+						}
 					}
 					owner, repo := splitOwnerRepo(task.Repo)
-					out, aerr := transport.Approve(ctx, task, agent, owner, repo, gitSyncInfo, res.GitSync, res.Summary)
+					out, aerr := transport.Approve(ctx, task, agent, owner, repo, gitSyncInfo, gitSyncRes, summary)
 					f.cleanupGitSyncKey(transport, task, issuedKey)
 					if aerr != nil {
 						return nil, fmt.Errorf("git_sync approve: %w", aerr)
@@ -263,16 +280,9 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 						IssueID: task.IssueID,
 						PRID:    out.PRID,
 						Action:  out.Action,
-						Content: res.Summary,
+						Content: summary,
 					}, false)
 					return out, nil
-				}
-				if writeViaGitSync {
-					// A write task that finishes without a git_sync result never
-					// pushed a draft branch — that is a failed delivery, not a
-					// comment-shaped success.
-					f.cleanupGitSyncKey(transport, task, issuedKey)
-					return nil, fmt.Errorf("hub backend %q completed write task %d without a git_sync result (no draft branch pushed)", backend.Name(), task.ID)
 				}
 				return f.mapHubResult(backend, res, task), nil
 			}
