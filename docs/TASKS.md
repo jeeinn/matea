@@ -203,17 +203,19 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 阶段 A0：前置验证（spike，不写业务代码）
 
-> 原则：先证伪再开工，避免阶段 A 在未知路径上硬扛。
+> 原则：先证伪再开工，避免阶段 A 在未知路径上硬扛。  
+> ✅ **已完成（2026-08-17）**：实测报告 → [20260817-a0-spike-results.md](20260817-a0-spike-results.md)
 
-- [ ] **A0.1 OpenCode git 能力 spike（~2 天）**
+- [x] **A0.1 OpenCode git 能力 spike（~2 天）** ✅（2026-08-17，真实 OpenCode 1.18.4 + docker Gitea 1.22.6 实测通过）
   验证：HTTP API 把 `clone_url`+deploy key 传给 OpenCode；OpenCode 在 `X-Opencode-Directory` 能否 `git clone <带 token URL>` / `git commit` / `git push` 草稿分支；是否支持外部 git 凭据注入。
-  回退预案：失败 → A0.3 决策（移除 OpenCode backend / 改走 patch 回传 / 延期）；**不让 OpenCode 适配失败阻塞整个 git_sync 落地**。
+  结果：全链路通过（base64 注入私钥 → `GIT_SSH_COMMAND` → clone/commit/push `matea/hub-200` 落地 Gitea）。
+  ⚠️ 坑已记录：Windows 原生路径、同步 POST 不可作唯一完成信号、无人值守需 `permission.*=allow`。
 
-- [ ] **A0.2 Gitea deploy key API spike（~1 天）**
-  admin token 调 `POST /api/v1/repos/{owner}/{repo}/keys` 创建、调删除接口回收；确认本机 Gitea 版本支持、响应格式、权限要求；key title 格式 `matea-hub-task-{taskID}`；定义回收失败重试/告警策略。
+- [x] **A0.2 Gitea deploy key API spike（~1 天）** ✅（2026-08-17，Gitea 1.22.6 实测通过）
+  创建 201 / 列表 / 删除 204 幂等且立即生效；rw key 可 push、ro key push 被拒；**`write:repository` scope 即可，无需 admin**；重复 key 材料 422（每任务须新密钥对）。
 
-- [ ] **A0.3 决策点：OpenCode 是否作为阶段 A pilot**
-  A0.1 通过 → OpenCode 当 pilot（保留）；A0.1 失败 → **让 Hermes 当 pilot**，OpenCode backend 本阶段移除或延后，不阻塞。
+- [x] **A0.3 决策点：OpenCode 是否作为阶段 A pilot** ✅（2026-08-17）
+  A0.1 通过 → **OpenCode 当 pilot**，阶段 A 按序推进；Hermes 阶段 B 对齐同一契约。
 
 ### 阶段 A：git_sync 关键路径打通（OpenCode pilot + 删 shared_path，含共存窗口）
 
@@ -380,6 +382,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | [20260805-Phase2-plan.md](20260805-Phase2-plan.md) | Phase 2 实施方案（D1–D12 已拍板，方案冻结） |
 | [20260815-git-sync-3phase-plan.md](20260815-git-sync-3phase-plan.md) | **git_sync 三阶段方案（v3.1，当前重点）** |
 | [20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md) | git_sync 评估与社区解法对照 |
+| [20260817-a0-spike-results.md](20260817-a0-spike-results.md) | **A0 前置验证实测报告（OpenCode + Gitea deploy key，均通过）** |
 | [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md) | 产品定位与演进规划 |
 | [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend（待按 HubBackend 刷新） |
 | [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选增强 |
