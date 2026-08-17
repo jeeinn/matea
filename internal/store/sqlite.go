@@ -235,6 +235,9 @@ func (db *DB) migrate() error {
 			remote_id       TEXT NOT NULL,
 			idempotency_key TEXT NOT NULL DEFAULT '',
 			status          TEXT NOT NULL DEFAULT 'running',
+			draft_branch    TEXT NOT NULL DEFAULT '',
+			base_head       TEXT NOT NULL DEFAULT '',
+			deploy_key_id   INTEGER NOT NULL DEFAULT 0,
 			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -276,6 +279,10 @@ func (db *DB) migrate() error {
 		`ALTER TABLE processed_deliveries ADD COLUMN event_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE processed_deliveries ADD COLUMN payload BLOB`,
 		`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
+		// git_sync (task A2): draft-branch contract state on hub handles.
+		`ALTER TABLE hub_handles ADD COLUMN draft_branch TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hub_handles ADD COLUMN base_head TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hub_handles ADD COLUMN deploy_key_id INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, m := range additionalMigrations {

@@ -135,3 +135,35 @@ func TestResetStaleRunningTasksExceptHub(t *testing.T) {
 	gotPlain, _ := db.GetTask(plainTask.ID)
 	assert.Equal(t, StatusPending, gotPlain.Status, "plain stale task must be reset to pending")
 }
+
+func TestHubHandleGitSyncFields(t *testing.T) {
+	db := newTestDB(t)
+
+	// git_sync write task: draft-branch contract state round-trips (task A2).
+	h := &HubHandle{
+		TaskID:         42,
+		Backend:        "hub-opencode",
+		RemoteID:       "sess-gitsync",
+		IdempotencyKey: "solve_issue:o/r:12:0",
+		Status:         HubHandleStatusRunning,
+		DraftBranch:    "matea/hub-42",
+		BaseHEAD:       "aaaa0000bbbb1111",
+		DeployKeyID:    1234,
+	}
+	require.NoError(t, db.SaveHubHandle(h))
+
+	got, err := db.GetHubHandle(42)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "matea/hub-42", got.DraftBranch)
+	assert.Equal(t, "aaaa0000bbbb1111", got.BaseHEAD)
+	assert.Equal(t, int64(1234), got.DeployKeyID)
+
+	// Read/reply task: git_sync fields stay at zero values.
+	require.NoError(t, db.SaveHubHandle(&HubHandle{TaskID: 43, Backend: "hub-hermes", RemoteID: "run-1", Status: HubHandleStatusRunning}))
+	got, err = db.GetHubHandle(43)
+	require.NoError(t, err)
+	assert.Equal(t, "", got.DraftBranch)
+	assert.Equal(t, "", got.BaseHEAD)
+	assert.Equal(t, int64(0), got.DeployKeyID)
+}

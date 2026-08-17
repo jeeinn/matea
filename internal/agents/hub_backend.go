@@ -102,6 +102,12 @@ type TaskContext struct {
 	SandboxPath string           `json:"sandbox_path,omitempty"`
 	ToolAccess  *ToolAccessGrant `json:"tool_access,omitempty"`
 
+	// GitSync carries the draft-branch contract for hub write tasks under the
+	// git_sync transport (task A2): Matea Prepares it (deploy key + draft
+	// branch + base anchor) and the hub clones/commits/pushes with it.
+	// Nil for read/reply tasks and for shared_path-era backends.
+	GitSync *GitSyncInfo `json:"git_sync,omitempty"`
+
 	// Channel routing for deliver events (IM bridges).
 	Channel  string `json:"channel,omitempty"`
 	ThreadID string `json:"thread_id,omitempty"`
@@ -136,6 +142,11 @@ type BackendResult struct {
 	Summary      string        `json:"summary"`
 	GiteaActions []GiteaAction `json:"gitea_actions,omitempty"`
 	Deliver      *DeliverRequest `json:"deliver,omitempty"`
+
+	// GitSync reports the hub-pushed draft branch for write tasks under the
+	// git_sync transport (task A2). Matea's WorkspaceTransport.Approve
+	// validates it (three elements) and opens the PR.
+	GitSync *GitSyncResult `json:"git_sync,omitempty"`
 
 	// ExternallyHandled is true when the hub already performed git/PR itself
 	// (only honored when Capabilities().HandlesGit is true). Default false:
