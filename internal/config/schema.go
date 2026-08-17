@@ -306,12 +306,21 @@ const (
 // WorkspaceTransport defines how the workspace is delivered to a hub backend.
 // D11 deployment tiers: L0 same-process host / L1 shared volume / L2 full isolation.
 //
-// Phase 2 only implements WorkspaceTransportSharedPath. WorkspaceTransportMCP
-// is Phase 3 (requires MCP Server, performance tax for cross-org isolation).
+// git_sync rollout (20260815-git-sync-3phase-plan.md v3.1): A1–A4 keep a
+// coexistence window where shared_path and git_sync are both accepted; A5
+// (gated on B1 acceptance) removes shared_path and converges on git_sync as
+// the only hub write transport. WorkspaceTransportMCP stays rejected until
+// Phase 3 (requires MCP Server, performance tax for cross-org isolation).
 const (
 	// WorkspaceTransportSharedPath delivers workspace via local absolute path
-	// (L0 same machine or L1 shared volume). Phase 2 default and only impl.
+	// (L0 same machine or L1 shared volume). Phase 2 default; removed in A5.
 	WorkspaceTransportSharedPath = "shared_path"
+
+	// WorkspaceTransportGitSync delivers work via git: Matea issues a
+	// task-scoped deploy key and hands the hub a GitSyncInfo; the hub clones,
+	// commits and pushes a draft branch itself; Matea fetches, validates and
+	// opens the PR. Target transport for all hub write tasks.
+	WorkspaceTransportGitSync = "git_sync"
 
 	// WorkspaceTransportMCP delivers workspace via MCP file tools (L2 full
 	// isolation, cross-org boundary). Phase 3 only.
@@ -320,16 +329,16 @@ const (
 
 // ValidWorkspaceTransports returns all valid workspace_transport values.
 func ValidWorkspaceTransports() []string {
-	return []string{WorkspaceTransportSharedPath, WorkspaceTransportMCP}
+	return []string{WorkspaceTransportSharedPath, WorkspaceTransportGitSync, WorkspaceTransportMCP}
 }
 
 // IsWorkspaceTransportValid reports whether a value is a valid workspace_transport.
 func IsWorkspaceTransportValid(v string) bool {
 	switch v {
-	case "", WorkspaceTransportSharedPath:
-		return true
+	case "", WorkspaceTransportSharedPath, WorkspaceTransportGitSync:
+		return true // coexistence window (A1–A4): both shared_path and git_sync
 	default:
-		return false // Phase 2: reject mcp and any unknown value
+		return false // mcp stays rejected until Phase 3; unknown values rejected
 	}
 }
 

@@ -263,7 +263,7 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 			if wwc.UseSession {
 				saveSessionBranch(factory, task, wwc.BranchName)
 			}
-			res, err := finalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+			res, err := FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 			if err != nil {
 				// Push may have succeeded, but without a PR the delivery is
 				// incomplete — do NOT report success.
@@ -315,7 +315,7 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 	if adminClient == nil {
 		return nil, fmt.Errorf("changes pushed to %s but cannot open PR: admin gitea client unavailable", branchName)
 	}
-	return finalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+	return FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 }
 
 // prepareAnalyzeWorkspace sets up a temporary sandbox with a shallow clone of

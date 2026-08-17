@@ -9,12 +9,14 @@ import (
 
 func TestWorkspaceTransportConstants(t *testing.T) {
 	assert.Equal(t, "shared_path", WorkspaceTransportSharedPath)
+	assert.Equal(t, "git_sync", WorkspaceTransportGitSync)
 	assert.Equal(t, "mcp", WorkspaceTransportMCP)
 }
 
 func TestValidWorkspaceTransports(t *testing.T) {
 	valid := ValidWorkspaceTransports()
 	assert.Contains(t, valid, WorkspaceTransportSharedPath)
+	assert.Contains(t, valid, WorkspaceTransportGitSync)
 	assert.Contains(t, valid, WorkspaceTransportMCP)
 }
 
@@ -23,11 +25,13 @@ func TestIsWorkspaceTransportValid(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{"", true},                            // empty defaults to shared_path
-		{"shared_path", true},                 // Phase 2 default
-		{"mcp", false},                        // Phase 3, rejected in Phase 2
-		{"unknown", false},                    // unknown value rejected
-		{"SHARED_PATH", false},                // case-sensitive
+		{"", true},             // empty defaults to shared_path
+		{"shared_path", true},  // Phase 2 default
+		{"git_sync", true},     // A1–A4 coexistence window accepts git_sync
+		{"mcp", false},         // Phase 3, rejected in Phase 2
+		{"unknown", false},     // unknown value rejected
+		{"SHARED_PATH", false}, // case-sensitive
+		{"GIT_SYNC", false},    // case-sensitive
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -73,6 +77,11 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 			expectErr: false,
 		},
 		{
+			name:      "git_sync is valid in coexistence window",
+			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "git_sync"},
+			expectErr: false,
+		},
+		{
 			name:      "mcp is rejected in Phase 2",
 			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "mcp"},
 			expectErr: true,
@@ -89,7 +98,7 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 			err := ValidateBackendWorkspaceTransport(tt.cfg)
 			if tt.expectErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "not supported in Phase 2")
+				assert.Contains(t, err.Error(), "not supported")
 			} else {
 				require.NoError(t, err)
 			}

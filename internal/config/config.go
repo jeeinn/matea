@@ -313,15 +313,16 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 }
 
 // ValidateBackendWorkspaceTransport checks that a backend's workspace_transport
-// is compatible with its type. hub-opencode only supports shared_path (L0/L1);
-// mcp is rejected until Phase 3.
+// is compatible with its type. hub backends accept shared_path (L0/L1, legacy)
+// and git_sync (A1+ target) during the A1–A4 coexistence window; mcp is
+// rejected until Phase 3.
 //
 // Returns nil on success, error describing the incompatibility otherwise.
 func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
-	// Phase 2: only shared_path is implemented.
-	if cfg.WorkspaceTransport != "" && cfg.WorkspaceTransport != WorkspaceTransportSharedPath {
-		return fmt.Errorf("backend type %q: workspace_transport %q is not supported in Phase 2 (only %q)",
-			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportSharedPath)
+	// Coexistence window (git_sync A1–A4): shared_path and git_sync both OK.
+	if cfg.WorkspaceTransport != "" && !IsWorkspaceTransportValid(cfg.WorkspaceTransport) {
+		return fmt.Errorf("backend type %q: workspace_transport %q is not supported (valid: %q, %q)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportSharedPath, WorkspaceTransportGitSync)
 	}
 	return nil
 }

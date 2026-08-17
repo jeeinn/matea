@@ -10,6 +10,9 @@ type RepoInfo struct {
 	DefaultBranch string `json:"default_branch"`
 	Language      string `json:"language"`
 	CloneURL      string `json:"clone_url"`
+	// SSHURL is the ssh clone URL (git@host:owner/repo.git). git_sync hands
+	// this to hubs together with a task-scoped deploy key (task A1).
+	SSHURL string `json:"ssh_url"`
 }
 
 // GetRepo returns basic repository information.
@@ -22,6 +25,29 @@ func (c *Client) GetRepo(owner, repo string) (*RepoInfo, error) {
 	var info RepoInfo
 	if err := json.Unmarshal(body, &info); err != nil {
 		return nil, fmt.Errorf("unmarshal repo: %w", err)
+	}
+	return &info, nil
+}
+
+// BranchInfo represents a branch head. Used by git_sync Prepare to anchor the
+// draft branch's base HEAD (three-element validation, task A1).
+type BranchInfo struct {
+	Name   string `json:"name"`
+	Commit struct {
+		ID string `json:"id"`
+	} `json:"commit"`
+}
+
+// GetBranch returns the branch with its head commit id.
+func (c *Client) GetBranch(owner, repo, branch string) (*BranchInfo, error) {
+	body, err := c.do("GET", fmt.Sprintf("/repos/%s/%s/branches/%s", owner, repo, branch), nil)
+	if err != nil {
+		return nil, fmt.Errorf("get branch: %w", err)
+	}
+
+	var info BranchInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, fmt.Errorf("unmarshal branch: %w", err)
 	}
 	return &info, nil
 }
