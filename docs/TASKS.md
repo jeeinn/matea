@@ -221,28 +221,28 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 > 目标：在 OpenCode 写链路上让 git_sync 从 Submit 到出 PR 全程跑通（OpenCode 持凭据自 push）；**shared_path 在 A5（gating：B1 验收后）才删**，A1-A4 保留共存窗口。
 
-- [ ] **A1 抽象 `WorkspaceTransport` 接口 + `gitSyncTransport` 实现 + 提前提取 CreatePR helper**
+- [x] **A1 抽象 `WorkspaceTransport` 接口 + `gitSyncTransport` 实现 + 提前提取 CreatePR helper** ✅（2026-08-17，commit de1cefc）
   `Prepare`=签发 deploy key + 生成分支 + 构造 `GitSyncInfo`；`Approve`=fetch + 三要素校验 + 开 PR；`Cleanup`=撤销凭据。定义 `GitSyncInfo`/`GitSyncResult`/三要素。
   **共存窗口**：新增 `WorkspaceTransportGitSync` 常量，`IsWorkspaceTransportValid` **暂时同时接受 `shared_path` 与 `git_sync`**（不提前收紧）。
-  **提前提取**：把 `runner_write.go:267` 未导出 `finalizeWriteTaskPR` 提取为 `internal/gitea`（或 `internal/agents`）内 exported helper，处理「PR 已存在则更新评论」，供 `Approve` 与 builtin 复用。
+  **提前提取**：`finalizeWriteTaskPR` 已提取为 `internal/agents/write_pr.go` 的 exported `FinalizeWriteTaskPR`，处理「PR 已存在则更新评论」，供 `Approve` 与 builtin 复用。
 
-- [ ] **A2 增量扩展 `TaskContext`/`BackendResult`/`HubHandle` + 提前写 SQLite 迁移**
-  加 `GitSyncInfo`/`GitSyncResult`/`DraftBranch`/`BaseHEAD`；新增 `BackendResult.GitSync` 字段；向后兼容；**`hub_handles` 加列走 `ALTER` + 默认值迁移在此阶段落地（不拖到 C3，避免 A/B 测试绕开新列）**。
+- [x] **A2 增量扩展 `TaskContext`/`BackendResult`/`HubHandle` + 提前写 SQLite 迁移** ✅（2026-08-17，commit ec9c949）
+  `TaskContext.GitSync`/`BackendResult.GitSync` 已加（omitempty 向后兼容）；`hub_handles` 增 `draft_branch`/`base_head`/`deploy_key_id` 三列，`ALTER` + 默认值迁移已落地（不拖到 C3）。
 
-- [ ] **A3 改造 `runViaHub` 区分读/写**
-  写任务 `mapHubResult` 返回 `GitSync` → 由 `WorkspaceTransport.Approve` 复用 A1 提取的 exported CreatePR helper 完成 fetch + 三要素校验 + 开 PR（提交/推送已由 Hub 完成，**不再走 `finalizeWriteChanges` 的 commit/push 段**）。
+- [x] **A3 改造 `runViaHub` 区分读/写** ✅（2026-08-17，commit ca3aa07）
+  写任务（solve_issue/solve_comment/fix_bug）在 Submit 前 `Prepare` 注入 `GitSyncInfo`；Done 后合成 `GitSyncResult`（确定性分支名 + fetch 权威校验）→ `Approve` 开 PR → `Cleanup` 撤 key；Failed/Canceled/中断同样回收。handle 行持久化 DraftBranch/BaseHEAD/DeployKeyID，重启重连无需重 Prepare。
 
-- [ ] **A4 OpenCode 写路径从 `CodingBackend.Run`(shared_path) 切到 `runViaHub` 写通道（前提：A0.1 通过）**
-  `Prepare` 签发 deploy key 并注入 `GitSyncInfo`；OpenCode 在 `X-Opencode-Directory` 工作区 **clone → 编辑 → commit → push 草稿分支**（持凭据自 push，不走 patch 回传），回传 `GitSyncResult{DraftBranch, DraftHEAD}`。
+- [x] **A4 OpenCode 写路径从 `CodingBackend.Run`(shared_path) 切到 `runViaHub` 写通道（前提：A0.1 通过）** ✅（2026-08-17，commit 455d57c）
+  `runner_write.go` 中 hub-opencode + git_sync backend 直接走 `runViaHub`；Submit 注入 base64 私钥 + clone/footer/trailer 指引（`BuildGitSyncInstructions`），不再要求 `SandboxPath`；OpenCode 自 push 草稿分支，回传 `matea-draft-head:` trailer 供交叉核对（fetch 远端为权威）。E2E 单测走真实 git file:// 裸仓全通过。
 
 - [ ] **A5 干净删除 `shared_path`（gating：B1 验收后才执行，不在 A1-A4 提前删）**
   删 `CodingBackend.Run` 中 shared_path 依赖 + transport 常量；此时才把 `IsWorkspaceTransportValid`/`ValidWorkspaceTransports` 收敛为只接受 `git_sync`；重写 `workspace_transport_test.go` 与 `opencode_hubbackend_test.go`/`hermes/e2e_test.go`（这些测试在 A1-A4 共存期已先改为兼容两 transport）。
 
-- [ ] **A6 Gitea deploy key 程序化创建/回收（基于 A0.2）**
-  repo 级 read-write（限定前缀由三要素应用层强制）；凭据注入 `GitSyncInfo`，随 `hub_handle` 删除/超时撤销；回收失败按 A0.2 策略重试/告警；**绝不把 Matea admin token 交给 Hub**。
+- [x] **A6 Gitea deploy key 程序化创建/回收（基于 A0.2）** ✅（2026-08-17，commit 8b31654）
+  `internal/gitea/deploy_key.go`（Create/Delete/List）+ `internal/agents/deploy_key_issuer.go`（每任务新 ed25519 密钥对，注册 read-write deploy key；Revoke 3 次退避重试 + ctx 感知 + 孤儿 key 告警）；`executor.SetGiteaClientFactory` 用 admin client 接线注入 RunnerFactory；KeyID 持久化到 `hub_handles.deploy_key_id`。**绝不把 Matea admin token 交给 Hub**（Hub 只拿任务级私钥）。
 
-- [ ] **A7 测试：fake OpenCode + fake Gitea**
-  对抗用例（错分支/错起点/缺 footer/无改动/假完成）全拒；单测（分支生成/三要素/`Approve`）；E2E（OpenCode → solve_issue → Hub 自 push → PR）。builtin 全量不受影响。
+- [x] **A7 测试：fake OpenCode + fake Gitea** ✅（2026-08-17）
+  对抗用例全拒（纯函数单测 `workspace_transport_test.go` + 真实 git file:// 裸仓 `gitsync_approve_test.go`）：错分支 / 错起点（orphan）/ 缺 footer / 无改动 / 假完成 / base 漂移（fail+warn）全部拒绝且不开 PR；失败路径 key 仍回收（`TestRunViaHubGitSyncRejectsMissingFooter`）。单测：分支生成 / 三要素 / `Approve` / `Prepare`（无 ssh_url、issuer 失败传播、默认分支回退）/ `Cleanup` nil 安全。E2E：OpenCode solve_issue → Hub 自 push → Matea 开 PR（`gitsync_write_test.go`）。builtin 全量 17 包 PASS 不受影响。真实 OpenCode E2E 归 B5。
 
 - [ ] **A8 阶段 A 验收**
   一条 OpenCode 写任务经 git_sync 端到端出 PR（OpenCode 自 push、Matea 开 PR）；`go test ./...` 与 builtin 全量用例 PASS；shared_path 仍保留（A5 后置），git_sync 路径可运行。
