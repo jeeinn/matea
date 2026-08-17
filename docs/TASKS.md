@@ -244,8 +244,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **A7 测试：fake OpenCode + fake Gitea** ✅（2026-08-17）
   对抗用例全拒（纯函数单测 `workspace_transport_test.go` + 真实 git file:// 裸仓 `gitsync_approve_test.go`）：错分支 / 错起点（orphan）/ 缺 footer / 无改动 / 假完成 / base 漂移（fail+warn）全部拒绝且不开 PR；失败路径 key 仍回收（`TestRunViaHubGitSyncRejectsMissingFooter`）。单测：分支生成 / 三要素 / `Approve` / `Prepare`（无 ssh_url、issuer 失败传播、默认分支回退）/ `Cleanup` nil 安全。E2E：OpenCode solve_issue → Hub 自 push → Matea 开 PR（`gitsync_write_test.go`）。builtin 全量 17 包 PASS 不受影响。真实 OpenCode E2E 归 B5。
 
-- [ ] **A8 阶段 A 验收**
-  一条 OpenCode 写任务经 git_sync 端到端出 PR（OpenCode 自 push、Matea 开 PR）；`go test ./...` 与 builtin 全量用例 PASS；shared_path 仍保留（A5 后置），git_sync 路径可运行。
+- [x] **A8 阶段 A 验收** ✅（2026-08-17，验收报告 → [20260817-a8-acceptance.md](20260817-a8-acceptance.md)）
+  真实 OpenCode 1.18.18 + docker Gitea 1.22.6 端到端：任务 8 `success`，OpenCode 自 push `matea/hub-8`（footer `matea-task-id: 8`），Matea 三要素校验后开 PR #4，deploy key 全回收，issue 评论写回成功；`go test ./...` 17 包 PASS；shared_path 保留未动。附带根治 mock SSE 未终止导致的 agent loop 卡死（A0 遗留坑）。
 
 ### 阶段 B：Hermes 远端接入 + Session/安全收口
 
@@ -383,6 +383,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | [20260815-git-sync-3phase-plan.md](20260815-git-sync-3phase-plan.md) | **git_sync 三阶段方案（v3.1，当前重点）** |
 | [20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md) | git_sync 评估与社区解法对照 |
 | [20260817-a0-spike-results.md](20260817-a0-spike-results.md) | **A0 前置验证实测报告（OpenCode + Gitea deploy key，均通过）** |
+| [20260817-a8-acceptance.md](20260817-a8-acceptance.md) | **A8 阶段 A 验收报告（真实 OpenCode+Gitea 端到端出 PR，通过）** |
 | [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md) | 产品定位与演进规划 |
 | [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend（待按 HubBackend 刷新） |
 | [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选增强 |
