@@ -27,3 +27,4 @@ web/dist/
 playwright-cli.json
 # Organized non-core / scratch files (test configs, snapshots, screenshots, temp tools)
 archive/
+__pycache__/
