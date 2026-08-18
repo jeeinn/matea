@@ -270,6 +270,83 @@ func TestRunViaHubGitSyncWritePathHubPushedNothing(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found on remote")
 	assert.Nil(t, fake.prCreated, "no PR may be opened when nothing was pushed")
 	assert.Equal(t, []int64{1}, issuer.revoked, "key must still be revoked on the failure path")
+
+	// B5: the hub reported Done but validation failed — handle must be Failed.
+	h, herr := db.GetHubHandle(taskID)
+	require.NoError(t, herr)
+	require.NotNil(t, h)
+	assert.Equal(t, store.HubHandleStatusFailed, h.Status, "handle must be terminal Failed so it is never re-attached")
+}
+
+// TestRunViaHubGitSyncWrongBranchRejected covers the "hub 越权分支" adversarial
+// case: the hub pushes valid-looking commits, but to a branch name it chose
+// itself instead of the mandated matea/hub-{taskID}. Approve must reject and
+// the handle must be marked Failed (not Done).
+func TestRunViaHubGitSyncWrongBranchRejected(t *testing.T) {
+	taskID := int64(9003)
+	remote, work, mainHEAD, run := initGitSyncBase(t)
+
+	// Hub creates its own branch and pushes a correctly-footered commit there.
+	run(work, "checkout", "-q", "-b", "hub-chose-this")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "fix.go"), []byte("package fix\n"), 0o644))
+	run(work, "add", "-A")
+	run(work, "commit", "-q", "-m", "feat: valid commit", "-m", RequiredFooter(taskID))
+	run(work, "push", "-q", "origin", "hub-chose-this")
+
+	fake := newGitSyncFakeGitea(t, remote, mainHEAD)
+	issuer := &fakeDeployKeyIssuer{}
+	db := newHubRunTestDB(t)
+	f := newGitSyncFactory(db, fake.server.URL, remote, issuer)
+
+	hub := &gitSyncTestHub{name: "gs-opencode", pollState: StateDone, pollRes: &BackendResult{Summary: "pushed to my own branch"}}
+	task := &store.Task{ID: taskID, Repo: "o/r", IssueID: 1, TaskType: "solve_issue", Event: "x"}
+	tc := &TaskContext{TaskType: "solve_issue", Repo: "o/r", IssueID: 1, TaskID: taskID}
+
+	_, err := f.runViaHub(context.Background(), task, &store.Agent{}, hub, tc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found on remote", "mandated draft branch is missing")
+	assert.Nil(t, fake.prCreated, "no PR when hub ignored the draft branch contract")
+	assert.Equal(t, []int64{1}, issuer.revoked, "key revoked on adversarial failure")
+
+	h, herr := db.GetHubHandle(taskID)
+	require.NoError(t, herr)
+	require.NotNil(t, h)
+	assert.Equal(t, store.HubHandleStatusFailed, h.Status)
+}
+
+// TestRunViaHubGitSyncMissingFooterRejected covers the "required footer"
+// adversarial case at the runViaHub level. The hub pushes to the mandated
+// branch but omits the matea-task-id footer; Approve rejects and the handle
+// is marked Failed.
+func TestRunViaHubGitSyncMissingFooterRejected(t *testing.T) {
+	taskID := int64(9004)
+	remote, work, mainHEAD, run := initGitSyncBase(t)
+
+	run(work, "checkout", "-q", "-b", DraftBranchName(taskID))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "fix.go"), []byte("package fix\n"), 0o644))
+	run(work, "add", "-A")
+	run(work, "commit", "-q", "-m", "feat: unsigned hub change")
+	run(work, "push", "-q", "origin", DraftBranchName(taskID))
+
+	fake := newGitSyncFakeGitea(t, remote, mainHEAD)
+	issuer := &fakeDeployKeyIssuer{}
+	db := newHubRunTestDB(t)
+	f := newGitSyncFactory(db, fake.server.URL, remote, issuer)
+
+	hub := &gitSyncTestHub{name: "gs-opencode", pollState: StateDone, pollRes: &BackendResult{Summary: "pushed without footer"}}
+	task := &store.Task{ID: taskID, Repo: "o/r", IssueID: 1, TaskType: "solve_issue", Event: "x"}
+	tc := &TaskContext{TaskType: "solve_issue", Repo: "o/r", IssueID: 1, TaskID: taskID}
+
+	_, err := f.runViaHub(context.Background(), task, &store.Agent{}, hub, tc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required footer")
+	assert.Nil(t, fake.prCreated)
+	assert.Equal(t, []int64{1}, issuer.revoked)
+
+	h, herr := db.GetHubHandle(taskID)
+	require.NoError(t, herr)
+	require.NotNil(t, h)
+	assert.Equal(t, store.HubHandleStatusFailed, h.Status)
 }
 
 func TestOpenCodeSubmitGitSyncInjectsInstructions(t *testing.T) {

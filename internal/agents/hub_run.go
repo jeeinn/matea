@@ -253,14 +253,20 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 				}
 				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
 			default: // StateDone
-				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 				if writeViaGitSync {
 					// Write path (task A3/A4): the hub already committed and
 					// pushed the draft branch; Approve fetches, validates the
-					// three elements and opens the PR. finalizeWriteChanges'
+					// four elements and opens the PR. finalizeWriteChanges'
 					// commit/push stage is intentionally bypassed.
+					//
+					// B5 hardening: do NOT mark the handle Done until Approve
+					// succeeds. A hub that reports Done but fails validation
+					// (wrong branch, missing footer, base drift, diff-policy
+					// violation, or pushed nothing) must leave the handle Failed
+					// so it is never re-attached and the task is terminal.
 					if gitSyncInfo == nil {
 						f.cleanupGitSyncKey(transport, task, issuedKey)
+						f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
 						return nil, fmt.Errorf("hub backend %q completed write task %d but no git_sync prepare state is available", backend.Name(), task.ID)
 					}
 					summary := ""
@@ -305,8 +311,10 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 								fmt.Sprintf("backend=%q branch=%q paths=%s",
 									backend.Name(), gitSyncInfo.DraftBranch, strings.Join(viol.Paths, ",")))
 						}
+						f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
 						return nil, fmt.Errorf("git_sync approve: %w", aerr)
 					}
+					f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 					// Session continuation state (B2.3): record the pushed draft
 					// branch + its authoritative head (Approve normalized
 					// gitSyncRes.DraftHEAD to the fetched value) as the next
@@ -324,6 +332,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 					}, false)
 					return out, nil
 				}
+				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 				return f.mapHubResult(backend, res, task), nil
 			}
 		}

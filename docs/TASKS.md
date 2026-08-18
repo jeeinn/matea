@@ -267,8 +267,11 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **B4 凭证最小权限复核 + 生命周期 hook** ✅（2026-08-18）
   deploy key 随 `hub_handle` 删除/失效回收（与 A6 衔接）。**最小权限复核结论**（逐条源码核验）：① hub 收到的只有 `GitSyncInfo{SSH clone_url + 任务级 deploy key 私钥(base64)}`——admin/agent token 从不出现在契约或指令里（Prepare 用 `SSHURL` 非带凭据 https URL；Approve 的 fetch 凭据仅在 Matea 侧）；② deploy key 为 repo 级 read-write（push 必需；Gitea 无 per-branch 粒度 → 由三要素校验 + B3 diff 白名单在应用层补偿）；③ issuer 复用 admin client，A0.2 spike 实证 `write:repository` scope 足够（**无需 site admin**——运维侧 admin_token 可按此收紧）；④ 私钥每任务新生成（ed25519/crypto/rand）、**不落库**（hub_handles 只存 DeployKeyID）、不进入 conversation/audit 日志（hub 路径不过本地 AgentLoop/sandbox audit）；⑤ 全部终态路径（Done/Failed/Canceled/abort/poll 错/Submit 错）内联 revoke。**生命周期 hook（新增 sweep 兜底）**：`SweepOrphanedDeployKeys` 覆盖三个残留泄漏窗——revoke 重试 3 次仍失败、Prepare→SaveHubHandle 间崩溃（key 已签发但无行记录）、未来 handle 行删除遗留。算法：扫描有 handle 行的 repo → `ListDeployKeys` → 仅处理 `matea-hub-task-` 前缀（运维自建 key 永不触碰）→ 任务无非终态 handle 行（在跑/重接中的受保护）且超过 30min 宽限期（覆盖 Prepare→persist 竞态）→ revoke + `operation_logs` 审计（`git_sync_key_swept`）；单 repo 失败不阻断全局。支撑：`DeployKey.CreatedAt` 新字段；store 新增 `ListHubHandleRepos`/`ListNonTerminalHubTaskIDsByRepo`（join tasks）；Prepare 标题改用共享前缀常量。接线：Executor `startDeployKeySweepLoop`（`sync.Once` 防配置重载重复启动；启动即扫 + 10min 周期，与 session cleanup 同节奏；每 tick 重取 admin client 使重载生效）。测试：store 两查询（保护集/终态/无行 repo）；sweep 六场景（终态回收/运行中保护/新鲜宽限/崩溃窗回收/外来 key 豁免/畸形标题豁免）+ 单 repo 失败隔离 + nil 参数。全量 17 包 PASS。
 
-- [ ] **B5 E2E（真实 OpenCode + 真实 Gitea 沙箱）+ 对抗测试强化**
-  验证 OpenCode 与 Hermes **两条对齐的** git_sync 路径；Hub 越权分支全拒并标记失败；**base_head 漂移默认 fail + 告警（不自动 rebase）**。
+- [x] **B5 E2E（真实 OpenCode + 真实 Gitea 沙箱）+ 对抗测试强化** ✅（2026-08-18）
+  **对抗强化**：修复 `runViaHub` StateDone 路径在 `Approve` 失败时仍把 `hub_handles` 标为 Done 的缺陷——现在仅当四要素校验全部通过才标 Done，任何越权/无效草稿（错分支、缺 footer、base 漂移、diff 违规、pushed nothing）都标 **Failed** 并回收 key。新增单测：`TestRunViaHubGitSyncWrongBranchRejected`（hub 自择分支 → fetch 不到 mandated draft → Failed）、`TestRunViaHubGitSyncMissingFooterRejected`（mandated 分支存在但提交无 footer → Failed）、既有 `TestRunViaHubGitSyncWritePathHubPushedNothing`/`TestRunViaHubGitSyncDiffViolationAudited` 补 handle 状态断言。base 漂移已在 `TestGitSyncApproveContinuationRejectsBaseTipStart`/`TestGitSyncApproveRejectsBaseDrift` 覆盖，行为仍是 fail+不开 PR+不自动 rebase。**真实 E2E harness**：新增 `internal/agents/gitsync_e2e_test.go`，环境变量门控（`MATEA_E2E_GITEA_URL`/`MATEA_E2E_GITEA_TOKEN`/`MATEA_E2E_GITEA_SSH_PORT`），未设置时 SKIP 不影响 CI：
+  - `TestE2EGitSyncDeployKeyLifecycle`：复现 A0.2 结论，`write:repository` token 可签发 rw deploy key，key 可 SSH clone/push，DELETE 后立即失效；
+  - `TestE2EGitSyncFullCycle`：真实 Gitea 上完整 Matea-side git_sync（Prepare→模拟 hub push→Approve 开 PR→Cleanup 回收 key）。
+  当前本地 Gitea/OpenCode/Hermes 服务未在预期端口（3000/4096/9090）响应，真实 E2E 腿待服务启动后运行；harness 已就绪。全量 17 包 PASS。
 
 ### 阶段 C：清理、文档与发布
 

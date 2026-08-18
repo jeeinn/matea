@@ -139,6 +139,12 @@ func TestRunViaHubGitSyncDiffViolationAudited(t *testing.T) {
 	assert.Nil(t, fake.prCreated)
 	assert.Equal(t, []int64{1}, issuer.revoked, "key revoked even on policy rejection")
 
+	// B5: validation failure marks the handle Failed, never Done.
+	h, herr := db.GetHubHandle(taskID)
+	require.NoError(t, herr)
+	require.NotNil(t, h)
+	assert.Equal(t, store.HubHandleStatusFailed, h.Status)
+
 	logs, lerr := db.ListOperationLogs(10, 0)
 	require.NoError(t, lerr)
 	require.NotEmpty(t, logs, "violation must be audited")
