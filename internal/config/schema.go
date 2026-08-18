@@ -274,14 +274,16 @@ type AgentBackendsConfig struct {
 
 // BackendConfig describes one coding backend. Type distinguishes builtin vs opencode.
 type BackendConfig struct {
-	Type                  string                   `yaml:"type"`                    // builtin | hub-opencode
-	BaseURL               string                   `yaml:"base_url"`                // hub-opencode only
-	Auth                  BackendAuthConfig        `yaml:"auth"`                    // hub-opencode only
-	Timeout               string                   `yaml:"timeout"`                 // e.g. "45m"
-	WorkspaceMode         string                   `yaml:"workspace_mode"`          // first release: "matea_path" only
-	HealthCheck           BackendHealthCheckConfig `yaml:"health_check"`            // hub-opencode only
-	AllowFallbackBuiltin  bool                     `yaml:"allow_fallback_builtin"`  // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
-	WorkspaceTransport    string                   `yaml:"workspace_transport"`     // git_sync only (A5+; shared_path removed, mcp Phase 3)
+	Type                 string                   `yaml:"type"`                   // builtin | hub-opencode
+	BaseURL              string                   `yaml:"base_url"`               // hub-opencode only
+	Auth                 BackendAuthConfig        `yaml:"auth"`                   // hub-opencode only
+	Timeout              string                   `yaml:"timeout"`                // e.g. "45m"
+	WorkspaceMode        string                   `yaml:"workspace_mode"`         // first release: "matea_path" only
+	HealthCheck          BackendHealthCheckConfig `yaml:"health_check"`           // hub-opencode only
+	AllowFallbackBuiltin bool                     `yaml:"allow_fallback_builtin"` // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
+	WorkspaceTransport   string                   `yaml:"workspace_transport"`    // git_sync only (A5+; shared_path removed, mcp Phase 3)
+	AllowedPaths         []string                 `yaml:"allowed_paths"`          // B3 git_sync diff whitelist: non-empty = every changed path must match one glob
+	DeniedPaths          []string                 `yaml:"denied_paths"`           // B3 git_sync diff denylist: extends the built-in always-on defaults
 }
 
 // BackendAuthConfig holds HTTP Basic auth credentials for a hub-opencode backend.

@@ -36,7 +36,7 @@ func TestValidateGitSyncDraftContinuationAnchor(t *testing.T) {
 			"feat: continued change\n\nmatea-task-id: 42\n",
 		},
 	}
-	require.NoError(t, validateGitSyncDraft(info, result, fetched))
+	require.NoError(t, validateGitSyncDraft(info, result, fetched, DiffPolicy{}))
 }
 
 func TestValidateGitSyncDraftContinuationWrongStartPoint(t *testing.T) {
@@ -48,7 +48,7 @@ func TestValidateGitSyncDraftContinuationWrongStartPoint(t *testing.T) {
 		BaseHEAD:   "aaaa0000",
 		IsAncestor: false, // branched off the new base tip, not the anchor
 	}
-	err := validateGitSyncDraft(info, result, fetched)
+	err := validateGitSyncDraft(info, result, fetched, DiffPolicy{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "start-point anchoring")
 	assert.Contains(t, err.Error(), "eeee4444", "error must name the continuation anchor")
@@ -59,7 +59,7 @@ func TestValidateGitSyncDraftContinuationNoNewCommits(t *testing.T) {
 	info.AnchorHEAD = "eeee4444"
 	result := &GitSyncResult{DraftBranch: "matea/hub-42", DraftHEAD: "eeee4444"}
 	fetched := &fetchedDraft{DraftHEAD: "eeee4444", BaseHEAD: "aaaa0000", IsAncestor: true}
-	err := validateGitSyncDraft(info, result, fetched)
+	err := validateGitSyncDraft(info, result, fetched, DiffPolicy{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no new commits", "draft head == anchor means the hub pushed nothing new")
 }

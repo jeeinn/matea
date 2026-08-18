@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -78,6 +79,9 @@ func LoadWithBootstrap(path string) (*LoadResult, error) {
 	// here, not a confusing routing failure at task time).
 	for name, b := range cfg.Agents.Backends.Backends {
 		if err := ValidateBackendWorkspaceTransport(b); err != nil {
+			return nil, fmt.Errorf("agents.backends.%s: %w", name, err)
+		}
+		if err := ValidateBackendDiffPaths(b); err != nil {
 			return nil, fmt.Errorf("agents.backends.%s: %w", name, err)
 		}
 	}
@@ -335,6 +339,25 @@ func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
 	if cfg.WorkspaceTransport != "" && !IsWorkspaceTransportValid(cfg.WorkspaceTransport) {
 		return fmt.Errorf("backend type %q: workspace_transport %q is not supported (valid: %q)",
 			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportGitSync)
+	}
+	return nil
+}
+
+// ValidateBackendDiffPaths rejects invalid glob syntax in the B3 diff
+// whitelist (allowed_paths / denied_paths) at startup: an invalid pattern
+// never matches at Approve time (path.Match errors → no match), which would
+// silently disable a deny rule — unacceptable for a security feature.
+// Checked here so the typo fails loud.
+func ValidateBackendDiffPaths(cfg BackendConfig) error {
+	for _, p := range cfg.AllowedPaths {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("backend type %q: allowed_paths entry %q is not a valid glob: %w", cfg.Type, p, err)
+		}
+	}
+	for _, p := range cfg.DeniedPaths {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("backend type %q: denied_paths entry %q is not a valid glob: %w", cfg.Type, p, err)
+		}
 	}
 	return nil
 }

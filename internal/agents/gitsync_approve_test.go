@@ -60,7 +60,7 @@ func newApproveTransport(t *testing.T, cloneURL, mainHEAD string) (WorkspaceTran
 	fake := newGitSyncFakeGitea(t, cloneURL, mainHEAD)
 	issuer := &fakeDeployKeyIssuer{}
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(fake.server.URL, "")}
-	return NewGitSyncTransport(factory, issuer, t.TempDir()), fake, issuer
+	return NewGitSyncTransport(factory, issuer, t.TempDir(), DiffPolicy{}), fake, issuer
 }
 
 func gitSyncApproveTask(taskID int64) *store.Task {
@@ -185,7 +185,7 @@ func TestGitSyncPrepareRequiresSSHURL(t *testing.T) {
 	defer srv.Close()
 
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(srv.URL, "")}
-	transport := NewGitSyncTransport(factory, &fakeDeployKeyIssuer{}, t.TempDir())
+	transport := NewGitSyncTransport(factory, &fakeDeployKeyIssuer{}, t.TempDir(), DiffPolicy{})
 
 	_, _, err := transport.Prepare(context.Background(), gitSyncApproveTask(9201), "o", "r", "")
 	require.Error(t, err)
@@ -197,7 +197,7 @@ func TestGitSyncPrepareIssueFailurePropagates(t *testing.T) {
 	fake := newGitSyncFakeGitea(t, cloneURL, mainHEAD)
 	issuer := &fakeDeployKeyIssuer{issueErr: errors.New("gitea 422 duplicate key")}
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(fake.server.URL, "")}
-	transport := NewGitSyncTransport(factory, issuer, t.TempDir())
+	transport := NewGitSyncTransport(factory, issuer, t.TempDir(), DiffPolicy{})
 
 	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(9202), "o", "r", "main")
 	require.Error(t, err)
@@ -212,7 +212,7 @@ func TestGitSyncPrepareHappyPath(t *testing.T) {
 	fake := newGitSyncFakeGitea(t, cloneURL, mainHEAD)
 	issuer := &fakeDeployKeyIssuer{}
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(fake.server.URL, "")}
-	transport := NewGitSyncTransport(factory, issuer, t.TempDir())
+	transport := NewGitSyncTransport(factory, issuer, t.TempDir(), DiffPolicy{})
 
 	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(taskID), "o", "r", "")
 	require.NoError(t, err)

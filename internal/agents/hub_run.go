@@ -297,6 +297,14 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 					out, aerr := transport.Approve(ctx, task, agent, owner, repo, gitSyncInfo, gitSyncRes, summary)
 					f.cleanupGitSyncKey(transport, task, issuedKey)
 					if aerr != nil {
+						// B3: diff-whitelist violations are security-relevant —
+						// audit them to operation_logs before surfacing the error.
+						var viol *DiffPolicyViolationError
+						if errors.As(aerr, &viol) && f.db != nil {
+							f.db.LogOperation(agent.ID, task.ID, "git_sync_diff_violation",
+								fmt.Sprintf("backend=%q branch=%q paths=%s",
+									backend.Name(), gitSyncInfo.DraftBranch, strings.Join(viol.Paths, ",")))
+						}
 						return nil, fmt.Errorf("git_sync approve: %w", aerr)
 					}
 					// Session continuation state (B2.3): record the pushed draft

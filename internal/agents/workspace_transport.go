@@ -118,6 +118,7 @@ type gitSyncTransport struct {
 	giteaFactory GiteaClientFactory
 	issuer       DeployKeyIssuer // nil until task A6 wires the Gitea implementation
 	workBaseDir  string          // temp fetch workspaces are created under here
+	policy       DiffPolicy      // B3 diff whitelist (per-backend allowed/denied_paths)
 
 	// runGit is replaceable in tests. It runs git with args in dir and returns
 	// combined stdout output.
@@ -125,12 +126,14 @@ type gitSyncTransport struct {
 }
 
 // NewGitSyncTransport builds the git_sync transport. issuer may be nil until
-// task A6 lands; Prepare fails loudly in that case.
-func NewGitSyncTransport(giteaFactory GiteaClientFactory, issuer DeployKeyIssuer, workBaseDir string) WorkspaceTransport {
+// task A6 lands; Prepare fails loudly in that case. policy is the B3 diff
+// whitelist; the zero value applies the built-in deny defaults only.
+func NewGitSyncTransport(giteaFactory GiteaClientFactory, issuer DeployKeyIssuer, workBaseDir string, policy DiffPolicy) WorkspaceTransport {
 	return &gitSyncTransport{
 		giteaFactory: giteaFactory,
 		issuer:       issuer,
 		workBaseDir:  workBaseDir,
+		policy:       policy,
 		runGit:       defaultRunGit,
 	}
 }
@@ -186,8 +189,9 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 type fetchedDraft struct {
 	DraftHEAD     string   // actual head of the fetched draft branch
 	BaseHEAD      string   // current head of the base branch (for drift check)
-	IsAncestor    bool     // whether info.BaseHEAD is an ancestor of DraftHEAD
-	NewCommitMsgs []string // commit messages of info.BaseHEAD..DraftHEAD
+	IsAncestor    bool     // whether the anchor (info.anchor()) is an ancestor of DraftHEAD
+	NewCommitMsgs []string // commit messages of anchor..DraftHEAD
+	ChangedPaths  []string // B3: repo-relative paths touched on anchor..DraftHEAD
 }
 
 // validateGitSyncDraft enforces the three elements:
@@ -199,8 +203,11 @@ type fetchedDraft struct {
 //     this task's Prepare→Approve, independent of continuation);
 //  3. required footer — every new commit carries matea-task-id: {taskID}
 //     (checked on the range anchor..DraftHEAD so a continuation only signs
-//     its own commits, not the previous task's).
-func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fetchedDraft) error {
+//     its own commits, not the previous task's);
+//  4. diff whitelist (B3) — changed paths are checked against the built-in
+//     deny defaults plus the backend's allowed/denied_paths; violations
+//     surface as *DiffPolicyViolationError so the caller can audit them.
+func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fetchedDraft, policy DiffPolicy) error {
 	// Element 1: branch exclusivity (name check; hub_handles ownership is
 	// keyed by task id at the runViaHub layer).
 	if result == nil || result.DraftBranch == "" {
@@ -242,6 +249,11 @@ func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fet
 				i+1, len(fetched.NewCommitMsgs), info.DraftBranch, info.RequiredFooter)
 		}
 	}
+
+	// Element 4 (B3): diff whitelist — default-on basic check.
+	if bad := policy.violations(fetched.ChangedPaths); len(bad) > 0 {
+		return &DiffPolicyViolationError{Paths: bad}
+	}
 	return nil
 }
 
@@ -255,7 +267,7 @@ func (t *gitSyncTransport) Approve(ctx context.Context, task *store.Task, agent 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateGitSyncDraft(info, result, fetched); err != nil {
+	if err := validateGitSyncDraft(info, result, fetched, t.policy); err != nil {
 		return nil, err
 	}
 	// Normalize the hub-reported head to the fetched (authoritative) one so the
@@ -333,6 +345,14 @@ func (t *gitSyncTransport) fetchDraft(ctx context.Context, adminClient *gitea.Cl
 			for _, m := range strings.Split(logs, "\x00") {
 				if strings.TrimSpace(m) != "" {
 					out.NewCommitMsgs = append(out.NewCommitMsgs, m)
+				}
+			}
+		}
+		// Changed paths for the B3 diff whitelist, same anchor-bounded range.
+		if names, derr := t.runGit(ctx, dir, "diff", "--name-only", fmt.Sprintf("%s..%s", anchor, out.DraftHEAD)); derr == nil {
+			for _, n := range strings.Split(names, "\n") {
+				if n = strings.TrimSpace(n); n != "" {
+					out.ChangedPaths = append(out.ChangedPaths, n)
 				}
 			}
 		}

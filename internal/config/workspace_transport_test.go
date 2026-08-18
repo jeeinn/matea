@@ -27,12 +27,12 @@ func TestIsWorkspaceTransportValid(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{"", true},           // empty defaults to git_sync
-		{"git_sync", true},   // the only hub write transport (A5+)
+		{"", true},             // empty defaults to git_sync
+		{"git_sync", true},     // the only hub write transport (A5+)
 		{"shared_path", false}, // removed in A5 — stale configs must fail loud
-		{"mcp", false},       // Phase 3 only
-		{"unknown", false},   // unknown value rejected
-		{"GIT_SYNC", false},  // case-sensitive
+		{"mcp", false},         // Phase 3 only
+		{"unknown", false},     // unknown value rejected
+		{"GIT_SYNC", false},    // case-sensitive
 		{"SHARED_PATH", false},
 	}
 	for _, tt := range tests {
@@ -64,9 +64,9 @@ func TestApplyBackendDefaultsSetsWorkspaceTransport(t *testing.T) {
 
 func TestValidateBackendWorkspaceTransport(t *testing.T) {
 	tests := []struct {
-		name      string
-		cfg       BackendConfig
-		expectErr bool
+		name        string
+		cfg         BackendConfig
+		expectErr   bool
 		errContains string
 	}{
 		{
@@ -138,4 +138,30 @@ func TestApplyBackendDefaultsDoesNotOverrideExplicitTransport(t *testing.T) {
 	}
 	ApplyBackendDefaults(backends)
 	assert.Equal(t, "git_sync", backends.Backends["opencode-local"].WorkspaceTransport)
+}
+
+// B3: diff whitelist config — valid globs pass, invalid ones fail at startup
+// (an invalid pattern would never match at Approve time, silently disabling a
+// deny rule).
+func TestValidateBackendDiffPaths(t *testing.T) {
+	ok := BackendConfig{
+		Type:         BackendTypeHubOpenCode,
+		AllowedPaths: []string{"src/*", "docs/**"},
+		DeniedPaths:  []string{"vendor/*", ".env.*"},
+	}
+	assert.NoError(t, ValidateBackendDiffPaths(ok))
+
+	bad := BackendConfig{Type: BackendTypeHubOpenCode, DeniedPaths: []string{"[unclosed"}}
+	err := ValidateBackendDiffPaths(bad)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "denied_paths")
+	assert.Contains(t, err.Error(), "[unclosed")
+
+	badAllow := BackendConfig{Type: BackendTypeHubHermes, AllowedPaths: []string{"a["}}
+	err = ValidateBackendDiffPaths(badAllow)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allowed_paths")
+
+	// Zero value is valid (built-in defaults only).
+	assert.NoError(t, ValidateBackendDiffPaths(BackendConfig{}))
 }

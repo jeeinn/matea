@@ -118,7 +118,8 @@ func (f *RunnerFactory) gitSyncTransportFor(backend HubBackend) WorkspaceTranspo
 	if !ok || cfg.WorkspaceTransport != config.WorkspaceTransportGitSync {
 		return nil
 	}
-	return NewGitSyncTransport(f.giteaFactory, f.deployKeyIssuer, f.sandboxCfg.BaseDir)
+	return NewGitSyncTransport(f.giteaFactory, f.deployKeyIssuer, f.sandboxCfg.BaseDir,
+		DiffPolicy{Allowed: cfg.AllowedPaths, Denied: cfg.DeniedPaths})
 }
 
 // resolveGitSyncWriteHub returns the hub backend for a write task when the
