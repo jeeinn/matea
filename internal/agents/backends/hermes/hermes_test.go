@@ -459,3 +459,30 @@ func TestBuildRunRequestNoGitSyncUnchanged(t *testing.T) {
 	assert.NotContains(t, req.Input, "Git workflow (MANDATORY")
 	assert.NotContains(t, req.Input, "matea-draft-head")
 }
+
+// TestBuildRunRequestSessionMemoryInjection (B2.3): the rolling session
+// summary rides the shared memory block, rendered before the repo/issue keys,
+// and the git contract still lands last (recency window).
+func TestBuildRunRequestSessionMemoryInjection(t *testing.T) {
+	b := newTestBackend(t, "http://unused")
+	req := b.buildRunRequest(&agents.TaskContext{
+		TaskType:      "solve_issue",
+		Repo:          "o/r",
+		TaskID:        9,
+		UserPrompt:    "Continue the fix",
+		SessionMemory: "task 8: pushed matea/hub-8",
+		MemoryKeys:    map[string]string{"analysis_summary": "root cause found"},
+	})
+	assert.Contains(t, req.Input, "## Session continuation memory")
+	assert.Contains(t, req.Input, "task 8: pushed matea/hub-8")
+	assert.Contains(t, req.Input, "root cause found")
+	assert.Less(t,
+		strings.Index(req.Input, "Session continuation memory"),
+		strings.Index(req.Input, "repo/issue memory"),
+		"session block renders before repo/issue keys")
+
+	// No memory at all → no memory blocks.
+	req2 := b.buildRunRequest(&agents.TaskContext{TaskType: "solve_issue", Repo: "o/r", TaskID: 10, UserPrompt: "x"})
+	assert.NotContains(t, req2.Input, "Session continuation memory")
+	assert.NotContains(t, req2.Input, "repo/issue memory")
+}

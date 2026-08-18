@@ -239,6 +239,7 @@ func (db *DB) migrate() error {
 			status          TEXT NOT NULL DEFAULT 'running',
 			draft_branch    TEXT NOT NULL DEFAULT '',
 			base_head       TEXT NOT NULL DEFAULT '',
+			anchor_head     TEXT NOT NULL DEFAULT '',
 			deploy_key_id   INTEGER NOT NULL DEFAULT 0,
 			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -285,6 +286,11 @@ func (db *DB) migrate() error {
 		`ALTER TABLE hub_handles ADD COLUMN draft_branch TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN base_head TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN deploy_key_id INTEGER NOT NULL DEFAULT 0`,
+		// git_sync continuation (task B2.3): the exact anchor the hub was told to
+		// branch from (session LastHead; empty = base_head). Persisted so a
+		// restart re-attach validates against the ORIGINAL anchor even if a
+		// concurrent same-session task has since moved session.last_head.
+		`ALTER TABLE hub_handles ADD COLUMN anchor_head TEXT NOT NULL DEFAULT ''`,
 		// git_sync sessions (task B2.1): git-native continuation state —
 		// last_head anchors the next draft branch; memory carries the rolling
 		// session summary injected into continuation prompts (B2.3).

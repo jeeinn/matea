@@ -44,14 +44,25 @@ func RequiredFooter(taskID int64) string {
 // GitSyncInfo is the package Matea hands to a hub at Submit time (embedded in
 // TaskContext, wired in task A2). The hub uses it to clone, commit and push.
 type GitSyncInfo struct {
-	CloneURL       string `json:"clone_url"`       // SSH clone URL (hub authenticates with PrivateKey)
-	PrivateKey     string `json:"private_key"`     // task-scoped deploy key (OpenSSH PEM)
-	DraftBranch    string `json:"draft_branch"`    // matea/hub-{taskID} — the only branch the hub may push
-	BaseBranch     string `json:"base_branch"`     // e.g. main
-	BaseHEAD       string `json:"base_head"`       // anchor: base branch head at Prepare time
-	CommitAuthor   string `json:"commit_author"`   // e.g. "Matea Hub <hub@matea.local>"
-	RequiredFooter string `json:"required_footer"` // "matea-task-id: {taskID}"
-	HubPush        bool   `json:"hub_push"`        // always true: the hub pushes, Matea never does
+	CloneURL       string `json:"clone_url"`             // SSH clone URL (hub authenticates with PrivateKey)
+	PrivateKey     string `json:"private_key"`           // task-scoped deploy key (OpenSSH PEM)
+	DraftBranch    string `json:"draft_branch"`          // matea/hub-{taskID} — the only branch the hub may push
+	BaseBranch     string `json:"base_branch"`           // e.g. main
+	BaseHEAD       string `json:"base_head"`             // anchor: base branch head at Prepare time
+	AnchorHEAD     string `json:"anchor_head,omitempty"` // B2.3 continuation anchor: session LastHead; empty = BaseHEAD
+	CommitAuthor   string `json:"commit_author"`         // e.g. "Matea Hub <hub@matea.local>"
+	RequiredFooter string `json:"required_footer"`       // "matea-task-id: {taskID}"
+	HubPush        bool   `json:"hub_push"`              // always true: the hub pushes, Matea never does
+}
+
+// anchor returns the commit the hub must branch from and the draft must
+// descend from: the session continuation anchor when set (B2.3), otherwise
+// the base branch head captured at Prepare.
+func (i *GitSyncInfo) anchor() string {
+	if i.AnchorHEAD != "" {
+		return i.AnchorHEAD
+	}
+	return i.BaseHEAD
 }
 
 // GitSyncResult is what the hub reports back after pushing (embedded in
@@ -181,11 +192,14 @@ type fetchedDraft struct {
 
 // validateGitSyncDraft enforces the three elements:
 //  1. branch exclusivity — the hub reported and pushed exactly DraftBranch;
-//  2. base anchor — info.BaseHEAD is an ancestor of the draft head, and the
-//     base branch has not drifted since Prepare (v3.1: drift = fail + warn,
-//     no automatic rebase);
+//  2. base anchor — the anchor (session LastHead for continuations, else the
+//     Prepare-time base head) is an ancestor of the draft head, and the base
+//     branch has not drifted since Prepare (v3.1: drift = fail + warn, no
+//     automatic rebase; the drift check always uses BaseHEAD — its window is
+//     this task's Prepare→Approve, independent of continuation);
 //  3. required footer — every new commit carries matea-task-id: {taskID}
-//     (checked on the range; at minimum the head commit).
+//     (checked on the range anchor..DraftHEAD so a continuation only signs
+//     its own commits, not the previous task's).
 func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fetchedDraft) error {
 	// Element 1: branch exclusivity (name check; hub_handles ownership is
 	// keyed by task id at the runViaHub layer).
@@ -203,14 +217,15 @@ func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fet
 		return fmt.Errorf("git_sync approve: hub reported draft head %q but remote has %q",
 			result.DraftHEAD, fetched.DraftHEAD)
 	}
-	if fetched.DraftHEAD == info.BaseHEAD {
+	anchor := info.anchor()
+	if fetched.DraftHEAD == anchor {
 		return fmt.Errorf("git_sync approve: draft branch %q has no new commits", info.DraftBranch)
 	}
 
-	// Element 2: base anchor + drift (fail + warn, no auto rebase).
+	// Element 2: start-point anchor + drift (fail + warn, no auto rebase).
 	if !fetched.IsAncestor {
-		return fmt.Errorf("git_sync approve: draft head %s is not descended from base anchor %s (start-point anchoring)",
-			fetched.DraftHEAD, info.BaseHEAD)
+		return fmt.Errorf("git_sync approve: draft head %s is not descended from anchor %s (start-point anchoring)",
+			fetched.DraftHEAD, anchor)
 	}
 	if fetched.BaseHEAD != "" && fetched.BaseHEAD != info.BaseHEAD {
 		return fmt.Errorf("git_sync approve: base branch %q drifted from %s to %s since Prepare (fail+warn policy; rebase intentionally not automatic)",
@@ -243,6 +258,10 @@ func (t *gitSyncTransport) Approve(ctx context.Context, task *store.Task, agent 
 	if err := validateGitSyncDraft(info, result, fetched); err != nil {
 		return nil, err
 	}
+	// Normalize the hub-reported head to the fetched (authoritative) one so the
+	// caller can persist an accurate session LastHead even when the hub's
+	// result/trailer carried no head (B2.3 continuation quality depends on it).
+	result.DraftHEAD = fetched.DraftHEAD
 
 	// Validation passed: the hub's draft branch is the deliverable. Open or
 	// update the PR — no re-commit, no re-push (unlike finalizeWriteChanges).
@@ -299,14 +318,18 @@ func (t *gitSyncTransport) fetchDraft(ctx context.Context, adminClient *gitea.Cl
 		}
 	}
 
-	// Ancestor check: info.BaseHEAD must be reachable from the draft head.
-	if _, err := t.runGit(ctx, dir, "merge-base", "--is-ancestor", info.BaseHEAD, out.DraftHEAD); err == nil {
+	// Ancestor check: the anchor (session LastHead for continuations, else the
+	// Prepare-time base head) must be reachable from the draft head.
+	anchor := info.anchor()
+	if _, err := t.runGit(ctx, dir, "merge-base", "--is-ancestor", anchor, out.DraftHEAD); err == nil {
 		out.IsAncestor = true
 	}
 
-	// Commit messages on the new range for the footer check.
+	// Commit messages on the new range for the footer check. The range starts
+	// at the anchor so a continuation task signs only its own commits (the
+	// previous task's carry its footer, not this one's).
 	if out.IsAncestor {
-		if logs, lerr := t.runGit(ctx, dir, "log", "--format=%B%x00", fmt.Sprintf("%s..%s", info.BaseHEAD, out.DraftHEAD)); lerr == nil {
+		if logs, lerr := t.runGit(ctx, dir, "log", "--format=%B%x00", fmt.Sprintf("%s..%s", anchor, out.DraftHEAD)); lerr == nil {
 			for _, m := range strings.Split(logs, "\x00") {
 				if strings.TrimSpace(m) != "" {
 					out.NewCommitMsgs = append(out.NewCommitMsgs, m)
@@ -373,9 +396,24 @@ func ParseDraftHeadTrailer(text string) string {
 // The private key travels base64-encoded on one line: PEM's multi-line shape
 // is too easy for an LLM to mangle when re-typing; base64 -d restores it
 // byte-exactly (spike finding).
+//
+// Continuation (B2.3): when info.AnchorHEAD is set, the draft branch starts
+// from that commit (the session's previous task head) instead of the default
+// branch tip. The clone is a full clone, so the anchor is reachable as long
+// as the previous draft branch (or a descendant ref) still exists on the
+// remote; an unreachable anchor fails the checkout loudly.
 func BuildGitSyncInstructions(info *GitSyncInfo, workSubdir string) string {
 	keyB64 := base64.StdEncoding.EncodeToString([]byte(info.PrivateKey))
 	sshCmd := fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'", workSubdir)
+	checkoutStep := fmt.Sprintf("git checkout -b %[1]s", info.DraftBranch)
+	if info.AnchorHEAD != "" {
+		checkoutStep = fmt.Sprintf("git checkout -b %[1]s %[2]s", info.DraftBranch, info.AnchorHEAD)
+	}
+	continuationNote := ""
+	if info.AnchorHEAD != "" {
+		continuationNote = fmt.Sprintf(`
+This task CONTINUES prior session work: the draft branch starts from commit %[1]s (the previous task's pushed head), NOT from the default branch tip. That commit is reachable in your fresh clone; if the checkout fails because it is missing, STOP and report the failure — do not restart the work from the default branch.`, info.AnchorHEAD)
+	}
 	return fmt.Sprintf(`## Git workflow (MANDATORY — follow exactly)
 
 You are given a task-scoped deploy key. Do ALL git work yourself; the orchestrator never commits or pushes for you.
@@ -385,13 +423,14 @@ You are given a task-scoped deploy key. Do ALL git work yourself; the orchestrat
    printf '%%s' '%[2]s' | base64 -d > key && chmod 600 key
    Verify: ssh-keygen -y -f key must print a public key without error.
 3. Clone the repository: %[3]s git clone %[4]s repo
-4. cd repo && git config user.email "hub@matea.local" && git config user.name "matea-hub" && git checkout -b %[5]s
+4. cd repo && git config user.email "hub@matea.local" && git config user.name "matea-hub" && %[5]s
 5. Do the task work inside repo/ (read, edit, write files as needed).
 6. Commit ALL changes: git add -A && git commit -m "<summary>" -m "%[6]s"
    Every commit message MUST contain the footer line: %[6]s
-7. Push the draft branch: cd repo && GIT_SSH_COMMAND='ssh -i ../key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' git push -u origin %[5]s
+7. Push the draft branch: cd repo && GIT_SSH_COMMAND='ssh -i ../key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' git push -u origin %[7]s
 8. End your final response with a line exactly of this form (full 40-char sha):
    matea-draft-head: <output of: cd repo && git rev-parse HEAD>
-
-Rules: push ONLY the branch %[5]s — never any other branch. Do not open pull requests yourself.`, workSubdir, keyB64, sshCmd, info.CloneURL, info.DraftBranch, info.RequiredFooter)
+%[8]s
+Rules: push ONLY the branch %[7]s — never any other branch. Do not open pull requests yourself.`,
+		workSubdir, keyB64, sshCmd, info.CloneURL, checkoutStep, info.RequiredFooter, info.DraftBranch, continuationNote)
 }

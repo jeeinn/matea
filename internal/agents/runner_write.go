@@ -99,7 +99,7 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 				)
 			}
 		}
-		tc := buildHubWriteTaskContext(task, agentCfg, hb.Name(), taskSubType)
+		tc := buildHubWriteTaskContext(factory, task, agentCfg, hb.Name(), taskSubType)
 		return factory.runViaHub(ctx, task, agentCfg, hb, tc)
 	}
 
@@ -214,7 +214,12 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 // (task A4). Unlike the CodingBackend path there is no local sandbox, so no
 // code context is loaded — the hub clones the repo itself and builds its own
 // context. Prompts are the same Dev/Bugfix bases the builtin path uses.
-func buildHubWriteTaskContext(task *store.Task, agentCfg *store.Agent, backendName, taskSubType string) *TaskContext {
+//
+// Memory (B2.3): repo/issue memory keys (memories table, D3) and the rolling
+// session summary (agent_sessions.memory, B2.1) ride along so a continuation
+// task recalls prior conclusions; both hubs render them via
+// BuildMemoryContext.
+func buildHubWriteTaskContext(factory *RunnerFactory, task *store.Task, agentCfg *store.Agent, backendName, taskSubType string) *TaskContext {
 	taskCtx := agentpkg.TaskContext{
 		IssueTitle: task.Event,
 		IssueBody:  task.Context,
@@ -229,20 +234,22 @@ func buildHubWriteTaskContext(task *store.Task, agentCfg *store.Agent, backendNa
 	}
 	systemPrompt := agentpkg.MergeAgentSystemPrompt(basePrompt, agentCfg.SystemPrompt)
 	return &TaskContext{
-		TaskType:     task.TaskType,
-		Role:         "coder",
-		Backend:      backendName,
-		Repo:         task.Repo,
-		IssueID:      task.IssueID,
-		PRID:         task.PRID,
-		IssueTitle:   task.Event,
-		IssueBody:    task.Context,
-		BaseBranch:   task.BaseBranch,
-		Provider:     agentCfg.Provider,
-		Model:        agentCfg.Model,
-		TaskID:       task.ID,
-		SystemPrompt: systemPrompt,
-		UserPrompt:   task.Context,
+		TaskType:      task.TaskType,
+		Role:          "coder",
+		Backend:       backendName,
+		Repo:          task.Repo,
+		IssueID:       task.IssueID,
+		PRID:          task.PRID,
+		IssueTitle:    task.Event,
+		IssueBody:     task.Context,
+		BaseBranch:    task.BaseBranch,
+		Provider:      agentCfg.Provider,
+		Model:         agentCfg.Model,
+		TaskID:        task.ID,
+		SystemPrompt:  systemPrompt,
+		UserPrompt:    task.Context,
+		MemoryKeys:    factory.loadMemoryKeys(task),
+		SessionMemory: factory.loadSessionMemory(task),
 	}
 }
 
@@ -264,9 +271,11 @@ func saveSessionBranch(factory *RunnerFactory, task *store.Task, branchName stri
 
 // saveSessionProgress records the session's continuation state after a
 // successful push (B2.2): the working branch plus its head SHA (LastHead),
-// which the next continuation task anchors its fresh clone on.
+// which the next continuation task anchors its fresh clone on. An empty
+// branch or head is never recorded — a degraded anchor (e.g. HeadSHA()
+// failing after a successful push) must not clobber a known-good one.
 func saveSessionProgress(factory *RunnerFactory, task *store.Task, branchName, headSHA string) {
-	if task.SessionID == "" || factory.db == nil {
+	if task.SessionID == "" || factory.db == nil || branchName == "" || headSHA == "" {
 		return
 	}
 	session, err := factory.db.GetSession(task.SessionID)
@@ -278,5 +287,33 @@ func saveSessionProgress(factory *RunnerFactory, task *store.Task, branchName, h
 	}
 	session.Branch = branchName
 	session.LastHead = headSHA
+	factory.db.UpdateSession(session)
+}
+
+// sessionMemoryMaxLen bounds the rolling session summary so continuation
+// prompts stay within budget.
+const sessionMemoryMaxLen = 4000
+
+// saveSessionMemory refreshes the session's rolling summary (B2.1 memory
+// column) after a successful hub write task (B2.3); the next continuation
+// task's prompt injects it via BuildMemoryContext. Latest-wins (bounded),
+// never appended — LastHead carries the code continuity, Memory only answers
+// "what was the last task doing". Best-effort, like saveSessionProgress.
+func saveSessionMemory(factory *RunnerFactory, task *store.Task, summary string) {
+	if task.SessionID == "" || factory.db == nil || summary == "" {
+		return
+	}
+	session, err := factory.db.GetSession(task.SessionID)
+	if err != nil {
+		return
+	}
+	memory := fmt.Sprintf("task %d: %s", task.ID, summary)
+	if r := []rune(memory); len(r) > sessionMemoryMaxLen {
+		memory = string(r[:sessionMemoryMaxLen])
+	}
+	if session.Memory == memory {
+		return
+	}
+	session.Memory = memory
 	factory.db.UpdateSession(session)
 }

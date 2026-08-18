@@ -166,15 +166,26 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		}
 		gitSyncInfo = info
 		issuedKey = key
+		// Session continuation (B2.3): when the task's session recorded a
+		// LastHead, the hub branches the NEW per-task draft branch from that
+		// commit instead of the base tip. Validation anchors on it too.
+		if anchor := f.sessionLastHead(task); anchor != "" {
+			gitSyncInfo.AnchorHEAD = anchor
+			log.Printf("[INFO] hub execution task %d: session continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
+		}
 		tc.GitSync = info
 	}
 	if writeViaGitSync && persisted != nil && persisted.DraftBranch != "" {
 		// Re-attach: rebuild the approval-side contract from the handle row
 		// (Prepare is NOT re-run — the same draft branch/key stay in force).
+		// The anchor comes from the persisted row (B2.3), NOT a fresh session
+		// read: a concurrent same-session task may have advanced LastHead
+		// since this task's Prepare, and validation must use the original one.
 		gitSyncInfo = &GitSyncInfo{
 			DraftBranch:    persisted.DraftBranch,
 			BaseBranch:     task.BaseBranch,
 			BaseHEAD:       persisted.BaseHEAD,
+			AnchorHEAD:     persisted.AnchorHEAD,
 			RequiredFooter: RequiredFooter(task.ID),
 			HubPush:        true,
 		}
@@ -203,6 +214,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			if gitSyncInfo != nil {
 				row.DraftBranch = gitSyncInfo.DraftBranch
 				row.BaseHEAD = gitSyncInfo.BaseHEAD
+				row.AnchorHEAD = gitSyncInfo.AnchorHEAD
 			}
 			if issuedKey != nil {
 				row.DeployKeyID = issuedKey.KeyID
@@ -287,6 +299,13 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 					if aerr != nil {
 						return nil, fmt.Errorf("git_sync approve: %w", aerr)
 					}
+					// Session continuation state (B2.3): record the pushed draft
+					// branch + its authoritative head (Approve normalized
+					// gitSyncRes.DraftHEAD to the fetched value) as the next
+					// task's anchor, plus the rolling session summary that the
+					// next continuation prompt injects.
+					saveSessionProgress(f, task, gitSyncInfo.DraftBranch, gitSyncRes.DraftHEAD)
+					saveSessionMemory(f, task, summary)
 					f.emitDeliverEvent(backend.Name(), deliver.Event{
 						Event:   deliver.EventTaskCompleted,
 						Repo:    task.Repo,
@@ -532,6 +551,34 @@ func (f *RunnerFactory) loadMemoryKeys(task *store.Task) map[string]string {
 		return nil
 	}
 	return m
+}
+
+// sessionLastHead returns the continuation anchor recorded on the task's
+// session (B2.3): the previous task's pushed draft head. "" when the task has
+// no session, the session is gone, or nothing has been recorded yet (fresh
+// session → the hub branches from the base tip per the default contract).
+func (f *RunnerFactory) sessionLastHead(task *store.Task) string {
+	if f.db == nil || task.SessionID == "" {
+		return ""
+	}
+	session, err := f.db.GetSession(task.SessionID)
+	if err != nil {
+		return ""
+	}
+	return session.LastHead
+}
+
+// loadSessionMemory returns the rolling per-session summary (B2.1 memory
+// column) for injection into continuation prompts (B2.3). "" when absent.
+func (f *RunnerFactory) loadSessionMemory(task *store.Task) string {
+	if f.db == nil || task.SessionID == "" {
+		return ""
+	}
+	session, err := f.db.GetSession(task.SessionID)
+	if err != nil {
+		return ""
+	}
+	return session.Memory
 }
 
 // saveAnalyzeMemory records an analyze task's conclusion under the

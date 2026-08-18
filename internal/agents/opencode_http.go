@@ -511,6 +511,13 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 	}
 
 	userPrompt := tc.UserPrompt
+	// Session + repo/issue memory (B2.3): the shared renderer both hubs use.
+	// OpenCode previously dropped MemoryKeys entirely; it now gets the same
+	// block Hermes receives. Appended BEFORE the git_sync contract so the
+	// mandatory workflow stays last (recency window).
+	if mc := BuildMemoryContext(tc); mc != "" {
+		userPrompt = strings.TrimSpace(userPrompt + "\n\n" + mc)
+	}
 	if gitSync {
 		// The hub clones/commits/pushes per the spike-validated contract; the
 		// instructions carry the task-scoped deploy key (base64) and the draft
