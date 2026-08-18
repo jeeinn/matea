@@ -255,7 +255,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **B2.1 `agent_sessions` schema 迁移**：`WorkspacePath` → `Branch`+`LastHead`+`Memory`（DDL + 迁移 + 默认值）。✅（2026-08-18）
   新增 `last_head`（会话最新草稿分支 head SHA，续作锚点）与 `memory`（会话级滚动摘要，B2.3 注入续作 prompt，与 repo/issue 级 `memories` 表不同）两列：DDL（新库）+ `ALTER TABLE ... DEFAULT ''`（存量库幂等迁移）；Session 结构体 + 全部 7 处 CRUD/查询点同步；`WorkspacePath` 字段与列**保留并标 deprecated**（消费方在 B2.2 切换后删列）。测试：往返读写 + Update 覆盖 + 旧行默认值（无 NULL scan 错）。全量 17 包 PASS。
 
-- [ ] **B2.2 `prepareWriteWorkspace` session 分支改造**：续作逻辑从依赖 `WorkspacePath` 改为基于 `LastHead` 起新草稿分支（`write_workspace.go:76-84,118-139`）。
+- [x] **B2.2 `prepareWriteWorkspace` session 分支改造**：续作逻辑从依赖 `WorkspacePath` 改为基于 `LastHead` 起新草稿分支。✅（2026-08-18）
+  续作全 git 原生化：session 任务不再复用磁盘 workspace——每个写任务全新 task 级 sandbox + clone（续作走新增 `Git.CloneFull`，浅克隆够不到草稿分支上的锚点 SHA），随后 `git checkout -b <branch> <LastHead>` 锚定；锚点丢失（远端草稿分支被删/回卷）→ 明确报错 "session continuation anchor ... not found"（提示归档会话），不静默重开。存量 session（只有 `Branch` 无 `LastHead`）回退 `prepareExistingBranch`（锚远端分支头）；`task.BaseBranch` 非空（solve_comment PR head）优先于 LastHead 锚定。分支命名沿用 `resolveBranchPlan`（复用 session.Branch → 同一 PR 持续更新，一 issue 一 PR 流不变）。删除 `syncSessionWorkspace` 及其 3 个测试（磁盘同步逻辑整体下线）；`workflow.SessionService` 不再给 coder 会话分配 `WorkspacePath`（deprecated 列保留供 lifecycle GC 回收存量目录）；sandbox 清理改为无条件 `defer`（`UseSession` 语义转为"finalize 时记录 branch+head"）。新增 `saveSessionProgress`：push 成功后同写 `Branch`+`LastHead`（两处 push 点：finalize 常规 push + 无变更兜底 push）。验收测试 `write_workspace_continuation_test.go`（真实 git file:// 远端，bare HEAD symbolic-ref 修正）：① main 分叉后续作锚定 LastHead（HEAD==LastHead 且 main 新提交不泄漏）② 锚点丢失报错 ③ 存量 session 回退远端分支头 ④ 新 session 全新分支+记录 ⑤ saveSessionProgress 单元。全量 17 包 PASS。
 
 - [ ] **B2.3 Hub 侧 LastHead 续作契约与测试**：OpenCode/Hermes 下次任务如何基于 `LastHead` 起新草稿分支；确保 `memories` 表在续作时注入 prompt。
 

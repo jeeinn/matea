@@ -114,10 +114,9 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	if err != nil {
 		return nil, err
 	}
-	// Only cleanup for non-session workspaces (session workspaces persist)
-	if !wwc.UseSession {
-		defer wwc.Sandbox.Cleanup()
-	}
+	// All write workspaces are task-level since B2.2 (session continuation is
+	// anchored on LastHead, not an on-disk workspace) — always clean up.
+	defer wwc.Sandbox.Cleanup()
 
 	sb := wwc.Sandbox
 
@@ -247,7 +246,7 @@ func buildHubWriteTaskContext(task *store.Task, agentCfg *store.Agent, backendNa
 	}
 }
 
-// saveSessionBranch persists the working branch on the session for workspace reuse.
+// saveSessionBranch persists the working branch on the session for continuation.
 func saveSessionBranch(factory *RunnerFactory, task *store.Task, branchName string) {
 	if task.SessionID == "" || factory.db == nil {
 		return
@@ -260,5 +259,24 @@ func saveSessionBranch(factory *RunnerFactory, task *store.Task, branchName stri
 		return
 	}
 	session.Branch = branchName
+	factory.db.UpdateSession(session)
+}
+
+// saveSessionProgress records the session's continuation state after a
+// successful push (B2.2): the working branch plus its head SHA (LastHead),
+// which the next continuation task anchors its fresh clone on.
+func saveSessionProgress(factory *RunnerFactory, task *store.Task, branchName, headSHA string) {
+	if task.SessionID == "" || factory.db == nil {
+		return
+	}
+	session, err := factory.db.GetSession(task.SessionID)
+	if err != nil {
+		return
+	}
+	if session.Branch == branchName && session.LastHead == headSHA {
+		return
+	}
+	session.Branch = branchName
+	session.LastHead = headSHA
 	factory.db.UpdateSession(session)
 }
