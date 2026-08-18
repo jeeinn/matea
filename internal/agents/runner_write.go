@@ -60,14 +60,49 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	// Phase 0: resolve backend + optional health probe BEFORE preparing the
 	// workspace. Sidecar-down must not leave session clones / branches behind.
 	//
-	// Hub dispatch branch (1.2.4): reserved hub-* backends (hub-hermes /
-	// hub-openclaw / hub-api) and unknown names fail loudly here; builtin and
-	// configured hub-opencode instances continue through the CodingBackend
-	// path below. Phase 2 will dispatch hub backends via HubBackend
-	// Submit/Poll with Handle persistence (1.2.1) instead.
+	// Hub dispatch: validateHubDispatch rejects reserved hub-* names without an
+	// implementation and unknown backends loudly. Hub backends with
+	// workspace_transport=git_sync (hub-opencode A4, hub-hermes B1) dispatch
+	// through HubBackend Submit/Poll with Handle persistence (1.2.1) via
+	// runViaHub below; builtin and shared_path hub-opencode continue through
+	// the CodingBackend path.
 	if err := factory.validateHubDispatch(agentCfg); err != nil {
 		return nil, err
 	}
+
+	// git_sync write path (tasks A4/B1): a hub backend (hub-opencode or
+	// hub-hermes) configured with workspace_transport=git_sync runs through
+	// runViaHub's write channel — Matea Prepares credentials and later Approves
+	// the hub-pushed draft branch; NO local workspace is prepared (the hub
+	// clones itself), and the CodingBackend.Run / harness-verify /
+	// finalizeWriteChanges stages below are all skipped by design. shared_path
+	// backends continue unchanged.
+	//
+	// This branch must precede ResolveCodingBackend: that resolver only knows
+	// builtin/hub-opencode and hard-errors on hub-hermes, which would otherwise
+	// never reach the git_sync channel.
+	if hb, isHub := factory.resolveGitSyncWriteHub(agentCfg); isHub {
+		// Fail fast when the hub is down, before runViaHub's Prepare issues a
+		// task-scoped deploy key for a run that cannot start. allow_fallback_
+		// builtin is deliberately NOT honored here: silently switching to the
+		// builtin path under git_sync would replace the hub-push trust model
+		// (task-scoped deploy key) with a Matea-side push using the agent's own
+		// token — a privilege widening that must never happen silently.
+		if hc, ok := hb.(HealthCheckableBackend); ok {
+			hcCtx, hcCancel := context.WithTimeout(ctx, 5*time.Second)
+			hcErr := hc.HealthCheck(hcCtx)
+			hcCancel()
+			if hcErr != nil {
+				return nil, fmt.Errorf(
+					"hub backend %q is not reachable (health check failed): %w",
+					hb.Name(), hcErr,
+				)
+			}
+		}
+		tc := buildHubWriteTaskContext(task, agentCfg, hb.Name(), taskSubType)
+		return factory.runViaHub(ctx, task, agentCfg, hb, tc)
+	}
+
 	backend, err := factory.ResolveCodingBackend(agentCfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve coding backend: %w", err)
@@ -92,17 +127,6 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 				)
 			}
 		}
-	}
-
-	// git_sync write path (task A4): a hub-opencode backend configured with
-	// workspace_transport=git_sync runs through runViaHub's write channel —
-	// Matea Prepares credentials and later Approves the hub-pushed draft
-	// branch; NO local workspace is prepared (the hub clones itself), and the
-	// CodingBackend.Run / harness-verify / finalizeWriteChanges stages below
-	// are all skipped by design. shared_path backends continue unchanged.
-	if hb, isHub := factory.ResolveHubOpenCode(agentCfg); isHub && factory.gitSyncTransportFor(hb) != nil {
-		tc := buildHubWriteTaskContext(task, agentCfg, hb.Name(), taskSubType)
-		return factory.runViaHub(ctx, task, agentCfg, hb, tc)
 	}
 
 	// Phase 1: prepare workspace (sandbox / clone / branch)

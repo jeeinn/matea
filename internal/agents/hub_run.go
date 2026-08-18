@@ -261,11 +261,24 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 						// The draft branch name is deterministic and Approve's
 						// fetch is authoritative, so a hub that reports no
 						// explicit git_sync result (e.g. re-attached via Poll
-						// after a restart) still completes — a hub that pushed
+						// after a restart, or Hermes whose Poll output carries
+						// only the trailer) still completes — a hub that pushed
 						// nothing fails at the fetch ("not found on remote").
 						gitSyncRes = &GitSyncResult{
 							DraftBranch: gitSyncInfo.DraftBranch,
 							DraftHEAD:   ParseDraftHeadTrailer(summary),
+						}
+					} else {
+						// Partial result hardening (B1): a hub that reports a
+						// git_sync result with individual fields empty gets them
+						// filled from the authoritative Prepare-side contract
+						// and the trailer — the fetch validation downstream is
+						// the final arbiter either way.
+						if gitSyncRes.DraftBranch == "" {
+							gitSyncRes.DraftBranch = gitSyncInfo.DraftBranch
+						}
+						if gitSyncRes.DraftHEAD == "" {
+							gitSyncRes.DraftHEAD = ParseDraftHeadTrailer(summary)
 						}
 					}
 					owner, repo := splitOwnerRepo(task.Repo)

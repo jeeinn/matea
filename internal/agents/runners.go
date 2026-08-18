@@ -121,6 +121,22 @@ func (f *RunnerFactory) gitSyncTransportFor(backend HubBackend) WorkspaceTranspo
 	return NewGitSyncTransport(f.giteaFactory, f.deployKeyIssuer, f.sandboxCfg.BaseDir)
 }
 
+// resolveGitSyncWriteHub returns the hub backend for a write task when the
+// agent's backend is a configured hub (hub-opencode A4 or hub-hermes B1) with
+// workspace_transport=git_sync. Both hub types share runViaHub's
+// Prepare → Submit → Approve write channel; the only difference is how the
+// hub itself executes (OpenCode sidecar session vs. Hermes run), which is
+// encapsulated behind the HubBackend Submit/Poll contract.
+func (f *RunnerFactory) resolveGitSyncWriteHub(agent *store.Agent) (HubBackend, bool) {
+	if hb, ok := f.ResolveHubOpenCode(agent); ok && f.gitSyncTransportFor(hb) != nil {
+		return hb, true
+	}
+	if hb, ok := f.ResolveHubExecution(agent); ok && f.gitSyncTransportFor(hb) != nil {
+		return hb, true
+	}
+	return nil, false
+}
+
 // isWriteTaskType reports whether the task type produces code changes (and is
 // therefore eligible for the git_sync write path under a hub backend).
 func isWriteTaskType(taskType string) bool {

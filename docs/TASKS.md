@@ -249,8 +249,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### 阶段 B：Hermes 远端接入 + Session/安全收口
 
-- [ ] **B1 Hermes backend 对齐 OpenCode 同一 Hub 自 push 契约**
-  `buildRunRequest` 注入 `GitSyncInfo`（凭据 + clone_url + draft_branch）；Hermes 远端 clone/编辑/commit/push 草稿分支、回传 `GitSyncResult`；走 `runViaHub` 写通道、由 `Approve` 收口（**无 patch 回传特例，路径已对齐**）。**B1 验收后触发 A5 删除 shared_path。**
+- [x] **B1 Hermes backend 对齐 OpenCode 同一 Hub 自 push 契约** ✅（2026-08-18）
+  `buildRunRequest` 注入 `BuildGitSyncInstructions`（与 A4 OpenCode **字节一致**的凭据 + clone_url + draft_branch + footer + trailer 契约，置于 prompt 末尾近因窗口）；本地 Hermes 0.20.3 源码核验 Runs API（`input`/`instructions`/`session_id`/`conversation_history`）无需 schema 变更——契约纯 prompt 驱动，Hermes 用自带工具自 push，trailer `matea-draft-head:` 即 `GitSyncResult` 回传（无 patch 回传特例）。`runWriteTask` git_sync 分支上提至 `ResolveCodingBackend` 之前并经 `resolveGitSyncWriteHub` 统一匹配 hub-opencode/hub-hermes（此前 hub-hermes 写任务在此硬报错 "unsupported coding backend type"）；健康探针失败在 Prepare 签发 key 之前快速失败，git_sync 下**故意不**静默回退 builtin（避免信任模型被替换为 Matea 持 agent token 自 push）。`runViaHub` 部分 `GitSyncResult` 兜底加固（空字段从 Prepare 契约 + trailer 回填）。测试：hermes 包注入/无注入用例 + agents 包 `gitsync_hermes_test.go`（runWriteTask 全链路路由/不健康快速失败/shared_path 不进入 git_sync/部分结果回填），全量 17 包 PASS。真实 Hermes E2E 归 B5。**B1 验收通过，A5（删除 shared_path）解锁。**
 
 - [ ] **B2.1 `agent_sessions` schema 迁移**：`WorkspacePath` → `Branch`+`LastHead`+`Memory`（DDL + 迁移 + 默认值）。
 

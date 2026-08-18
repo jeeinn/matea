@@ -308,6 +308,18 @@ func (b *Backend) buildRunRequest(tc *agents.TaskContext) *hermesRunRequest {
 		req.Input += mb.String()
 	}
 
+	// git_sync write tasks (task B1): inject the shared hub-push contract —
+	// the same BuildGitSyncInstructions block OpenCode receives (task A4). It
+	// carries the task-scoped deploy key (base64), the clone URL, the draft
+	// branch Hermes may push, the required commit footer and the result
+	// trailer. Hermes executes the git steps with its own tools; Matea never
+	// sees a patch (no patch-return special case). Appended last so the
+	// mandatory workflow sits in the recency window of the prompt.
+	if tc.GitSync != nil {
+		req.Input = strings.TrimSpace(req.Input + "\n\n" +
+			agents.BuildGitSyncInstructions(tc.GitSync, fmt.Sprintf("matea-hub-%d", tc.TaskID)))
+	}
+
 	return req
 }
 

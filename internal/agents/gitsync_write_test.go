@@ -62,6 +62,7 @@ type gitSyncTestHub struct {
 	pollRes   *BackendResult
 	pollErr   error
 	pollState State
+	healthErr error
 }
 
 func (b *gitSyncTestHub) Name() string { return b.name }
@@ -76,7 +77,7 @@ func (b *gitSyncTestHub) Poll(ctx context.Context, h *Handle) (*BackendResult, S
 }
 func (b *gitSyncTestHub) Cancel(ctx context.Context, h *Handle) error { return nil }
 func (b *gitSyncTestHub) Capabilities() HubCapabilities               { return HubCapabilities{} }
-func (b *gitSyncTestHub) HealthCheck(ctx context.Context) error       { return nil }
+func (b *gitSyncTestHub) HealthCheck(ctx context.Context) error       { return b.healthErr }
 
 // gitSyncFakeGitea serves the API surface Approve touches. The repo's
 // clone_url points at a local bare repo via file:// so fetchDraft runs real git.

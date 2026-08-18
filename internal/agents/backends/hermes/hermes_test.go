@@ -387,3 +387,75 @@ func TestDeriveSessionID(t *testing.T) {
 	assert.Equal(t, "matea:owner/repo", deriveSessionID(&agents.TaskContext{Repo: "owner/repo"}))
 	assert.Equal(t, "", deriveSessionID(&agents.TaskContext{}))
 }
+
+// TestBuildRunRequestGitSyncInjection (task B1): a write task carrying
+// GitSyncInfo must inject the shared hub-push contract into the run input —
+// byte-identical to what OpenCode receives (task A4), because both hubs get
+// the same BuildGitSyncInstructions block. The markers asserted here mirror
+// TestOpenCodeSubmitGitSyncInjectsInstructions in the agents package.
+func TestBuildRunRequestGitSyncInjection(t *testing.T) {
+	var captured hermesRunRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs" && r.Method == http.MethodPost {
+			json.NewDecoder(r.Body).Decode(&captured)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(hermesRunResponse{RunID: "run-1", Status: "started"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(srv.Close)
+	b := newTestBackend(t, srv.URL)
+
+	h, err := b.Submit(context.Background(), &agents.TaskContext{
+		TaskType:    "solve_issue",
+		Repo:        "o/r",
+		IssueID:     5,
+		TaskID:      42,
+		UserPrompt:  "Fix it",
+		MemoryKeys: map[string]string{"analysis_summary": "prior finding"},
+		GitSync: &agents.GitSyncInfo{
+			CloneURL:       "ssh://git@example.com/o/r.git",
+			PrivateKey:     "PRIVKEY",
+			DraftBranch:    "matea/hub-42",
+			BaseBranch:     "main",
+			BaseHEAD:       "aaaa",
+			RequiredFooter: "matea-task-id: 42",
+			HubPush:        true,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	// Original prompt and memory are preserved.
+	assert.Contains(t, captured.Input, "Fix it")
+	assert.Contains(t, captured.Input, "prior finding")
+
+	// The injected git_sync contract carries all five elements.
+	assert.Contains(t, captured.Input, "Git workflow (MANDATORY")
+	assert.Contains(t, captured.Input, "base64 -d > key")
+	assert.Contains(t, captured.Input, "UFJJVktFWQ==") // base64("PRIVKEY")
+	assert.Contains(t, captured.Input, "matea/hub-42")
+	assert.Contains(t, captured.Input, "matea-task-id: 42")
+	assert.Contains(t, captured.Input, "matea-draft-head: ")
+	assert.Contains(t, captured.Input, "ssh://git@example.com/o/r.git")
+	assert.Contains(t, captured.Input, "matea-hub-42", "per-task work subdir")
+
+	// Recency: the mandatory git workflow sits after the memory block.
+	assert.Greater(t, strings.Index(captured.Input, "Git workflow (MANDATORY"),
+		strings.Index(captured.Input, "prior finding"))
+}
+
+// TestBuildRunRequestNoGitSyncUnchanged pins the read/reply path: without
+// GitSyncInfo the request carries no git contract at all.
+func TestBuildRunRequestNoGitSyncUnchanged(t *testing.T) {
+	b := newTestBackend(t, "http://unused")
+	req := b.buildRunRequest(&agents.TaskContext{
+		TaskType:   "analyze_issue",
+		Repo:       "o/r",
+		TaskID:     7,
+		UserPrompt: "Analyze it",
+	})
+	assert.NotContains(t, req.Input, "Git workflow (MANDATORY")
+	assert.NotContains(t, req.Input, "matea-draft-head")
+}
