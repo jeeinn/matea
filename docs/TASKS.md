@@ -252,7 +252,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **B1 Hermes backend 对齐 OpenCode 同一 Hub 自 push 契约** ✅（2026-08-18）
   `buildRunRequest` 注入 `BuildGitSyncInstructions`（与 A4 OpenCode **字节一致**的凭据 + clone_url + draft_branch + footer + trailer 契约，置于 prompt 末尾近因窗口）；本地 Hermes 0.20.3 源码核验 Runs API（`input`/`instructions`/`session_id`/`conversation_history`）无需 schema 变更——契约纯 prompt 驱动，Hermes 用自带工具自 push，trailer `matea-draft-head:` 即 `GitSyncResult` 回传（无 patch 回传特例）。`runWriteTask` git_sync 分支上提至 `ResolveCodingBackend` 之前并经 `resolveGitSyncWriteHub` 统一匹配 hub-opencode/hub-hermes（此前 hub-hermes 写任务在此硬报错 "unsupported coding backend type"）；健康探针失败在 Prepare 签发 key 之前快速失败，git_sync 下**故意不**静默回退 builtin（避免信任模型被替换为 Matea 持 agent token 自 push）。`runViaHub` 部分 `GitSyncResult` 兜底加固（空字段从 Prepare 契约 + trailer 回填）。测试：hermes 包注入/无注入用例 + agents 包 `gitsync_hermes_test.go`（runWriteTask 全链路路由/不健康快速失败/shared_path 不进入 git_sync/部分结果回填），全量 17 包 PASS。真实 Hermes E2E 归 B5。**B1 验收通过，A5（删除 shared_path）解锁。**
 
-- [ ] **B2.1 `agent_sessions` schema 迁移**：`WorkspacePath` → `Branch`+`LastHead`+`Memory`（DDL + 迁移 + 默认值）。
+- [x] **B2.1 `agent_sessions` schema 迁移**：`WorkspacePath` → `Branch`+`LastHead`+`Memory`（DDL + 迁移 + 默认值）。✅（2026-08-18）
+  新增 `last_head`（会话最新草稿分支 head SHA，续作锚点）与 `memory`（会话级滚动摘要，B2.3 注入续作 prompt，与 repo/issue 级 `memories` 表不同）两列：DDL（新库）+ `ALTER TABLE ... DEFAULT ''`（存量库幂等迁移）；Session 结构体 + 全部 7 处 CRUD/查询点同步；`WorkspacePath` 字段与列**保留并标 deprecated**（消费方在 B2.2 切换后删列）。测试：往返读写 + Update 覆盖 + 旧行默认值（无 NULL scan 错）。全量 17 包 PASS。
 
 - [ ] **B2.2 `prepareWriteWorkspace` session 分支改造**：续作逻辑从依赖 `WorkspacePath` 改为基于 `LastHead` 起新草稿分支（`write_workspace.go:76-84,118-139`）。
 

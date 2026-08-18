@@ -184,6 +184,8 @@ func (db *DB) migrate() error {
 			status          TEXT NOT NULL DEFAULT 'active',
 			branch          TEXT NOT NULL DEFAULT '',
 			workspace_path  TEXT NOT NULL DEFAULT '',
+			last_head       TEXT NOT NULL DEFAULT '',
+			memory          TEXT NOT NULL DEFAULT '',
 			last_task_id    INTEGER NOT NULL DEFAULT 0,
 			message_count   INTEGER NOT NULL DEFAULT 0,
 			last_active_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -283,6 +285,11 @@ func (db *DB) migrate() error {
 		`ALTER TABLE hub_handles ADD COLUMN draft_branch TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN base_head TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN deploy_key_id INTEGER NOT NULL DEFAULT 0`,
+		// git_sync sessions (task B2.1): git-native continuation state —
+		// last_head anchors the next draft branch; memory carries the rolling
+		// session summary injected into continuation prompts (B2.3).
+		`ALTER TABLE agent_sessions ADD COLUMN last_head TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_sessions ADD COLUMN memory TEXT NOT NULL DEFAULT ''`,
 	}
 
 	for _, m := range additionalMigrations {
