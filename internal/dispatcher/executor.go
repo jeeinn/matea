@@ -59,6 +59,10 @@ type Executor struct {
 	runMu   sync.Mutex
 	running map[int64]*runningTask // taskID → cancel handle
 
+	// sweepOnce guards the B4 deploy-key sweep loop so repeated
+	// SetGiteaClientFactory calls (config reload) never start duplicates.
+	sweepOnce sync.Once
+
 	// serial_queue: in-process claim so two workers cannot start the same agent.
 	agentMu   sync.Mutex
 	agentBusy map[int64]bool
@@ -255,6 +259,45 @@ func (e *Executor) SetGiteaClientFactory(factory GiteaClientFactory, getDebugCon
 	if admin := factory.GetAdminGiteaClient(); admin != nil {
 		e.runnerFactory.SetDeployKeyIssuer(agents.NewGiteaDeployKeyIssuer(admin))
 	}
+	e.startDeployKeySweepLoop(10 * time.Minute)
+}
+
+// startDeployKeySweepLoop runs the B4 deploy-key lifecycle hook: an immediate
+// sweep at startup (catches crash-window leaks promptly), then periodically.
+// Each tick re-resolves the admin client from the live factory so config
+// reloads take effect without restarting the loop. Guarded by sweepOnce —
+// SetGiteaClientFactory is re-invoked on config reload and must not stack
+// loops. The cadence mirrors the session cleanup loop (10 minutes).
+func (e *Executor) startDeployKeySweepLoop(interval time.Duration) {
+	e.sweepOnce.Do(func() {
+		go func() {
+			sweep := func() {
+				if e.giteaFactory == nil || e.db == nil {
+					return
+				}
+				admin := e.giteaFactory.GetAdminGiteaClient()
+				if admin == nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				n, err := agents.SweepOrphanedDeployKeys(ctx, e.db, admin,
+					agents.NewGiteaDeployKeyIssuer(admin), agents.DeployKeySweepGrace, time.Now())
+				if err != nil {
+					log.Printf("[WARN] deploy key sweep error: %v", err)
+				} else if n > 0 {
+					log.Printf("[INFO] deploy key sweep: revoked %d orphaned key(s)", n)
+				}
+			}
+			sweep() // startup pass
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				sweep()
+			}
+		}()
+		log.Printf("[INFO] Deploy key sweep loop started (interval: %s)", interval)
+	})
 }
 
 // SetDeliverConfig updates the outbound deliver configuration. The new client

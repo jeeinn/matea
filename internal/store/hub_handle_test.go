@@ -167,3 +167,44 @@ func TestHubHandleGitSyncFields(t *testing.T) {
 	assert.Equal(t, "", got.BaseHEAD)
 	assert.Equal(t, int64(0), got.DeployKeyID)
 }
+
+// B4: sweep query coverage — the deploy-key sweep protects keys whose task
+// owns a non-terminal handle and scans exactly the repos with handle rows.
+func TestHubHandleSweepQueries(t *testing.T) {
+	db := newTestDB(t)
+	agent := &Agent{
+		Name: "sweep-q", GiteaUsername: "sweep-q", GiteaToken: "tok",
+		Provider: "deepseek", Model: "deepseek-chat", SystemPrompt: "x", Role: RoleCoder, Status: "active",
+	}
+	require.NoError(t, db.CreateAgent(agent))
+
+	mkTask := func(repo string) int64 {
+		task := &Task{Event: "x", Repo: repo, IssueID: 1, AgentID: agent.ID, TaskType: "solve_issue", Status: "pending"}
+		require.NoError(t, db.CreateTask(task))
+		return task.ID
+	}
+
+	// Two repos with handles; one task running (protected), one done, one failed.
+	runA := mkTask("o/a")
+	doneA := mkTask("o/a")
+	failB := mkTask("o/b")
+	require.NoError(t, db.SaveHubHandle(&HubHandle{TaskID: runA, Backend: "h", RemoteID: "r1", Status: HubHandleStatusRunning}))
+	require.NoError(t, db.SaveHubHandle(&HubHandle{TaskID: doneA, Backend: "h", RemoteID: "r2", Status: HubHandleStatusDone}))
+	require.NoError(t, db.SaveHubHandle(&HubHandle{TaskID: failB, Backend: "h", RemoteID: "r3", Status: HubHandleStatusFailed}))
+
+	repos, err := db.ListHubHandleRepos()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"o/a", "o/b"}, repos)
+
+	protectedA, err := db.ListNonTerminalHubTaskIDsByRepo("o/a")
+	require.NoError(t, err)
+	assert.Equal(t, []int64{runA}, protectedA, "only the running task's key is in use")
+
+	protectedB, err := db.ListNonTerminalHubTaskIDsByRepo("o/b")
+	require.NoError(t, err)
+	assert.Empty(t, protectedB, "failed handle's key is sweep-eligible")
+
+	none, err := db.ListNonTerminalHubTaskIDsByRepo("o/never")
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}

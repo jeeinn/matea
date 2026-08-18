@@ -3,6 +3,7 @@ package gitea
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Deploy key API (git_sync task A6). Contract verified against Gitea 1.22.6 in
@@ -16,10 +17,11 @@ import (
 
 // DeployKey is a repo-scoped deploy key.
 type DeployKey struct {
-	ID          int64  `json:"id"`
-	Title       string `json:"title"`
-	Fingerprint string `json:"fingerprint"`
-	ReadOnly    bool   `json:"read_only"`
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	Fingerprint string    `json:"fingerprint"`
+	ReadOnly    bool      `json:"read_only"`
+	CreatedAt   time.Time `json:"created_at"` // B4 sweep grace window; zero if the server omits it
 }
 
 // CreateDeployKey registers publicKey as a deploy key on owner/repo. readOnly

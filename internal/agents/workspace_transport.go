@@ -165,7 +165,7 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 		return nil, nil, fmt.Errorf("git_sync prepare: anchor base branch %q: %w", base, err)
 	}
 
-	key, err := t.issuer.Issue(ctx, owner, repo, fmt.Sprintf("matea-hub-task-%d", task.ID))
+	key, err := t.issuer.Issue(ctx, owner, repo, fmt.Sprintf("%s%d", DeployKeyTitlePrefix, task.ID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("git_sync prepare: issue deploy key: %w", err)
 	}

@@ -157,6 +157,53 @@ func (db *DB) DeleteHubHandle(taskID int64) error {
 	return nil
 }
 
+// ListHubHandleRepos returns the distinct repos (owner/name, via the owning
+// task) that have ever had a hub handle row. The B4 deploy-key sweep scans
+// exactly these repos: a repo without any handle row can never hold a
+// matea-issued key record, so scanning more would be noise.
+func (db *DB) ListHubHandleRepos() ([]string, error) {
+	rows, err := db.Query(
+		`SELECT DISTINCT tasks.repo FROM hub_handles JOIN tasks ON tasks.id = hub_handles.task_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list hub handle repos: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var repo string
+		if err := rows.Scan(&repo); err != nil {
+			return out, fmt.Errorf("scan hub handle repo: %w", err)
+		}
+		out = append(out, repo)
+	}
+	return out, rows.Err()
+}
+
+// ListNonTerminalHubTaskIDsByRepo returns the task IDs owning a non-terminal
+// hub handle on the given repo. Those tasks' deploy keys are IN USE (run in
+// flight, possibly re-attaching after a restart) and the B4 sweep must not
+// revoke them.
+func (db *DB) ListNonTerminalHubTaskIDsByRepo(repo string) ([]int64, error) {
+	rows, err := db.Query(
+		`SELECT hub_handles.task_id FROM hub_handles JOIN tasks ON tasks.id = hub_handles.task_id
+		 WHERE tasks.repo = ? AND hub_handles.status NOT IN (?, ?, ?)`,
+		repo, HubHandleStatusDone, HubHandleStatusFailed, HubHandleStatusCanceled,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list non-terminal hub task ids: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return out, fmt.Errorf("scan non-terminal hub task id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // FailOrphanedRunningTasksExceptHub marks running tasks as failed on startup
 // (previous process killed) but preserves tasks that own a non-terminal hub
 // handle: those are re-attached by the Executor instead of failed, so a hub run
