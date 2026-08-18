@@ -42,9 +42,12 @@ func newGitSyncHermesFactory(db *store.DB, giteaURL string, issuer DeployKeyIssu
 					WorkspaceTransport: config.WorkspaceTransportGitSync,
 				},
 				"gs-hermes-shared": {
-					Type:               config.BackendTypeHubHermes,
-					BaseURL:            "http://unused",
-					WorkspaceTransport: config.WorkspaceTransportSharedPath,
+					Type:    config.BackendTypeHubHermes,
+					BaseURL: "http://unused",
+					// Legacy removed transport (A5): config load now rejects
+					// this value, but a programmatically constructed config
+					// must still not route into the git_sync channel.
+					WorkspaceTransport: "shared_path",
 				},
 			},
 		},
@@ -131,16 +134,22 @@ func TestRunWriteTaskGitSyncHermesUnhealthyFailsBeforePrepare(t *testing.T) {
 	assert.Nil(t, fake.prCreated)
 }
 
-// TestRunWriteTaskGitSyncSharedPathHermesNotRouted pins the coexistence
-// window: hub-hermes with the legacy shared_path transport does NOT enter the
-// git_sync channel (write tasks on it still fail loudly at
-// ResolveCodingBackend, exactly as before B1).
+// TestRunWriteTaskGitSyncSharedPathHermesNotRouted pins the post-A5 routing:
+// a hub-hermes backend carrying the REMOVED shared_path transport (e.g. a
+// config constructed programmatically, bypassing load-time validation) does
+// NOT enter the git_sync channel — write tasks on it fail loudly at
+// ResolveCodingBackend with a migration hint.
 func TestRunWriteTaskGitSyncSharedPathHermesNotRouted(t *testing.T) {
 	hub := &gitSyncTestHub{name: "gs-hermes-shared"}
 	f := newGitSyncHermesFactory(nil, "http://unused", &fakeDeployKeyIssuer{}, hub)
 
 	_, ok := f.resolveGitSyncWriteHub(&store.Agent{Backend: "gs-hermes-shared"})
-	assert.False(t, ok, "shared_path hub-hermes must not enter the git_sync write channel")
+	assert.False(t, ok, "shared_path (removed in A5) must not enter the git_sync write channel")
+
+	// And the CodingBackend fallback refuses it with a git_sync migration hint.
+	_, err := f.ResolveCodingBackend(&store.Agent{Backend: "gs-hermes-shared"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace_transport")
 
 	_, ok = f.resolveGitSyncWriteHub(&store.Agent{Backend: ""})
 	assert.False(t, ok, "builtin must not enter the git_sync write channel")

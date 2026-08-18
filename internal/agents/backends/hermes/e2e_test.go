@@ -126,7 +126,7 @@ func newTestFactory(t *testing.T, hermesURL, giteaURL string, db *store.DB) *age
 				Type:               config.BackendTypeHubHermes,
 				BaseURL:            hermesURL,
 				Auth:               config.BackendAuthConfig{Password: "test-key"},
-				WorkspaceTransport: config.WorkspaceTransportSharedPath,
+				WorkspaceTransport: config.WorkspaceTransportGitSync,
 			},
 		},
 	}

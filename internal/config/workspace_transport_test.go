@@ -8,16 +8,18 @@ import (
 )
 
 func TestWorkspaceTransportConstants(t *testing.T) {
-	assert.Equal(t, "shared_path", WorkspaceTransportSharedPath)
 	assert.Equal(t, "git_sync", WorkspaceTransportGitSync)
 	assert.Equal(t, "mcp", WorkspaceTransportMCP)
+	// A5: shared_path is gone — no constant may exist for it. Pin the literal
+	// here so a stray re-introduction fails this test.
+	assert.NotContains(t, ValidWorkspaceTransports(), "shared_path")
 }
 
 func TestValidWorkspaceTransports(t *testing.T) {
 	valid := ValidWorkspaceTransports()
-	assert.Contains(t, valid, WorkspaceTransportSharedPath)
 	assert.Contains(t, valid, WorkspaceTransportGitSync)
 	assert.Contains(t, valid, WorkspaceTransportMCP)
+	assert.Len(t, valid, 2)
 }
 
 func TestIsWorkspaceTransportValid(t *testing.T) {
@@ -25,13 +27,13 @@ func TestIsWorkspaceTransportValid(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{"", true},             // empty defaults to shared_path
-		{"shared_path", true},  // Phase 2 default
-		{"git_sync", true},     // A1–A4 coexistence window accepts git_sync
-		{"mcp", false},         // Phase 3, rejected in Phase 2
-		{"unknown", false},     // unknown value rejected
-		{"SHARED_PATH", false}, // case-sensitive
-		{"GIT_SYNC", false},    // case-sensitive
+		{"", true},           // empty defaults to git_sync
+		{"git_sync", true},   // the only hub write transport (A5+)
+		{"shared_path", false}, // removed in A5 — stale configs must fail loud
+		{"mcp", false},       // Phase 3 only
+		{"unknown", false},   // unknown value rejected
+		{"GIT_SYNC", false},  // case-sensitive
+		{"SHARED_PATH", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -41,13 +43,13 @@ func TestIsWorkspaceTransportValid(t *testing.T) {
 }
 
 func TestApplyBackendDefaultsSetsWorkspaceTransport(t *testing.T) {
-	// Empty workspace_transport should default to shared_path
+	// Empty workspace_transport should default to git_sync
 	backends := &AgentBackendsConfig{
 		Default: "builtin",
 		Backends: map[string]BackendConfig{
 			"builtin": {Type: BackendTypeBuiltin},
 			"opencode-local": {
-				Type:   BackendTypeHubOpenCode,
+				Type:    BackendTypeHubOpenCode,
 				BaseURL: "http://localhost:8080",
 			},
 		},
@@ -55,9 +57,9 @@ func TestApplyBackendDefaultsSetsWorkspaceTransport(t *testing.T) {
 
 	ApplyBackendDefaults(backends)
 
-	// Both backends should have workspace_transport defaulted to shared_path
-	assert.Equal(t, WorkspaceTransportSharedPath, backends.Backends["builtin"].WorkspaceTransport)
-	assert.Equal(t, WorkspaceTransportSharedPath, backends.Backends["opencode-local"].WorkspaceTransport)
+	// Both backends should have workspace_transport defaulted to git_sync
+	assert.Equal(t, WorkspaceTransportGitSync, backends.Backends["builtin"].WorkspaceTransport)
+	assert.Equal(t, WorkspaceTransportGitSync, backends.Backends["opencode-local"].WorkspaceTransport)
 }
 
 func TestValidateBackendWorkspaceTransport(t *testing.T) {
@@ -65,6 +67,7 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 		name      string
 		cfg       BackendConfig
 		expectErr bool
+		errContains string
 	}{
 		{
 			name:      "empty transport is valid",
@@ -72,14 +75,21 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:      "shared_path is valid",
-			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "shared_path"},
+			name:      "git_sync is valid",
+			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "git_sync"},
 			expectErr: false,
 		},
 		{
-			name:      "git_sync is valid in coexistence window",
-			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "git_sync"},
-			expectErr: false,
+			name:        "shared_path removed in A5 gets a migration error",
+			cfg:         BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "shared_path"},
+			expectErr:   true,
+			errContains: "removed in A5",
+		},
+		{
+			name:        "shared_path on hermes also rejected",
+			cfg:         BackendConfig{Type: BackendTypeHubHermes, WorkspaceTransport: "shared_path"},
+			expectErr:   true,
+			errContains: "removed in A5",
 		},
 		{
 			name:      "mcp is rejected in Phase 2",
@@ -98,7 +108,11 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 			err := ValidateBackendWorkspaceTransport(tt.cfg)
 			if tt.expectErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "not supported")
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				} else {
+					assert.Contains(t, err.Error(), "not supported")
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -112,17 +126,16 @@ func TestBackendTypeHubHermes(t *testing.T) {
 }
 
 func TestApplyBackendDefaultsDoesNotOverrideExplicitTransport(t *testing.T) {
-	// If a user explicitly sets workspace_transport to shared_path, keep it
+	// If a user explicitly sets workspace_transport, keep it
 	backends := &AgentBackendsConfig{
 		Backends: map[string]BackendConfig{
 			"opencode-local": {
 				Type:               BackendTypeHubOpenCode,
 				BaseURL:            "http://localhost:8080",
-				WorkspaceTransport: "shared_path",
+				WorkspaceTransport: "git_sync",
 			},
 		},
 	}
-
 	ApplyBackendDefaults(backends)
-	assert.Equal(t, "shared_path", backends.Backends["opencode-local"].WorkspaceTransport)
+	assert.Equal(t, "git_sync", backends.Backends["opencode-local"].WorkspaceTransport)
 }

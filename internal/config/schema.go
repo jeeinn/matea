@@ -280,8 +280,8 @@ type BackendConfig struct {
 	Timeout               string                   `yaml:"timeout"`                 // e.g. "45m"
 	WorkspaceMode         string                   `yaml:"workspace_mode"`          // first release: "matea_path" only
 	HealthCheck           BackendHealthCheckConfig `yaml:"health_check"`            // hub-opencode only
-	AllowFallbackBuiltin  bool                     `yaml:"allow_fallback_builtin"`  // default false
-	WorkspaceTransport    string                   `yaml:"workspace_transport"`     // shared_path (Phase 2) | mcp (Phase 3)
+	AllowFallbackBuiltin  bool                     `yaml:"allow_fallback_builtin"`  // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
+	WorkspaceTransport    string                   `yaml:"workspace_transport"`     // git_sync only (A5+; shared_path removed, mcp Phase 3)
 }
 
 // BackendAuthConfig holds HTTP Basic auth credentials for a hub-opencode backend.
@@ -306,20 +306,17 @@ const (
 // WorkspaceTransport defines how the workspace is delivered to a hub backend.
 // D11 deployment tiers: L0 same-process host / L1 shared volume / L2 full isolation.
 //
-// git_sync rollout (20260815-git-sync-3phase-plan.md v3.1): A1–A4 keep a
-// coexistence window where shared_path and git_sync are both accepted; A5
-// (gated on B1 acceptance) removes shared_path and converges on git_sync as
-// the only hub write transport. WorkspaceTransportMCP stays rejected until
+// git_sync rollout (20260815-git-sync-3phase-plan.md v3.1): the A1–A4
+// coexistence window (shared_path + git_sync both accepted) closed at A5 —
+// git_sync is now the ONLY hub write transport. shared_path was removed
+// because it widened the trust model (Matea-side credentials touching a
+// hub-visible filesystem); WorkspaceTransportMCP stays rejected until
 // Phase 3 (requires MCP Server, performance tax for cross-org isolation).
 const (
-	// WorkspaceTransportSharedPath delivers workspace via local absolute path
-	// (L0 same machine or L1 shared volume). Phase 2 default; removed in A5.
-	WorkspaceTransportSharedPath = "shared_path"
-
 	// WorkspaceTransportGitSync delivers work via git: Matea issues a
 	// task-scoped deploy key and hands the hub a GitSyncInfo; the hub clones,
 	// commits and pushes a draft branch itself; Matea fetches, validates and
-	// opens the PR. Target transport for all hub write tasks.
+	// opens the PR. The only hub write transport (A5+).
 	WorkspaceTransportGitSync = "git_sync"
 
 	// WorkspaceTransportMCP delivers workspace via MCP file tools (L2 full
@@ -329,16 +326,16 @@ const (
 
 // ValidWorkspaceTransports returns all valid workspace_transport values.
 func ValidWorkspaceTransports() []string {
-	return []string{WorkspaceTransportSharedPath, WorkspaceTransportGitSync, WorkspaceTransportMCP}
+	return []string{WorkspaceTransportGitSync, WorkspaceTransportMCP}
 }
 
 // IsWorkspaceTransportValid reports whether a value is a valid workspace_transport.
 func IsWorkspaceTransportValid(v string) bool {
 	switch v {
-	case "", WorkspaceTransportSharedPath, WorkspaceTransportGitSync:
-		return true // coexistence window (A1–A4): both shared_path and git_sync
+	case "", WorkspaceTransportGitSync:
+		return true // A5+: git_sync is the only accepted hub write transport
 	default:
-		return false // mcp stays rejected until Phase 3; unknown values rejected
+		return false // shared_path removed in A5; mcp stays rejected until Phase 3
 	}
 }
 

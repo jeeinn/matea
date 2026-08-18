@@ -105,7 +105,8 @@ type TaskContext struct {
 	// GitSync carries the draft-branch contract for hub write tasks under the
 	// git_sync transport (task A2): Matea Prepares it (deploy key + draft
 	// branch + base anchor) and the hub clones/commits/pushes with it.
-	// Nil for read/reply tasks and for shared_path-era backends.
+	// Nil for read/reply tasks (since A5 git_sync is the only hub write
+	// transport, so every hub write task carries it).
 	GitSync *GitSyncInfo `json:"git_sync,omitempty"`
 
 	// Channel routing for deliver events (IM bridges).

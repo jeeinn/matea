@@ -323,7 +323,10 @@ func TestResolveCodingBackendExplicitBuiltin(t *testing.T) {
 	assert.Equal(t, "builtin", backend.Name())
 }
 
-func TestResolveCodingBackendOpenCodeHTTP(t *testing.T) {
+func TestResolveCodingBackendOpenCodeHTTPRejected(t *testing.T) {
+	// A5: hub backends no longer serve write tasks through the CodingBackend
+	// (shared_path) path — they must run via runViaHub's git_sync channel.
+	// ResolveCodingBackend refuses with a migration hint.
 	srv := newTestOpenCodeServer(t, nil)
 	backends := &config.AgentBackendsConfig{
 		Default: "opencode-local",
@@ -338,13 +341,10 @@ func TestResolveCodingBackendOpenCodeHTTP(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, backends, nil, sandbox.DefaultConfig(), nil, "")
 	agent := &store.Agent{Backend: "opencode-local"}
 
-	backend, err := factory.ResolveCodingBackend(agent)
-	require.NoError(t, err)
-	assert.Equal(t, "opencode-local", backend.Name())
-
-	hc, ok := backend.(HealthCheckableBackend)
-	require.True(t, ok, "opencode backend should implement HealthCheckableBackend")
-	require.NoError(t, hc.HealthCheck(context.Background()))
+	_, err := factory.ResolveCodingBackend(agent)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace_transport")
+	assert.Contains(t, err.Error(), "git_sync")
 }
 
 func TestResolveCodingBackendNotFound(t *testing.T) {
@@ -357,6 +357,8 @@ func TestResolveCodingBackendNotFound(t *testing.T) {
 }
 
 func TestResolveCodingBackendUsesDefault(t *testing.T) {
+	// A5: a hub backend configured as the agents.backends.default is refused
+	// for write tasks too — the default only makes sense as builtin.
 	srv := newTestOpenCodeServer(t, nil)
 	backends := &config.AgentBackendsConfig{
 		Default: "opencode-local",
@@ -370,9 +372,9 @@ func TestResolveCodingBackendUsesDefault(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, backends, nil, sandbox.DefaultConfig(), nil, "")
 	agent := &store.Agent{Backend: ""} // should use default
 
-	backend, err := factory.ResolveCodingBackend(agent)
-	require.NoError(t, err)
-	assert.Equal(t, "opencode-local", backend.Name())
+	_, err := factory.ResolveCodingBackend(agent)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace_transport")
 }
 
 // TestResolveCodingBackendNormalizesLegacyIdentifiers verifies pre-1.2.6
@@ -390,7 +392,9 @@ func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, backend.Name(), backend2.Name())
 
-	// Legacy type "opencode_http" still selects the OpenCode backend.
+	// Legacy type "opencode_http" normalizes to hub-opencode — and since A5
+	// is refused by ResolveCodingBackend with the git_sync migration hint
+	// (normalization still works; the CodingBackend path is what went away).
 	srv := newTestOpenCodeServer(t, nil)
 	legacyBackends := &config.AgentBackendsConfig{
 		Backends: map[string]config.BackendConfig{
@@ -398,23 +402,23 @@ func TestResolveCodingBackendNormalizesLegacyIdentifiers(t *testing.T) {
 		},
 	}
 	factory2 := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, legacyBackends, nil, sandbox.DefaultConfig(), nil, "")
-	ocBackend, err := factory2.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
-	require.NoError(t, err)
-	assert.Equal(t, "my-opencode", ocBackend.Name())
+	_, err = factory2.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace_transport")
 
-	// Canonical type "hub-opencode" works the same way.
+	// Canonical type "hub-opencode" behaves identically.
 	canonicalBackends := &config.AgentBackendsConfig{
 		Backends: map[string]config.BackendConfig{
 			"my-opencode": {Type: config.BackendTypeHubOpenCode, BaseURL: srv.URL},
 		},
 	}
 	factory3 := NewRunnerFactory(nil, nil, nil, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, canonicalBackends, nil, sandbox.DefaultConfig(), nil, "")
-	ocBackend2, err := factory3.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
-	require.NoError(t, err)
-	assert.Equal(t, "my-opencode", ocBackend2.Name())
+	_, err = factory3.ResolveCodingBackend(&store.Agent{Backend: "my-opencode"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace_transport")
 }
 
-// --- Health check (runWriteTask: fail before prepare unless allow_fallback_builtin) ---
+// --- Health check (the git_sync write branch probes the hub before Prepare) ---
 
 func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {
 	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
@@ -436,16 +440,4 @@ func TestOpenCodeBackendUnhealthyReturnsFriendlyError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "503")
 	assert.Contains(t, err.Error(), "health check")
-	// Default: no silent fallback — Executor must mark failed, not success.
-	assert.False(t, allowsBuiltinFallback(b))
-}
-
-func TestAllowsBuiltinFallbackFlag(t *testing.T) {
-	b, err := NewOpenCodeHTTPBackend("opencode-local", config.BackendConfig{
-		Type:                  config.BackendTypeHubOpenCode,
-		BaseURL:               "http://127.0.0.1:9",
-		AllowFallbackBuiltin: true,
-	})
-	require.NoError(t, err)
-	assert.True(t, allowsBuiltinFallback(b))
 }

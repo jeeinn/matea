@@ -488,12 +488,15 @@ func (b *OpenCodeHTTPBackend) Capabilities() HubCapabilities {
 // a Handle whose RemoteID is the opencode session id. Non-write task types
 // are rejected as submission errors.
 //
-// Workspace requirement: shared_path tasks need TaskContext.SandboxPath (a
-// Matea-prepared local directory). git_sync tasks (tc.GitSync != nil, task A4)
-// need NO Matea workspace — the sidecar clones the repo itself using the
-// deploy key carried in GitSyncInfo, into a per-task subdirectory of the
-// opencode server's own project directory (the X-Opencode-Directory header is
-// omitted so the server default applies).
+// Workspace requirement: read/reply tasks need TaskContext.SandboxPath (a
+// Matea-prepared minimal scratch directory the sidecar can work in).
+// git_sync write tasks (tc.GitSync != nil, task A4) need NO Matea workspace —
+// the sidecar clones the repo itself using the deploy key carried in
+// GitSyncInfo, into a per-task subdirectory of the opencode server's own
+// project directory (the X-Opencode-Directory header is omitted so the
+// server default applies). Since A5, git_sync is the ONLY hub write
+// transport; a write task without GitSyncInfo is rejected here rather than
+// silently given a local workspace.
 func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Handle, error) {
 	if tc == nil {
 		return nil, fmt.Errorf("hub-opencode backend %q: nil TaskContext", b.name)

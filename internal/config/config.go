@@ -73,6 +73,14 @@ func LoadWithBootstrap(path string) (*LoadResult, error) {
 	if err := ValidateAgentLoopConfig(cfg.Agents.Loop); err != nil {
 		return nil, err
 	}
+	// A5: fail loud at startup on removed/unknown workspace transports (a
+	// stale `workspace_transport: shared_path` must surface a migration error
+	// here, not a confusing routing failure at task time).
+	for name, b := range cfg.Agents.Backends.Backends {
+		if err := ValidateBackendWorkspaceTransport(b); err != nil {
+			return nil, fmt.Errorf("agents.backends.%s: %w", name, err)
+		}
+	}
 	return &LoadResult{
 		Config:           &cfg,
 		BootstrapCreated: created,
@@ -303,26 +311,30 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 	} else {
 		backends.Backends[BackendNameBuiltin] = BackendConfig{Type: BackendTypeBuiltin}
 	}
-	// Default workspace_transport to shared_path (Phase 2 only implementation).
+	// Default workspace_transport to git_sync (the only hub write transport
+	// since A5; shared_path removed).
 	for name, b := range backends.Backends {
 		if b.WorkspaceTransport == "" {
-			b.WorkspaceTransport = WorkspaceTransportSharedPath
+			b.WorkspaceTransport = WorkspaceTransportGitSync
 			backends.Backends[name] = b
 		}
 	}
 }
 
 // ValidateBackendWorkspaceTransport checks that a backend's workspace_transport
-// is compatible with its type. hub backends accept shared_path (L0/L1, legacy)
-// and git_sync (A1+ target) during the A1–A4 coexistence window; mcp is
-// rejected until Phase 3.
+// is compatible with its type. Since A5 only git_sync is accepted; the removed
+// shared_path gets an explicit migration error, and mcp is rejected until
+// Phase 3.
 //
 // Returns nil on success, error describing the incompatibility otherwise.
 func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
-	// Coexistence window (git_sync A1–A4): shared_path and git_sync both OK.
+	if cfg.WorkspaceTransport == "shared_path" {
+		return fmt.Errorf("backend type %q: workspace_transport %q was removed in A5 — use %q (the only hub write transport)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportGitSync)
+	}
 	if cfg.WorkspaceTransport != "" && !IsWorkspaceTransportValid(cfg.WorkspaceTransport) {
-		return fmt.Errorf("backend type %q: workspace_transport %q is not supported (valid: %q, %q)",
-			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportSharedPath, WorkspaceTransportGitSync)
+		return fmt.Errorf("backend type %q: workspace_transport %q is not supported (valid: %q)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportGitSync)
 	}
 	return nil
 }

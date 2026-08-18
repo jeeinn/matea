@@ -532,7 +532,7 @@ func TestReplyRunnerViaOpenCodeFallsBackOnWorkspaceFailure(t *testing.T) {
 				Type:               config.BackendTypeHubOpenCode,
 				BaseURL:            "http://unused",
 				Auth:               config.BackendAuthConfig{Password: "test-key"},
-				WorkspaceTransport: config.WorkspaceTransportSharedPath,
+				WorkspaceTransport: config.WorkspaceTransportGitSync,
 			},
 		},
 	}
@@ -561,7 +561,7 @@ func newOpenCodeTestFactory(t *testing.T, opencodeURL, giteaURL string) *RunnerF
 				Type:               config.BackendTypeHubOpenCode,
 				BaseURL:            opencodeURL,
 				Auth:               config.BackendAuthConfig{Password: "test-key"},
-				WorkspaceTransport: config.WorkspaceTransportSharedPath,
+				WorkspaceTransport: config.WorkspaceTransportGitSync,
 			},
 		},
 	}

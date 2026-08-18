@@ -134,7 +134,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 	// git_sync write path (task A3): when the backend's workspace_transport is
 	// git_sync and this is a write task, Matea Prepares credentials before
 	// Submit and Approves the hub-pushed draft branch after completion.
-	// Read/reply tasks and shared_path backends take the original comment path.
+	// Read/reply tasks take the original comment path.
 	transport := f.gitSyncTransportFor(backend)
 	writeViaGitSync := transport != nil && isWriteTaskType(task.TaskType)
 	var gitSyncInfo *GitSyncInfo

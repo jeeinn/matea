@@ -235,8 +235,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **A4 OpenCode 写路径从 `CodingBackend.Run`(shared_path) 切到 `runViaHub` 写通道（前提：A0.1 通过）** ✅（2026-08-17，commit 455d57c）
   `runner_write.go` 中 hub-opencode + git_sync backend 直接走 `runViaHub`；Submit 注入 base64 私钥 + clone/footer/trailer 指引（`BuildGitSyncInstructions`），不再要求 `SandboxPath`；OpenCode 自 push 草稿分支，回传 `matea-draft-head:` trailer 供交叉核对（fetch 远端为权威）。E2E 单测走真实 git file:// 裸仓全通过。
 
-- [ ] **A5 干净删除 `shared_path`（gating：B1 验收后才执行，不在 A1-A4 提前删）**
-  删 `CodingBackend.Run` 中 shared_path 依赖 + transport 常量；此时才把 `IsWorkspaceTransportValid`/`ValidWorkspaceTransports` 收敛为只接受 `git_sync`；重写 `workspace_transport_test.go` 与 `opencode_hubbackend_test.go`/`hermes/e2e_test.go`（这些测试在 A1-A4 共存期已先改为兼容两 transport）。
+- [x] **A5 干净删除 `shared_path`（gating：B1 验收后才执行，不在 A1-A4 提前删）** ✅（2026-08-18，B1 验收通过后执行）
+  删 `CodingBackend.Run` 的 shared_path 写路径（`ResolveCodingBackend` 对 hub-opencode/hub-hermes 改为显式迁移报错；`runner_write.go` 删 opencode 双轨 Handle 持久化/重连块与 CodingBackend 健康检查/builtin 回退死代码）；删 `WorkspaceTransportSharedPath` 常量；`IsWorkspaceTransportValid`/`ValidWorkspaceTransports` 收敛为仅 `git_sync`（`mcp` 列名待 C1 收尾）；`ApplyBackendDefaults` 空值默认 `git_sync`；`ValidateBackendWorkspaceTransport` 对 `shared_path` 给迁移报错并**接入 `LoadWithBootstrap` 启动校验**（陈旧配置启动即失败，不再等到任务期）；`allow_fallback_builtin` 字段标 deprecated（保留 YAML 兼容）。重写 `workspace_transport_test.go`（含 shared_path 拒绝用例）与 `opencode_http_test.go` ResolveCodingBackend 系列；`opencode_hubbackend_test.go`/`hermes/e2e_test.go` 配置填充改 `git_sync`；`gitsync_hermes_test.go` shared_path 用例改为字面量防御性路由断言。读/reply 的 OpenCode SandboxPath 最小工作区契约**保留**（非写 transport 语义）。全量 17 包 PASS。
 
 - [x] **A6 Gitea deploy key 程序化创建/回收（基于 A0.2）** ✅（2026-08-17，commit 8b31654）
   `internal/gitea/deploy_key.go`（Create/Delete/List）+ `internal/agents/deploy_key_issuer.go`（每任务新 ed25519 密钥对，注册 read-write deploy key；Revoke 3 次退避重试 + ctx 感知 + 孤儿 key 告警）；`executor.SetGiteaClientFactory` 用 admin client 接线注入 RunnerFactory；KeyID 持久化到 `hub_handles.deploy_key_id`。**绝不把 Matea admin token 交给 Hub**（Hub 只拿任务级私钥）。

@@ -41,7 +41,7 @@ type HubHandle struct {
 	Status         string    `json:"status"`          // HubHandleStatus*
 
 	// git_sync fields (task A2): the draft-branch contract state for hub write
-	// tasks. Empty/zero for read/reply tasks and shared_path-era handles.
+	// tasks. Empty/zero for read/reply tasks.
 	DraftBranch string `json:"draft_branch,omitempty"` // matea/hub-{taskID} registered at Prepare
 	BaseHEAD    string `json:"base_head,omitempty"`    // base branch head anchor at Prepare
 	DeployKeyID int64  `json:"deploy_key_id,omitempty"` // Gitea deploy key id for Cleanup revoke

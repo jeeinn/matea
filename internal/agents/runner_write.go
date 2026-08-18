@@ -109,26 +109,6 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	}
 	log.Printf("[INFO] Task %d using coding backend: %s", task.ID, backend.Name())
 
-	if hc, ok := backend.(HealthCheckableBackend); ok {
-		hcCtx, hcCancel := context.WithTimeout(ctx, 5*time.Second)
-		hcErr := hc.HealthCheck(hcCtx)
-		hcCancel()
-		if hcErr != nil {
-			if allowsBuiltinFallback(backend) {
-				log.Printf("[WARN] Task %d coding backend %s unhealthy (%v); allow_fallback_builtin=true → switching to builtin",
-					task.ID, backend.Name(), hcErr)
-				backend = factory.builtinBackend
-			} else {
-				// Return error so Executor marks failed (not success) and posts
-				// a failure comment via writeFailureToGitea.
-				return nil, fmt.Errorf(
-					"coding backend %q is not reachable (health check failed): %w",
-					backend.Name(), hcErr,
-				)
-			}
-		}
-	}
-
 	// Phase 1: prepare workspace (sandbox / clone / branch)
 	wwc, err := prepareWriteWorkspace(ctx, task, agentCfg, factory, taskSubType)
 	if err != nil {
@@ -181,72 +161,19 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 		ToolPack:       factory.resolveToolPack(task.TaskType),
 	}
 
-	// hub-opencode write tasks are dispatched through the CodingBackend.Run
-	// path (NOT runViaHub), so they need explicit Handle persistence + restart
-	// re-attach to stay consistent with the read/reply hub paths (Phase 2 code
-	// review Problem B: write-task dual-track). builtin and other backends are
-	// untouched; hb is only referenced in the hub-opencode branch below.
-	hb, isHubOpenCode := factory.ResolveHubOpenCode(agentCfg)
-
-	// Idempotency / restart re-attach for hub-opencode write tasks. If a
-	// non-terminal Handle was persisted for this task (from a prior run that
-	// was interrupted or re-enqueued), recover the coding summary from the
-	// still-living opencode sidecar session instead of starting a second
-	// session — this closes the duplicate-sidecar-session hole that the
-	// synchronous CodingBackend.Run path otherwise leaves open.
-	var codingResult *CodingResult
-	var opencodeHandle *store.HubHandle
-	if isHubOpenCode && factory.db != nil {
-		if existing, gerr := factory.db.GetHubHandle(task.ID); gerr == nil && existing != nil && !store.IsTerminalHubStatus(existing.Status) {
-			h := &Handle{Backend: existing.Backend, RemoteID: existing.RemoteID, IdempotencyKey: existing.IdempotencyKey}
-			res, state, perr := hb.Poll(ctx, h)
-			if perr != nil || !state.IsTerminal() {
-				// Sidecar session is gone (GC'd/restarted) — cannot recover;
-				// mark failed rather than spin up a duplicate coding run.
-				factory.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
-				return nil, fmt.Errorf("hub-opencode write task %d: sidecar session %q no longer recoverable: %w", task.ID, existing.RemoteID, perr)
-			}
-			// For task-level (non-session) workspaces the sandbox is re-cloned
-			// fresh on re-entry, so the sidecar's on-disk changes are not
-			// present and committing would emit an empty PR. Fail cleanly so an
-			// operator can retry; session workspaces reuse the existing dir and
-			// do recover below.
-			if task.SessionID == "" {
-				factory.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
-				return nil, fmt.Errorf("hub-opencode write task %d: interrupted non-session workspace would drop sidecar changes; marked failed for manual retry", task.ID)
-			}
-			codingResult = &CodingResult{Summary: res.Summary, Success: true, RemoteSessionID: existing.RemoteID}
-			opencodeHandle = existing
-			log.Printf("[INFO] write task %d re-attached to hub-opencode session %q", task.ID, existing.RemoteID)
-		}
+	// Since A5, only the builtin backend reaches this point: hub backends are
+	// either diverted into runViaHub's git_sync channel above or rejected by
+	// ResolveCodingBackend. The hub-opencode CodingBackend.Run dual-track
+	// (Handle persistence + re-attach around a synchronous Run) went away with
+	// it — hub Handles are owned by runViaHub exclusively now.
+	cr, rerr := backend.Run(ctx, codingReq)
+	if rerr != nil {
+		return nil, fmt.Errorf("coding backend %s: %w", backend.Name(), rerr)
 	}
-
-	if codingResult == nil {
-		cr, rerr := backend.Run(ctx, codingReq)
-		if rerr != nil {
-			return nil, fmt.Errorf("coding backend %s: %w", backend.Name(), rerr)
-		}
-		if !cr.Success {
-			return nil, fmt.Errorf("coding backend %s reported failure: %s", backend.Name(), cr.Summary)
-		}
-		codingResult = cr
-		// Persist a Handle so a crash during finalize is recoverable and
-		// re-enqueues (stale scanner / restart) hit the idempotency guard above
-		// instead of starting a duplicate sidecar session.
-		if isHubOpenCode && factory.db != nil {
-			if serr := factory.db.SaveHubHandle(&store.HubHandle{
-				TaskID:         task.ID,
-				Backend:        backend.Name(),
-				RemoteID:       codingResult.RemoteSessionID,
-				IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", task.TaskType, task.Repo, task.IssueID, task.PRID),
-				Status:         store.HubHandleStatusRunning,
-			}); serr != nil {
-				log.Printf("[WARN] write task %d: failed to persist hub-opencode handle: %v", task.ID, serr)
-			} else {
-				opencodeHandle = &store.HubHandle{TaskID: task.ID, Backend: backend.Name(), RemoteID: codingResult.RemoteSessionID}
-			}
-		}
+	if !cr.Success {
+		return nil, fmt.Errorf("coding backend %s reported failure: %s", backend.Name(), cr.Summary)
 	}
+	codingResult := cr
 
 	// Harness: independent checker (fresh LLM context) then optional shell verify.
 	mergedLoop := MergeLoopConfig(agentCfg.LoopConfig, factory.defaultLoop)
@@ -259,39 +186,26 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 		maxOut := factory.resolveMaxOutputTokens(agentCfg.MaxOutputTokens, agentCfg.Provider, agentCfg.Model)
 		if err := runIndependentChecker(ctx, sb, provider, agentCfg.Model, sampling, maxOut,
 			task.Event, task.Context, codingResult.Summary); err != nil {
-			if opencodeHandle != nil {
-				factory.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
-			}
 			return nil, err
 		}
 	}
 	if err := runHarnessVerify(sb, mergedLoop.VerifyCommands); err != nil {
-		if opencodeHandle != nil {
-			factory.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
-		}
 		return nil, err
 	}
 
 	// Phase 3: finalize (commit / push / PR)
 	//
-	// For the builtin backend, codingResult.Provider is the LLM provider
-	// used during coding, which we reuse for the commit message LLM call.
-	// For opencode backend, Provider is nil (LLM runs server-side), so
-	// finalize will look up the provider again from the registry — a minor
-	// overhead but keeps the contract simple.
+	// codingResult.Provider is the LLM provider used during coding, which we
+	// reuse for the commit message LLM call; when nil, finalize looks the
+	// provider up again from the registry — a minor overhead but keeps the
+	// contract simple.
 	if provider == nil {
 		provider, _ = factory.llmRegistry.Get(agentCfg.Provider)
 	}
 
 	finalResult, ferr := finalizeWriteChanges(ctx, wwc, task, agentCfg, factory, provider, taskSubType, codingResult.Summary)
 	if ferr != nil {
-		if opencodeHandle != nil {
-			factory.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
-		}
 		return nil, ferr
-	}
-	if opencodeHandle != nil {
-		factory.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 	}
 	factory.emitBuiltinDeliver(task, finalResult)
 	return finalResult, nil

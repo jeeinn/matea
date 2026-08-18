@@ -100,8 +100,8 @@ func (f *RunnerFactory) SetDeliverClient(c *deliver.Client) {
 
 // SetDeployKeyIssuer injects the git_sync deploy key issuer (task A6 wires the
 // Gitea implementation at startup; tests inject fakes). A nil issuer makes
-// git_sync Prepare fail loudly, which keeps shared_path the working transport
-// during the A1–A4 coexistence window.
+// git_sync Prepare fail loudly — since A5 git_sync is the only hub write
+// transport, so a missing issuer means hub write tasks cannot run at all.
 func (f *RunnerFactory) SetDeployKeyIssuer(issuer DeployKeyIssuer) {
 	f.deployKeyIssuer = issuer
 }
