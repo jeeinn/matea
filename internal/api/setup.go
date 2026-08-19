@@ -237,10 +237,10 @@ func (h *Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries := map[string]string{
-		"gitea.url":            giteaURL,
-		"gitea.admin_token":    giteaToken,
-		"gitea.webhook_secret": webhookSecret,
-		"llm.providers":        string(providersJSON),
+		"gitea.url":             giteaURL,
+		"gitea.admin_token":     giteaToken,
+		"gitea.webhook_secret":  webhookSecret,
+		"llm.providers":         string(providersJSON),
 		"llm.defaults.provider": provider,
 		"llm.defaults.model":    model,
 	}
