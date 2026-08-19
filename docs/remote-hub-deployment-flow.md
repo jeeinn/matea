@@ -2,6 +2,8 @@
 
 > 说明：本文档描述 Matea 支持「远端 / 非同机部署 Hub 大脑」的三种 transport 模式、数据流转，以及各场景需要注意的问题和解决方案。
 
+> **实现状态（2026-08-19，阶段 C 收尾）**：本文是设计空间文档。**当前代码只接受 `git_sync` 一种 workspace transport**——`shared_path` 已在阶段 A5 删除（信任模型更宽：Matea 侧凭据会落到 hub 可见文件系统），`mcp` transport 常量已在阶段 C1 删除（L2 全隔离档随 Phase 3.9 回归，需先落地 MCP Server）。下文的 shared_path / mcp 章节保留为设计背景；git_sync 章节中的实现细节（分支命名、三要素校验、deploy key 生命周期）以 [HUB-BACKENDS.md](HUB-BACKENDS.md) 和代码为准。
+
 ---
 
 ## 一、三种 Transport 总览
@@ -49,9 +51,9 @@ flowchart TB
 
 | Transport | 数据怎么到 Hub | 代码是否离开 Matea | 对 Hub 的部署要求 | 适用场景 |
 |---|---|---|---|---|
-| `shared_path` | 传本地绝对路径 | 否（同一文件系统） | 必须与 Matea 同机/共享卷 | OpenCode 同机过渡 |
-| `git_sync` ⭐ | TaskContext 传 clone URL + branch | 是（Hub 自管沙箱） | 能访问 Gitea 即可 | **推荐默认** |
-| `mcp` | TaskContext 传 MCP endpoint + token | 否（文件级 RPC） | 必须是 MCP client | 高隔离/跨组织 |
+| `shared_path`（**A5 已删**） | 传本地绝对路径 | 否（同一文件系统） | 必须与 Matea 同机/共享卷 | OpenCode 同机过渡 |
+| `git_sync` ⭐（**当前唯一**） | TaskContext 传 clone URL + branch | 是（Hub 自管沙箱） | 能访问 Gitea 即可 | **推荐默认** |
+| `mcp`（**C1 已删，Phase 3.9 回归**） | TaskContext 传 MCP endpoint + token | 否（文件级 RPC） | 必须是 MCP client | 高隔离/跨组织 |
 
 ---
 
@@ -241,17 +243,17 @@ stateDiagram-v2
 
 | 文件 | 改造内容 |
 |---|---|
-| `internal/agents/workspace_transport.go`（新增） | `WorkspaceTransport` 接口及三种实现 |
+| `internal/agents/workspace_transport.go`（新增） | `WorkspaceTransport` 接口；**当前唯一实现 `git_sync`**（Prepare/Approve/Cleanup） |
 | `internal/agents/hub_backend.go` | `TaskContext` 增加 `GitSyncInfo`、`ToolAccessGrant` 扩展 |
-| `internal/agents/runner_write.go` | 写任务按 transport 分发，git_sync 路径加 `SyncBack` |
-| `internal/agents/hub_run.go` | `runViaHub` 支持写任务分支进入 finalize |
+| `internal/agents/runner_write.go` | 写任务按 transport 分发，git_sync 路径走 `Approve` 校验 + PR |
+| `internal/agents/hub_run.go` | `runViaHub` 写任务分支进入 git_sync Approve（不再经本地 finalize commit/push） |
 | `internal/agents/write_workspace.go` | `prepareWriteWorkspace` 按 transport 分发 |
 | `internal/agents/backends/hermes/hermes.go` | Hermes 接收 `GitSyncInfo`，自管 clone/push |
-| `internal/agents/opencode_http.go` | 保留 shared_path，新增 git_sync 选项 |
-| `internal/config/schema.go` | `workspace_transport` 允许 `git_sync`、`mcp` |
+| `internal/agents/opencode_http.go` | shared_path 已删（A5），仅保留 git_sync |
+| `internal/config/schema.go` | `workspace_transport` **仅允许 `git_sync`**（`shared_path` A5 删、`mcp` C1 删） |
 
 ---
 
 ## 八、一句话总结
 
-> **Git 是 Matea 与远端 Hub 之间的唯一事实来源**。推荐默认走 `git_sync`：Matea 负责 clone/建分支/最终 PR，远端 Hub 负责编码并 push 回 origin；`shared_path` 留给 OpenCode 同机过渡；`mcp` 留给不允许 Hub 碰 Git 的高隔离场景。
+> **Git 是 Matea 与远端 Hub 之间的唯一事实来源**。当前实现只走 `git_sync`：Matea 签发任务级 deploy key、远端 Hub 持凭据自 clone/commit/push 草稿分支、Matea fetch 校验四要素后开 PR 并回收凭据；`shared_path`（OpenCode 同机过渡）已在 A5 删除；`mcp`（不允许 Hub 碰 Git 的高隔离场景）将随 Phase 3.9 回归。

@@ -2,6 +2,9 @@ package agents
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,6 +18,7 @@ import (
 	"github.com/jeeinn/matea/internal/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 // B5 real-Gitea E2E harness for the git_sync trust model.
@@ -97,8 +101,17 @@ func TestE2EGitSyncDeployKeyLifecycle(t *testing.T) {
 	pub, priv, kerr := e2eGenerateKeyPair(t)
 	require.NoError(t, kerr)
 
-	// Issue a task-scoped rw deploy key.
-	key, err := client.CreateDeployKey(owner, repo, "matea-hub-task-e2e-42", pub, false)
+	// Issue a task-scoped rw deploy key. Drop any orphan sharing this title
+	// from a prior (failed) run first so CreateDeployKey doesn't 422.
+	const e2eKeyTitle = "matea-hub-task-e2e-42"
+	if existing, lerr := client.ListDeployKeys(owner, repo); lerr == nil {
+		for _, k := range existing {
+			if k.Title == e2eKeyTitle {
+				_ = client.DeleteDeployKey(owner, repo, k.ID)
+			}
+		}
+	}
+	key, err := client.CreateDeployKey(owner, repo, e2eKeyTitle, pub, false)
 	require.NoError(t, err, "deploy key creation requires write:repository scope")
 	require.NotZero(t, key.ID, "deploy key id must be returned")
 
@@ -127,25 +140,27 @@ func TestE2EGitSyncDeployKeyLifecycle(t *testing.T) {
 }
 
 // e2eGenerateKeyPair creates a fresh Ed25519 key pair and returns
-// (publicKeyOpenSSH, privateKeyPEM, error).
+// (publicKeyOpenSSH, privateKeyPEM, error). It uses the same Go crypto path as
+// the production DeployKeyIssuer (golang.org/x/crypto/ssh) so the generated
+// OpenSSH PEM is byte-compatible with what the hub receives — and avoids the
+// Windows ssh-keygen/MinGW-ssh key-loading quirk that breaks the harness.
 func e2eGenerateKeyPair(t *testing.T) (string, string, error) {
 	t.Helper()
-	base := t.TempDir()
-	keyFile := filepath.Join(base, "id_ed25519")
-	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", "matea-e2e")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", "", fmt.Errorf("ssh-keygen: %w: %s", err, out)
-	}
-	priv, err := os.ReadFile(keyFile)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return "", "", err
 	}
-	pub, err := os.ReadFile(keyFile + ".pub")
+	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		return "", "", err
 	}
-	return strings.TrimSpace(string(pub)), strings.TrimSpace(string(priv)), nil
+	pubLine := string(ssh.MarshalAuthorizedKey(sshPub))
+	privBlock, err := ssh.MarshalPrivateKey(priv, "matea-e2e")
+	if err != nil {
+		return "", "", err
+	}
+	privPEM := string(pem.EncodeToMemory(privBlock))
+	return strings.TrimSpace(pubLine), privPEM, nil
 }
 
 // TestE2EGitSyncFullCycle exercises the complete Matea-side git_sync flow
@@ -232,7 +247,20 @@ func e2eCloneWithKey(t *testing.T, cloneURL, privateKey, dir string) {
 	keyFile := filepath.Join(t.TempDir(), "task_key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(privateKey), 0o600))
 
-	sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", keyFile)
+	// Windows portability: t.TempDir() yields a Windows path. ssh on Windows
+	// cannot load a deploy key from a backslash -i path ("error in libcrypto:
+	// unsupported"), which makes the clone hang; and filepath.ToSlash alone
+	// yields "C:/..." which ssh parses as host "C:". Convert to the MSYS
+	// POSIX form "/c/..." that Git-bash's ssh accepts, so the deploy key
+	// loads and the SSH push succeeds.
+	posixKey := filepath.ToSlash(keyFile)
+	if len(posixKey) >= 2 && posixKey[1] == ':' {
+		posixKey = "/" + strings.ToLower(string(posixKey[0])) + posixKey[2:]
+	}
+	sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes", posixKey)
+	// Propagate to every subsequent git op in this test (commit/push) so they
+	// also authenticate with the deploy key and trust the host key.
+	t.Setenv("GIT_SSH_COMMAND", sshCmd)
 	cmd := exec.Command("git", "clone", "-q", cloneURL, dir)
 	cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+sshCmd)
 	out, err := cmd.CombinedOutput()

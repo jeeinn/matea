@@ -9,17 +9,17 @@ import (
 
 func TestWorkspaceTransportConstants(t *testing.T) {
 	assert.Equal(t, "git_sync", WorkspaceTransportGitSync)
-	assert.Equal(t, "mcp", WorkspaceTransportMCP)
-	// A5: shared_path is gone — no constant may exist for it. Pin the literal
-	// here so a stray re-introduction fails this test.
+	// A5: shared_path is gone; C1: the mcp transport constant is gone too
+	// (returns in Phase 3.9). Pin the literals so a stray re-introduction of
+	// either fails this test.
 	assert.NotContains(t, ValidWorkspaceTransports(), "shared_path")
+	assert.NotContains(t, ValidWorkspaceTransports(), "mcp")
 }
 
 func TestValidWorkspaceTransports(t *testing.T) {
 	valid := ValidWorkspaceTransports()
 	assert.Contains(t, valid, WorkspaceTransportGitSync)
-	assert.Contains(t, valid, WorkspaceTransportMCP)
-	assert.Len(t, valid, 2)
+	assert.Len(t, valid, 1, "git_sync is the only workspace transport (C1)")
 }
 
 func TestIsWorkspaceTransportValid(t *testing.T) {
@@ -30,7 +30,7 @@ func TestIsWorkspaceTransportValid(t *testing.T) {
 		{"", true},             // empty defaults to git_sync
 		{"git_sync", true},     // the only hub write transport (A5+)
 		{"shared_path", false}, // removed in A5 — stale configs must fail loud
-		{"mcp", false},         // Phase 3 only
+		{"mcp", false},         // removed in C1 — Phase 3.9 only
 		{"unknown", false},     // unknown value rejected
 		{"GIT_SYNC", false},    // case-sensitive
 		{"SHARED_PATH", false},
@@ -92,7 +92,7 @@ func TestValidateBackendWorkspaceTransport(t *testing.T) {
 			errContains: "removed in A5",
 		},
 		{
-			name:      "mcp is rejected in Phase 2",
+			name:      "mcp is rejected (constant removed in C1, returns in Phase 3.9)",
 			cfg:       BackendConfig{Type: BackendTypeHubOpenCode, WorkspaceTransport: "mcp"},
 			expectErr: true,
 		},

@@ -271,21 +271,22 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
   **对抗强化**：修复 `runViaHub` StateDone 路径在 `Approve` 失败时仍把 `hub_handles` 标为 Done 的缺陷——现在仅当四要素校验全部通过才标 Done，任何越权/无效草稿（错分支、缺 footer、base 漂移、diff 违规、pushed nothing）都标 **Failed** 并回收 key。新增单测：`TestRunViaHubGitSyncWrongBranchRejected`（hub 自择分支 → fetch 不到 mandated draft → Failed）、`TestRunViaHubGitSyncMissingFooterRejected`（mandated 分支存在但提交无 footer → Failed）、既有 `TestRunViaHubGitSyncWritePathHubPushedNothing`/`TestRunViaHubGitSyncDiffViolationAudited` 补 handle 状态断言。base 漂移已在 `TestGitSyncApproveContinuationRejectsBaseTipStart`/`TestGitSyncApproveRejectsBaseDrift` 覆盖，行为仍是 fail+不开 PR+不自动 rebase。**真实 E2E harness**：新增 `internal/agents/gitsync_e2e_test.go`，环境变量门控（`MATEA_E2E_GITEA_URL`/`MATEA_E2E_GITEA_TOKEN`/`MATEA_E2E_GITEA_SSH_PORT`），未设置时 SKIP 不影响 CI：
   - `TestE2EGitSyncDeployKeyLifecycle`：复现 A0.2 结论，`write:repository` token 可签发 rw deploy key，key 可 SSH clone/push，DELETE 后立即失效；
   - `TestE2EGitSyncFullCycle`：真实 Gitea 上完整 Matea-side git_sync（Prepare→模拟 hub push→Approve 开 PR→Cleanup 回收 key）。
-  当前本地 Gitea/OpenCode/Hermes 服务未在预期端口（3000/4096/9090）响应，真实 E2E 腿待服务启动后运行；harness 已就绪。全量 17 包 PASS。
+  **真实 E2E 验证通过（2026-08-18，`data/e2e/gitsync-e2e-report.html`）**：本地 Docker Gitea 1.22.6 + OpenCode + mock_llm 全链路——webhook assign 触发 → Prepare 签发 task-scoped key → hub SSH clone/commit(footer)/push `matea/hub-6` → 三要素 Approve 通过开 PR #10 → deploy key 计数归零（用后即焚成立）。OpenCode bash 不落盘的 rig 怪象用 `mock_llm.py --mode local` 绕过（mock 真实子进程跑 git 步骤，OpenCode 仅作消息载体；Matea 侧校验仍对真实远端分支权威执行）。
+  全量 17 包 PASS。
 
 ### 阶段 C：清理、文档与发布
 
-- [ ] **C1 删除 `mcp` transport（仅 workspace transport 用途）**
-  保留 `internal/agent/tools_mcp.go` 的 agent MCP tools 能力，手术式删除；并收敛 `IsWorkspaceTransportValid`/`ValidWorkspaceTransports` 的不一致（前者已拒 `mcp`、后者仍列它）。
+- [x] **C1 删除 `mcp` transport（仅 workspace transport 用途）** ✅（2026-08-19）
+  保留 `internal/agent/tools_mcp.go` 的 agent MCP tools 能力（与 workspace transport 无关），手术式删除：`WorkspaceTransportMCP` 常量移除；`ValidWorkspaceTransports()` 收敛为仅 `[git_sync]`（与早已拒绝 mcp 的 `IsWorkspaceTransportValid` 消除不一致——此前前者仍列 mcp，WebUI/校验两侧语义分裂）；config 报错文案更新为 "removed in C1（Phase 3.9 回归）"。测试 pin：`shared_path`/`mcp` 均不得在 valid 列表、`mcp` 配置仍 fail loud、`ValidWorkspaceTransports` len=1。全量 17 包 PASS。
 
-- [ ] **C2 文档收尾**
-  `HUB-BACKENDS.md`（信任模型/权限模板/接入契约，明确「Hub 持凭据自 push、Matea 审批开 PR」）；修 CHANGELOG（「Phase 2 未合入 master」已过时，PR #28 已合）；`remote-hub-deployment-flow.md` 标注 git_sync 为当前唯一 transport、mcp/shared_path 已删。
+- [x] **C2 文档收尾** ✅（2026-08-19）
+  新建 **`docs/HUB-BACKENDS.md`**：git_sync 信任模型（Hub 持凭据自 push、Matea 审批开 PR，admin/agent token 永不出 Matea）、四要素校验表、凭据最小权限模板（`write:repository` 即可）、Hub 接入契约（GitSyncInfo 字段 + 6 条必须项 + trailer）、两后端配置样例、失败语义速查、性能预算。修 **CHANGELOG**（「Phase 2 未合入 master」已过时 → 标注 PR #28 已合；新增 git_sync 阶段 A–C 条目）。`remote-hub-deployment-flow.md` 顶部加实现状态横幅：git_sync 当前唯一 transport、shared_path(A5)/mcp(C1) 已删，全文档三处标注。
 
-- [ ] **C3 SQLite 迁移收尾校验**
-  确认 `hub_handles` 加列迁移在 A2 已落地；此处仅补旧 `config.yaml` 迁移示例（删 transport 后）。
+- [x] **C3 SQLite 迁移收尾校验** ✅（2026-08-19）
+  源码核验 `hub_handles` A2 列（draft_branch/base_head/deploy_key_id）+ B2.3 anchor_head + B2.1 agent_sessions(last_head/memory) 全部双轨落地（CREATE TABLE 新库 + `additionalMigrations` 幂等 ALTER 老库，duplicate/no-such-table 容忍）。补旧 config.yaml 迁移示例：`config.full-example.yaml` backends 段重写——旧 `shared_path`/`mcp` 行直接删除即可（git_sync 为默认）、废弃字段 `workspace_mode`/`allow_fallback_builtin` 建议删除说明、补 hermes-local 样例与 B3 `allowed_paths`/`denied_paths` 注释；YAML 解析验证通过。
 
-- [ ] **C4 性能预算**
-  `Approve` 往返延迟 SLO + 大仓/多文件场景压测用例。
+- [x] **C4 性能预算** ✅（2026-08-19）
+  `internal/agents/gitsync_perf_test.go`：**CI 内回归** `TestGitSyncApproveLargeRepoStress`（fast-import 合成 300-commit 仓库 + 5 commit/150 路径草稿 → Approve 全过 + fetch 证据范围完整，无计时断言防 flake）；**opt-in benchmark** `BenchmarkGitSyncApprove` 三档（50/1k/5k base commits）。实测（Windows 11，file://）：1.4–1.8s/op，历史长度本地不敏感、固定进程/协议开销为主。**SLO 落档 HUB-BACKENDS.md §七**：Approve Matea 侧 ≤2s @5k commits、≤1.5s @1k；超预算既定缓解 `--filter=blob:none`（merge-base/log/diff --name-only 无需 blob，传输降一个数量级）。修复 fixture bug：fast-import 流内每个 commit 都带 `from` 会反复重置父提交（draft 链断成单提交）——仅首 commit 携带。
 
 - [ ] **C5 阶段 C 验收 + 发版**
   配置仅 `git_sync` 一种 transport；全量测试 PASS；文档齐备；发版（新 tag）。

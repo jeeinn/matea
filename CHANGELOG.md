@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Phase 2 Hub 后端接入（branch `phase2/hub-ecosystem`，未合入 master）：
+git_sync 写传输改造（branch `phase2.6/git-sync`，三阶段计划 v3.1）：
+
+### Added
+- **git_sync 信任模型**：Hub 持任务级凭据自 clone/commit/push 草稿分支 `matea/hub-{taskID}`，Matea 只 fetch + 校验 + 开 PR + 回收凭据；admin/agent token 永不离开 Matea（docs/HUB-BACKENDS.md）
+- **任务级 deploy key 生命周期**：Prepare 签发一次性 ed25519 rw key（`write:repository` scope 即可，无需 site admin）→ 终态内联回收 → 10min 周期 sweep 兜底孤儿 key（审计 `git_sync_key_swept`）
+- **Approve 四要素校验**：分支独占 / 起点锚定 / 必备 footer（`anchor..head` 每提交）/ diff 白名单（内置 deny `.env*`/密钥材料，deny 绝对优先，违规落 `operation_logs`）；base 漂移默认 fail + 告警，不自动 rebase
+- **session 续作契约（git 原生）**：后续任务从 session `LastHead` 起新草稿分支（anchor 下发 + 校验锚点化 + handle 行持久化 anchor），滚动会话摘要注入 hub prompt
+
+### Removed
+- **`shared_path` workspace transport**（A5）：Matea 侧凭据会落到 hub 可见文件系统，信任模型过宽
+- **`mcp` workspace transport 常量**（C1）：L2 全隔离档随 Phase 3.9 回归（依赖 MCP Server）
+
+Phase 2 Hub 后端接入（branch `phase2/hub-ecosystem`，**已合入 master，PR #28**）：
 
 ### Added
 - **Hub 后端抽象**：`HubBackend` 异步 Submit/Poll/Cancel 契约 + `init()` 注册制绕开包循环依赖；`hub-hermes`（官方 Runs API）与 `hub-opencode`（OpenCode sidecar HTTP）两类后端落地
-- **大脑可插拔骨架（D10/D11）**：统一 `Harness` 接口 + `harnessRouter` 注册表；`ToolBox` 三层工具暴露策略（沙箱类 / Gitea 读侧 / 网关级 skill）；配置新增 `workspace_transport` 语义位（`shared_path`）
+- **大脑可插拔骨架（D10/D11）**：统一 `Harness` 接口 + `harnessRouter` 注册表；`ToolBox` 三层工具暴露策略（沙箱类 / Gitea 读侧 / 网关级 skill）；配置新增 `workspace_transport` 语义位（初值 `shared_path`；后于 phase2.6/git-sync 收敛为仅 `git_sync`，见上）
 - **hub-hermes 接线（2.1.x）**：analyze / review / reply 经 Hermes 跑；repo/issue 级 `memories` 表实现跨任务记忆共享（D3）
 - **hub-opencode 三刀（2.2.1–2.2.3）**：analyze（默认分支 shallow clone）/ review（clone PR head）/ reply（最小空 workspace，决策 B）经 OpenCode 跑；失败降级 single-shot LLM
 - **deliver 出站扇出（2.3.3）**：`internal/deliver` 包把 hub 返回的 `DeliverRequest` 以 JSON POST 到 `deliver.webhook_url`（仅出站；5xx/网络错误按 `max_retries` 退避重试，4xx 不重试；空 URL = no-op）

@@ -327,8 +327,8 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 
 // ValidateBackendWorkspaceTransport checks that a backend's workspace_transport
 // is compatible with its type. Since A5 only git_sync is accepted; the removed
-// shared_path gets an explicit migration error, and mcp is rejected until
-// Phase 3.
+// shared_path gets an explicit migration error, and mcp (removed in C1) is
+// rejected until Phase 3.9.
 //
 // Returns nil on success, error describing the incompatibility otherwise.
 func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
