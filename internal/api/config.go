@@ -154,6 +154,24 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C-6: when Gitea is being configured and no webhook_secret exists
+	// anywhere (not in this payload, not in current config), auto-generate
+	// one — an empty secret silently disables webhook signature verification
+	// in the ingress handler.
+	_, touchesGiteaURL := entries["gitea.url"]
+	_, touchesGiteaToken := entries["gitea.admin_token"]
+	if touchesGiteaURL || touchesGiteaToken {
+		if _, hasSecret := entries["gitea.webhook_secret"]; !hasSecret &&
+			h.cfgManager.Get().Gitea.WebhookSecret == "" {
+			secret, err := config.GenerateWebhookSecret()
+			if err != nil {
+				writeError(w, 500, "生成 webhook_secret 失败: "+err.Error())
+				return
+			}
+			entries["gitea.webhook_secret"] = secret
+		}
+	}
+
 	// Validate all keys first
 	for key := range entries {
 		if !config.IsConfigKey(key) {
@@ -265,6 +283,11 @@ func (h *Handler) testGiteaConfig(w http.ResponseWriter, r *http.Request) {
 
 	url := strings.TrimSpace(firstNonEmpty(payload["gitea.url"], h.stringConfigValue("gitea.url")))
 	token := strings.TrimSpace(firstNonEmpty(payload["gitea.admin_token"], h.stringConfigValue("gitea.admin_token")))
+	// C-17: the admin UI round-trips masked secrets — resolve the placeholder
+	// against the saved (raw) value before testing.
+	if token == configMaskedPlaceholder {
+		token = h.stringConfigValue("gitea.admin_token")
+	}
 
 	client := gitea.NewClient(url, token)
 	result, err := client.TestConnection()
@@ -386,7 +409,9 @@ func (h *Handler) resolveProvidersForTest(payload map[string]interface{}) map[st
 	if raw, ok := payload["llm.providers"]; ok {
 		providers, err := config.ParseProvidersFromInterface(raw)
 		if err == nil && len(providers) > 0 {
-			return providers
+			// C-17: restore masked api_keys from the active config so a test
+			// launched from the masked admin form hits the real credential.
+			return h.unmaskTestProviders(providers)
 		}
 	}
 
@@ -401,6 +426,23 @@ func (h *Handler) resolveProvidersForTest(payload map[string]interface{}) map[st
 		}
 	}
 	return nil
+}
+
+// unmaskTestProviders swaps placeholder api_keys for the active config's real
+// keys (same rule as restoreMaskedProviderKeys, on parsed providers).
+func (h *Handler) unmaskTestProviders(providers map[string]config.ProviderConfig) map[string]config.ProviderConfig {
+	var current map[string]config.ProviderConfig
+	for name, pc := range providers {
+		if pc.APIKey != configMaskedPlaceholder {
+			continue
+		}
+		if current == nil && h.cfgManager != nil {
+			current = h.cfgManager.Get().LLM.Providers
+		}
+		pc.APIKey = current[name].APIKey
+		providers[name] = pc
+	}
+	return providers
 }
 
 func firstNonEmpty(values ...string) string {

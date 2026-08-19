@@ -404,3 +404,67 @@ func TestMaskSecret(t *testing.T) {
 	assert.Equal(t, "****cdef", maskSecret("abcdef"))
 	assert.True(t, strings.HasPrefix(maskSecret("abcdef"), "****"))
 }
+
+// --- PUT /api/config: auto webhook secret (C-6) + masked round-trip (C-17) ---
+
+func TestUpdateConfigAutoGeneratesWebhookSecret(t *testing.T) {
+	db := openTestDB(t)
+	cfg := completeConfig() // gitea set, WebhookSecret empty
+	mgr := config.NewConfigManager(cfg)
+	mgr.SetStore(db)
+	h := NewHandler(db, nil, cfg, nil, mgr, nil)
+
+	body, _ := json.Marshal(map[string]string{
+		"gitea.url":         "http://gitea2.local",
+		"gitea.admin_token": "brand-new-token",
+	})
+	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.updateConfig(w, req)
+	require.Equal(t, 200, w.Code, w.Body.String())
+
+	active := mgr.Get()
+	assert.Equal(t, "brand-new-token", active.Gitea.AdminToken)
+	require.Len(t, active.Gitea.WebhookSecret, 64, "webhook secret must be auto-generated when Gitea is configured without one")
+
+	// Response is masked (C-17).
+	var resp map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, configMaskedPlaceholder, resp["gitea.admin_token"])
+	assert.Equal(t, configMaskedPlaceholder, resp["gitea.webhook_secret"])
+
+	// Audit row written with masked values (C-16).
+	logs, err := db.ListOperationLogs(10, 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, logs)
+	assert.Equal(t, "config_update", logs[0].Action)
+	assert.NotContains(t, logs[0].Detail, "brand-new-token")
+	assert.NotContains(t, logs[0].Detail, active.Gitea.WebhookSecret)
+}
+
+func TestUpdateConfigMaskedRoundTripKeepsSecrets(t *testing.T) {
+	db := openTestDB(t)
+	cfg := completeConfig()
+	cfg.Gitea.WebhookSecret = "existing-secret"
+	mgr := config.NewConfigManager(cfg)
+	mgr.SetStore(db)
+	h := NewHandler(db, nil, cfg, nil, mgr, nil)
+
+	// Submit the masked form: placeholders + a changed URL.
+	body, _ := json.Marshal(map[string]string{
+		"gitea.url":            "http://gitea3.local",
+		"gitea.admin_token":    configMaskedPlaceholder,
+		"gitea.webhook_secret": configMaskedPlaceholder,
+		"llm.providers":        `{"deepseek":{"base_url":"https://api.deepseek.com/v1","api_key":"` + configMaskedPlaceholder + `"}}`,
+	})
+	req := httptest.NewRequest("PUT", "/api/config", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.updateConfig(w, req)
+	require.Equal(t, 200, w.Code, w.Body.String())
+
+	active := mgr.Get()
+	assert.Equal(t, "http://gitea3.local", active.Gitea.URL, "non-masked field updated")
+	assert.Equal(t, "tok", active.Gitea.AdminToken, "masked token kept")
+	assert.Equal(t, "existing-secret", active.Gitea.WebhookSecret, "masked secret kept (no regeneration)")
+	assert.Equal(t, "sk-x", active.LLM.Providers["deepseek"].APIKey, "masked provider key restored")
+}

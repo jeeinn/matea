@@ -1,12 +1,13 @@
 <template>
   <div class="dashboard">
-    <!-- 新用户引导 -->
-    <el-card v-if="agents.length === 0" class="welcome-card" shadow="hover">
+    <!-- 新用户引导 (C-10): shown until the first Agent exists, or whenever
+         Gitea/LLM 配置仍不完整 -->
+    <el-card v-if="agents.length === 0 || setupStore.setupRequired" class="welcome-card" shadow="hover">
       <div class="welcome-content">
         <h2>👋 欢迎使用 Matea</h2>
         <p class="welcome-desc">按照以下步骤快速开始使用</p>
         <el-steps :active="welcomeStep" direction="vertical" class="welcome-steps">
-          <el-step title="配置 Gitea 连接" description="在系统配置中填写 Gitea 地址和管理员 Token">
+          <el-step title="配置 Gitea 连接" description="在系统配置中填写 Gitea 地址和管理员 Token；Webhook Secret 已在初始化时自动生成，可在系统配置中查看">
             <template #icon>
               <el-icon><Setting /></el-icon>
             </template>
@@ -140,9 +141,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
+import { useSetupStore } from '../stores/setup'
 import { User, List, Clock, CircleCheck, Setting, Promotion } from '@element-plus/icons-vue'
 
 const router = useRouter()
+const setupStore = useSetupStore()
 
 const stats = ref({})
 const agents = ref([])
@@ -160,6 +163,9 @@ const successRate = computed(() => {
 })
 
 const welcomeStep = computed(() => {
+  // C-10: reflect real progress — Gitea/LLM unfinished → step 0; configured
+  // but no Agent yet → step 1; otherwise the guide is effectively done.
+  if (setupStore.setupRequired) return 0
   if (agents.value.length === 0) return 1
   return 3
 })
