@@ -72,63 +72,6 @@ func setupSessionGitRepo(t *testing.T) (*sandbox.Sandbox, *sandbox.Git, string) 
 	return s, git, bareDir
 }
 
-func TestSyncSessionWorkspaceKeepsDirtyPRBranch(t *testing.T) {
-	s, git, _ := setupSessionGitRepo(t)
-
-	require.NoError(t, git.Checkout("ai/dev/issue-2").Error)
-	require.NoError(t, s.WriteFile("internal/config/schema.go", []byte("package config\n// dirty\n")))
-
-	task := &store.Task{BaseBranch: "ai/dev/issue-2"}
-	audit := testAuditLogger(t)
-
-	err := syncSessionWorkspace(s, git, audit, task, "")
-	require.NoError(t, err)
-
-	branch, err := git.GetCurrentBranch()
-	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", branch)
-	assert.True(t, git.HasChanges(), "uncommitted PR work should be preserved")
-}
-
-func TestSyncSessionWorkspaceDoesNotCheckoutDefaultWhenNoWorkBranch(t *testing.T) {
-	s, git, _ := setupSessionGitRepo(t)
-
-	require.NoError(t, git.Checkout("ai/dev/issue-2").Error)
-	require.NoError(t, s.WriteFile("internal/config/schema.go", []byte("package config\n// dirty\n")))
-
-	task := &store.Task{}
-	audit := testAuditLogger(t)
-
-	err := syncSessionWorkspace(s, git, audit, task, "")
-	require.NoError(t, err)
-
-	branch, err := git.GetCurrentBranch()
-	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", branch, "must not fall back to master checkout")
-	assert.True(t, git.HasChanges())
-}
-
-func TestSyncSessionWorkspaceStashWhenSwitchingBranch(t *testing.T) {
-	s, git, _ := setupSessionGitRepo(t)
-
-	require.NoError(t, git.Checkout("master").Error)
-	require.NoError(t, s.WriteFile("README.md", []byte("wip on master")))
-
-	task := &store.Task{BaseBranch: "ai/dev/issue-2"}
-	audit := testAuditLogger(t)
-
-	err := syncSessionWorkspace(s, git, audit, task, "")
-	require.NoError(t, err)
-
-	branch, err := git.GetCurrentBranch()
-	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", branch)
-
-	content, err := s.ReadFile("README.md")
-	require.NoError(t, err)
-	assert.Equal(t, "wip on master", string(content))
-}
-
 func TestCheckoutWorkBranchSkipsWhenAlreadyOnBranch(t *testing.T) {
 	s, git, _ := setupSessionGitRepo(t)
 

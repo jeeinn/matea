@@ -87,6 +87,7 @@ type RunnerFactory struct {
 	mcpRegistry      *mcp.Registry              // MCP server registry (nil = no MCP)
 	gatewayDir       string                     // gateway root directory for SKILL.md scanning
 	deliverClient    *deliver.Client            // outbound event fan-out (task 2.3.3); nil = disabled
+	deployKeyIssuer  DeployKeyIssuer            // git_sync deploy key issuer; nil until task A6 wiring (tests inject fakes)
 }
 
 // SetDeliverClient injects the outbound deliver client used to fan out
@@ -95,6 +96,57 @@ type RunnerFactory struct {
 // the executor re-injects it whenever the runner factory is rebuilt.
 func (f *RunnerFactory) SetDeliverClient(c *deliver.Client) {
 	f.deliverClient = c
+}
+
+// SetDeployKeyIssuer injects the git_sync deploy key issuer (task A6 wires the
+// Gitea implementation at startup; tests inject fakes). A nil issuer makes
+// git_sync Prepare fail loudly — since A5 git_sync is the only hub write
+// transport, so a missing issuer means hub write tasks cannot run at all.
+func (f *RunnerFactory) SetDeployKeyIssuer(issuer DeployKeyIssuer) {
+	f.deployKeyIssuer = issuer
+}
+
+// gitSyncTransportFor returns the git_sync WorkspaceTransport when the backend
+// is configured with workspace_transport=git_sync, or nil otherwise. The
+// transport struct is cheap to build per call and always reads the current
+// issuer, so hot-injection via SetDeployKeyIssuer takes effect immediately.
+func (f *RunnerFactory) gitSyncTransportFor(backend HubBackend) WorkspaceTransport {
+	if backend == nil {
+		return nil
+	}
+	cfg, ok := f.backends.Backends[backend.Name()]
+	if !ok || cfg.WorkspaceTransport != config.WorkspaceTransportGitSync {
+		return nil
+	}
+	return NewGitSyncTransport(f.giteaFactory, f.deployKeyIssuer, f.sandboxCfg.BaseDir,
+		DiffPolicy{Allowed: cfg.AllowedPaths, Denied: cfg.DeniedPaths})
+}
+
+// resolveGitSyncWriteHub returns the hub backend for a write task when the
+// agent's backend is a configured hub (hub-opencode A4 or hub-hermes B1) with
+// workspace_transport=git_sync. Both hub types share runViaHub's
+// Prepare → Submit → Approve write channel; the only difference is how the
+// hub itself executes (OpenCode sidecar session vs. Hermes run), which is
+// encapsulated behind the HubBackend Submit/Poll contract.
+func (f *RunnerFactory) resolveGitSyncWriteHub(agent *store.Agent) (HubBackend, bool) {
+	if hb, ok := f.ResolveHubOpenCode(agent); ok && f.gitSyncTransportFor(hb) != nil {
+		return hb, true
+	}
+	if hb, ok := f.ResolveHubExecution(agent); ok && f.gitSyncTransportFor(hb) != nil {
+		return hb, true
+	}
+	return nil, false
+}
+
+// isWriteTaskType reports whether the task type produces code changes (and is
+// therefore eligible for the git_sync write path under a hub backend).
+func isWriteTaskType(taskType string) bool {
+	switch taskType {
+	case "solve_issue", "solve_comment", "fix_bug":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewRunnerFactory creates a new RunnerFactory from agent defaults and loop config.

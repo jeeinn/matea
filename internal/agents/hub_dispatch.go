@@ -25,11 +25,11 @@ import (
 // "hub_opencode" would otherwise burn the user's own LLM quota while they
 // believe a hub is in use.
 //
-// Phase 1 scope: runners only *validate* through this seam — write tasks
-// continue through the CodingBackend path, non-write tasks keep their direct
-// LLM calls (Analyze/Review are forced builtin by design). Actual
-// Submit/Poll dispatch through HubBackend, with Handle persistence and
-// executor re-attach, is Phase 2.
+// Dispatch status (post-B1/A5): runners still gate through this seam first.
+// Non-write tasks on hub backends dispatch through HubBackend Submit/Poll with
+// Handle persistence and executor re-attach (Phase 2, runViaHub); write tasks
+// on git_sync-configured hub backends take runViaHub's write channel (A4/B1);
+// builtin write tasks keep the in-process CodingBackend path.
 
 // ResolveHubBackend maps an agent's backend selection to a HubBackend.
 // Resolution mirrors ResolveCodingBackend (normalization + default), then

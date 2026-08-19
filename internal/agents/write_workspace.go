@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 
 	agentpkg "github.com/jeeinn/matea/internal/agent"
@@ -26,19 +24,22 @@ type WriteWorkspaceContext struct {
 	Owner         string
 	Repo          string
 	RepoInfo      *gitea.RepoInfo
-	UseSession    bool // true if workspace is session-scoped (persists, no auto-cleanup)
+	UseSession    bool // true if the task belongs to a session (records branch+head on finalize)
 	SessionBranch string
 }
 
-// prepareWriteWorkspace sets up the sandbox, clones or syncs the repository, and
+// prepareWriteWorkspace sets up the sandbox, clones the repository, and
 // prepares the working branch for a write task (dev / bugfix).
 //
-// This is a pure extraction of the workspace-preparation phase previously inlined
-// in runWriteTask; behavior is unchanged. On error the non-session sandbox is
-// cleaned up here (mirroring the original defer). On success the caller owns the
-// sandbox lifecycle: if !wwc.UseSession, the caller must `defer wwc.Sandbox.Cleanup()`.
-// Session workspaces use NewWithPath (Persistent=true): Cleanup is a no-op even if
-// sandbox.mode is temp; reclaim is owned by SessionLifecycle.
+// Session continuation (B2.2) is git-native: every write task gets a fresh
+// task-level sandbox and clone; a session task resumes by anchoring its
+// working branch on the session's recorded LastHead (the head SHA of the
+// previous task's pushed draft branch) instead of reusing an on-disk session
+// workspace. The deprecated WorkspacePath column is no longer consulted here.
+//
+// On error the sandbox is cleaned up here (mirroring the original defer). On
+// success the caller owns the sandbox lifecycle and must
+// `defer wwc.Sandbox.Cleanup()` — all write workspaces are task-level now.
 func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.Agent, factory *RunnerFactory, taskSubType string) (*WriteWorkspaceContext, error) {
 	_ = ctx // reserved for future use (e.g. cancellable clone)
 
@@ -68,25 +69,22 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	}
 	redactedCloneURL := gitea.RedactCloneURL(cloneURL)
 
-	// Determine workspace strategy: session-level or task-level
-	var sb *sandbox.Sandbox
-	useSessionWorkspace := false
-	var sessionBranch string
-
+	// Session continuation state (B2.2): the git-native anchor, not an on-disk
+	// workspace. LastHead (recorded at the previous task's successful push) is
+	// the authoritative start point; a session that only has Branch (pre-B2.2
+	// rows) falls back to the remote branch head via prepareExistingBranch.
+	useSession := false
+	var sessionBranch, sessionLastHead string
 	if task.SessionID != "" && factory.db != nil {
-		// Look up session for workspace reuse
-		if session, err := factory.db.GetSession(task.SessionID); err == nil && session.WorkspacePath != "" {
-			useSessionWorkspace = true
+		if session, err := factory.db.GetSession(task.SessionID); err == nil {
+			useSession = true
 			sessionBranch = session.Branch
-			sb = sandbox.NewWithPath(factory.sandboxCfg, task.ID, session.WorkspacePath)
-			log.Printf("[INFO] Using session workspace: %s", session.WorkspacePath)
+			sessionLastHead = session.LastHead
 		}
 	}
+	isContinuation := sessionLastHead != "" || sessionBranch != ""
 
-	if sb == nil {
-		sb = sandbox.New(factory.sandboxCfg, task.ID)
-	}
-
+	sb := sandbox.New(factory.sandboxCfg, task.ID)
 	if err := sb.Setup(); err != nil {
 		return nil, fmt.Errorf("setup sandbox: %w", err)
 	}
@@ -96,13 +94,11 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 		Owner:         owner,
 		Repo:          repo,
 		RepoInfo:      repoInfo,
-		UseSession:    useSessionWorkspace,
+		UseSession:    useSession,
 		SessionBranch: sessionBranch,
 	}
-	// cleanupOnErr mirrors the original `defer sb.Cleanup()` for non-session
-	// workspaces when runWriteTask returned an error during preparation.
 	cleanupOnErr := func() {
-		if !useSessionWorkspace && wwc.Sandbox != nil {
+		if wwc.Sandbox != nil {
 			wwc.Sandbox.Cleanup()
 		}
 	}
@@ -111,44 +107,26 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	audit := sandbox.NewAuditLogger(factory.db, task.ID, agent.ID)
 	wwc.Audit = audit
 
-	// Clone or fetch repository
 	git := sandbox.NewGit(sb)
 	wwc.Git = git
 
-	if useSessionWorkspace && sb.WorkDir != "" {
-		// Check if the session workspace already has a git repo
-		gitDir := filepath.Join(sb.WorkDir, ".git")
-		if _, statErr := os.Stat(gitDir); statErr == nil {
-			log.Printf("[INFO] Session workspace has existing repo, syncing")
-			if err := syncSessionWorkspace(sb, git, audit, task, sessionBranch); err != nil {
-				cleanupOnErr()
-				return nil, err
-			}
-		} else {
-			// New session workspace — clone
-			cloneResult := git.Clone(cloneURL)
-			audit.LogCommand("git", []string{"clone", redactedCloneURL}, cloneResult)
-			if cloneResult.Error != nil {
-				errMsg := cloneResult.Stderr
-				if errMsg == "" {
-					errMsg = cloneResult.Error.Error()
-				}
-				cleanupOnErr()
-				return nil, fmt.Errorf("clone repo: %s", errMsg)
-			}
-		}
+	// Clone. Continuation tasks need full history: the LastHead anchor lives
+	// on the session's draft branch, which a shallow clone of the default
+	// branch cannot reach.
+	var cloneResult *sandbox.Result
+	if isContinuation {
+		cloneResult = git.CloneFull(cloneURL)
 	} else {
-		// Standard task-level clone
-		cloneResult := git.Clone(cloneURL)
-		audit.LogCommand("git", []string{"clone", redactedCloneURL}, cloneResult)
-		if cloneResult.Error != nil {
-			errMsg := cloneResult.Stderr
-			if errMsg == "" {
-				errMsg = cloneResult.Error.Error()
-			}
-			cleanupOnErr()
-			return nil, fmt.Errorf("clone repo: %s", errMsg)
+		cloneResult = git.Clone(cloneURL)
+	}
+	audit.LogCommand("git", []string{"clone", redactedCloneURL}, cloneResult)
+	if cloneResult.Error != nil {
+		errMsg := cloneResult.Stderr
+		if errMsg == "" {
+			errMsg = cloneResult.Error.Error()
 		}
+		cleanupOnErr()
+		return nil, fmt.Errorf("clone repo: %s", errMsg)
 	}
 
 	// Preset git identity so the gateway's commit (during finalize) succeeds on
@@ -161,13 +139,34 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	// see stranded work in logs even when the task later fails to push.
 	warnLocalOnlyBranch(git, branchName, task.ID)
 
-	if isExistingBranch {
+	switch {
+	case isExistingBranch && sessionLastHead != "" && task.BaseBranch == "":
+		// Continuation with a recorded head (B2.2): branch exactly from the
+		// session's LastHead. It is reachable because the previous task pushed
+		// the draft branch and we cloned full history. A missing anchor means
+		// the remote branch was deleted/rewound meanwhile — fail loud so the
+		// operator can archive the session instead of silently restarting work.
+		anchorResult := sb.Execute("git", "checkout", "-b", branchName, sessionLastHead)
+		audit.LogCommand("git", []string{"checkout", "-b", branchName, sessionLastHead}, anchorResult)
+		if anchorResult.Error != nil {
+			errMsg := anchorResult.Stderr
+			if errMsg == "" {
+				errMsg = anchorResult.Error.Error()
+			}
+			cleanupOnErr()
+			return nil, fmt.Errorf("session continuation anchor %s not found (draft branch deleted or rewound on remote?): %s",
+				sessionLastHead, errMsg)
+		}
+		log.Printf("[INFO] Task %d continues session at %s (branch %s)", task.ID, sessionLastHead[:8], branchName)
+	case isExistingBranch:
+		// solve_comment (PR head) or a legacy session branch without LastHead:
+		// anchor on the remote branch head.
 		if err := prepareExistingBranch(sb, git, audit, branchName); err != nil {
 			cleanupOnErr()
 			return nil, err
 		}
 		log.Printf("[INFO] Checked out existing branch: %s", branchName)
-	} else {
+	default:
 		// Create new branch
 		branchResult := git.CreateBranch(branchName)
 		audit.LogCommand("git", []string{"checkout", "-b", branchName}, branchResult)
@@ -261,9 +260,9 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 				return nil, fmt.Errorf("push %s before opening PR failed: %s", wwc.BranchName, errMsg)
 			}
 			if wwc.UseSession {
-				saveSessionBranch(factory, task, wwc.BranchName)
+				saveSessionProgress(factory, task, wwc.BranchName, git.HeadSHA())
 			}
-			res, err := finalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+			res, err := FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 			if err != nil {
 				// Push may have succeeded, but without a PR the delivery is
 				// incomplete — do NOT report success.
@@ -306,16 +305,17 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 		return nil, fmt.Errorf("push: %s", errMsg)
 	}
 
-	// Update session branch after successful push
+	// Update session continuation state after a successful push (B2.2): the
+	// branch name plus its head SHA become the next task's anchor.
 	if wwc.UseSession {
-		saveSessionBranch(factory, task, branchName)
+		saveSessionProgress(factory, task, branchName, git.HeadSHA())
 	}
 
 	adminClient := factory.giteaFactory.GetAdminGiteaClient()
 	if adminClient == nil {
 		return nil, fmt.Errorf("changes pushed to %s but cannot open PR: admin gitea client unavailable", branchName)
 	}
-	return finalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+	return FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 }
 
 // prepareAnalyzeWorkspace sets up a temporary sandbox with a shallow clone of

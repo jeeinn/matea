@@ -23,7 +23,9 @@ func TestSessionServiceGetOrCreate(t *testing.T) {
 	assert.NotEmpty(t, s1.ID)
 	assert.Equal(t, store.SessionActive, s1.Status)
 	assert.Equal(t, store.RoleCoder, s1.Role)
-	assert.Contains(t, s1.WorkspacePath, s1.ID)
+	// B2.2: no on-disk session workspace is assigned — continuation anchors on
+	// LastHead (git-native), not WorkspacePath.
+	assert.Empty(t, s1.WorkspacePath)
 
 	// Second call reuses
 	s2, err := svc.GetOrCreate("owner/repo", 10, agent.ID, store.RoleCoder)
@@ -43,11 +45,12 @@ func TestSessionServiceGetOrCreateDifferentRoles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, s1.WorkspacePath) // No workspace for analyze
 
-	// Coder session for same issue — different session
+	// Coder session for same issue — different session; no workspace either
+	// since B2.2 (git-native continuation).
 	s2, err := svc.GetOrCreate("owner/repo", 1, agent.ID, store.RoleCoder)
 	require.NoError(t, err)
 	assert.NotEqual(t, s1.ID, s2.ID)
-	assert.NotEmpty(t, s2.WorkspacePath)
+	assert.Empty(t, s2.WorkspacePath)
 }
 
 func TestSessionServiceCompleteTask(t *testing.T) {

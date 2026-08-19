@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -72,6 +73,17 @@ func LoadWithBootstrap(path string) (*LoadResult, error) {
 
 	if err := ValidateAgentLoopConfig(cfg.Agents.Loop); err != nil {
 		return nil, err
+	}
+	// A5: fail loud at startup on removed/unknown workspace transports (a
+	// stale `workspace_transport: shared_path` must surface a migration error
+	// here, not a confusing routing failure at task time).
+	for name, b := range cfg.Agents.Backends.Backends {
+		if err := ValidateBackendWorkspaceTransport(b); err != nil {
+			return nil, fmt.Errorf("agents.backends.%s: %w", name, err)
+		}
+		if err := ValidateBackendDiffPaths(b); err != nil {
+			return nil, fmt.Errorf("agents.backends.%s: %w", name, err)
+		}
 	}
 	return &LoadResult{
 		Config:           &cfg,
@@ -303,25 +315,49 @@ func ApplyBackendDefaults(backends *AgentBackendsConfig) {
 	} else {
 		backends.Backends[BackendNameBuiltin] = BackendConfig{Type: BackendTypeBuiltin}
 	}
-	// Default workspace_transport to shared_path (Phase 2 only implementation).
+	// Default workspace_transport to git_sync (the only hub write transport
+	// since A5; shared_path removed).
 	for name, b := range backends.Backends {
 		if b.WorkspaceTransport == "" {
-			b.WorkspaceTransport = WorkspaceTransportSharedPath
+			b.WorkspaceTransport = WorkspaceTransportGitSync
 			backends.Backends[name] = b
 		}
 	}
 }
 
 // ValidateBackendWorkspaceTransport checks that a backend's workspace_transport
-// is compatible with its type. hub-opencode only supports shared_path (L0/L1);
-// mcp is rejected until Phase 3.
+// is compatible with its type. Since A5 only git_sync is accepted; the removed
+// shared_path gets an explicit migration error, and mcp (removed in C1) is
+// rejected until Phase 3.9.
 //
 // Returns nil on success, error describing the incompatibility otherwise.
 func ValidateBackendWorkspaceTransport(cfg BackendConfig) error {
-	// Phase 2: only shared_path is implemented.
-	if cfg.WorkspaceTransport != "" && cfg.WorkspaceTransport != WorkspaceTransportSharedPath {
-		return fmt.Errorf("backend type %q: workspace_transport %q is not supported in Phase 2 (only %q)",
-			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportSharedPath)
+	if cfg.WorkspaceTransport == "shared_path" {
+		return fmt.Errorf("backend type %q: workspace_transport %q was removed in A5 — use %q (the only hub write transport)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportGitSync)
+	}
+	if cfg.WorkspaceTransport != "" && !IsWorkspaceTransportValid(cfg.WorkspaceTransport) {
+		return fmt.Errorf("backend type %q: workspace_transport %q is not supported (valid: %q)",
+			cfg.Type, cfg.WorkspaceTransport, WorkspaceTransportGitSync)
+	}
+	return nil
+}
+
+// ValidateBackendDiffPaths rejects invalid glob syntax in the B3 diff
+// whitelist (allowed_paths / denied_paths) at startup: an invalid pattern
+// never matches at Approve time (path.Match errors → no match), which would
+// silently disable a deny rule — unacceptable for a security feature.
+// Checked here so the typo fails loud.
+func ValidateBackendDiffPaths(cfg BackendConfig) error {
+	for _, p := range cfg.AllowedPaths {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("backend type %q: allowed_paths entry %q is not a valid glob: %w", cfg.Type, p, err)
+		}
+	}
+	for _, p := range cfg.DeniedPaths {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("backend type %q: denied_paths entry %q is not a valid glob: %w", cfg.Type, p, err)
+		}
 	}
 	return nil
 }

@@ -33,56 +33,6 @@ func resolveBranchPlan(task *store.Task, sessionBranch, taskSubType string, git 
 	return branchName, false
 }
 
-// syncSessionWorkspace resets fetch config and syncs an existing session repo to the work branch.
-// When no work branch is known, it only resets refspecs and leaves the current checkout untouched.
-func syncSessionWorkspace(
-	sb *sandbox.Sandbox,
-	git *sandbox.Git,
-	audit *sandbox.AuditLogger,
-	task *store.Task,
-	sessionBranch string,
-) error {
-	resetResult := git.ResetFetchRefspecs("origin")
-	audit.LogCommand("git", []string{"config", "reset-fetch-refspecs", "origin"}, resetResult)
-
-	workBranch := resolveWorkBranch(task, sessionBranch)
-	if workBranch == "" {
-		log.Printf("[INFO] Session sync: no PR/session branch, keeping current checkout")
-		return nil
-	}
-
-	if git.RemoteBranchExists("origin", workBranch) {
-		fetchResult := git.FetchBranch("origin", workBranch)
-		audit.LogCommand("git", []string{"fetch", "origin", workBranch}, fetchResult)
-		if fetchResult.Error != nil {
-			errMsg := fetchResult.Stderr
-			if errMsg == "" {
-				errMsg = fetchResult.Error.Error()
-			}
-			return fmt.Errorf("git fetch %s: %s", workBranch, errMsg)
-		}
-	} else {
-		log.Printf("[INFO] Branch %s is local-only, skipping remote fetch", workBranch)
-	}
-
-	if err := checkoutWorkBranch(sb, git, audit, workBranch); err != nil {
-		return err
-	}
-
-	if git.RemoteBranchExists("origin", workBranch) {
-		pullResult := sb.Execute("git", "pull", "origin", workBranch)
-		audit.LogCommand("git", []string{"pull", "origin", workBranch}, pullResult)
-		if pullResult.Error != nil {
-			errMsg := pullResult.Stderr
-			if errMsg == "" {
-				errMsg = pullResult.Error.Error()
-			}
-			return fmt.Errorf("git pull %s: %s", workBranch, errMsg)
-		}
-	}
-	return nil
-}
-
 // checkoutWorkBranch switches to branch, stashing local changes when switching away from dirty state.
 func checkoutWorkBranch(sb *sandbox.Sandbox, git *sandbox.Git, audit *sandbox.AuditLogger, branch string) error {
 	current, err := git.GetCurrentBranch()

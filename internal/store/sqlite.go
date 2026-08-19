@@ -184,6 +184,8 @@ func (db *DB) migrate() error {
 			status          TEXT NOT NULL DEFAULT 'active',
 			branch          TEXT NOT NULL DEFAULT '',
 			workspace_path  TEXT NOT NULL DEFAULT '',
+			last_head       TEXT NOT NULL DEFAULT '',
+			memory          TEXT NOT NULL DEFAULT '',
 			last_task_id    INTEGER NOT NULL DEFAULT 0,
 			message_count   INTEGER NOT NULL DEFAULT 0,
 			last_active_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -235,6 +237,10 @@ func (db *DB) migrate() error {
 			remote_id       TEXT NOT NULL,
 			idempotency_key TEXT NOT NULL DEFAULT '',
 			status          TEXT NOT NULL DEFAULT 'running',
+			draft_branch    TEXT NOT NULL DEFAULT '',
+			base_head       TEXT NOT NULL DEFAULT '',
+			anchor_head     TEXT NOT NULL DEFAULT '',
+			deploy_key_id   INTEGER NOT NULL DEFAULT 0,
 			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -276,6 +282,20 @@ func (db *DB) migrate() error {
 		`ALTER TABLE processed_deliveries ADD COLUMN event_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE processed_deliveries ADD COLUMN payload BLOB`,
 		`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
+		// git_sync (task A2): draft-branch contract state on hub handles.
+		`ALTER TABLE hub_handles ADD COLUMN draft_branch TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hub_handles ADD COLUMN base_head TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE hub_handles ADD COLUMN deploy_key_id INTEGER NOT NULL DEFAULT 0`,
+		// git_sync continuation (task B2.3): the exact anchor the hub was told to
+		// branch from (session LastHead; empty = base_head). Persisted so a
+		// restart re-attach validates against the ORIGINAL anchor even if a
+		// concurrent same-session task has since moved session.last_head.
+		`ALTER TABLE hub_handles ADD COLUMN anchor_head TEXT NOT NULL DEFAULT ''`,
+		// git_sync sessions (task B2.1): git-native continuation state —
+		// last_head anchors the next draft branch; memory carries the rolling
+		// session summary injected into continuation prompts (B2.3).
+		`ALTER TABLE agent_sessions ADD COLUMN last_head TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE agent_sessions ADD COLUMN memory TEXT NOT NULL DEFAULT ''`,
 	}
 
 	for _, m := range additionalMigrations {

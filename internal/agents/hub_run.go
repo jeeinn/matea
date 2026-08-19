@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jeeinn/matea/internal/config"
@@ -130,10 +131,20 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		return nil, fmt.Errorf("hub execution: nil TaskContext")
 	}
 
+	// git_sync write path (task A3): when the backend's workspace_transport is
+	// git_sync and this is a write task, Matea Prepares credentials before
+	// Submit and Approves the hub-pushed draft branch after completion.
+	// Read/reply tasks take the original comment path.
+	transport := f.gitSyncTransportFor(backend)
+	writeViaGitSync := transport != nil && isWriteTaskType(task.TaskType)
+	var gitSyncInfo *GitSyncInfo
+	var issuedKey *IssuedDeployKey
+
 	// Idempotency + restart re-attach: reuse a persisted non-terminal Handle
 	// for this task instead of re-submitting. Skipping Submit here is what
 	// prevents a duplicate remote run when the task is retried or re-attached.
 	var handle *Handle
+	var persisted *store.HubHandle
 	if f.db != nil {
 		if existing, gerr := f.db.GetHubHandle(task.ID); gerr == nil && existing != nil && !store.IsTerminalHubStatus(existing.Status) {
 			handle = &Handle{
@@ -141,27 +152,74 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 				RemoteID:       existing.RemoteID,
 				IdempotencyKey: existing.IdempotencyKey,
 			}
+			persisted = existing
 			log.Printf("[INFO] hub execution task %d: re-attaching to persisted handle (backend=%q remote=%q)",
 				task.ID, existing.Backend, existing.RemoteID)
 		}
+	}
+
+	if writeViaGitSync && handle == nil {
+		owner, repo := splitOwnerRepo(task.Repo)
+		info, key, err := transport.Prepare(ctx, task, owner, repo, task.BaseBranch)
+		if err != nil {
+			return nil, fmt.Errorf("git_sync prepare: %w", err)
+		}
+		gitSyncInfo = info
+		issuedKey = key
+		// Session continuation (B2.3): when the task's session recorded a
+		// LastHead, the hub branches the NEW per-task draft branch from that
+		// commit instead of the base tip. Validation anchors on it too.
+		if anchor := f.sessionLastHead(task); anchor != "" {
+			gitSyncInfo.AnchorHEAD = anchor
+			log.Printf("[INFO] hub execution task %d: session continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
+		}
+		tc.GitSync = info
+	}
+	if writeViaGitSync && persisted != nil && persisted.DraftBranch != "" {
+		// Re-attach: rebuild the approval-side contract from the handle row
+		// (Prepare is NOT re-run — the same draft branch/key stay in force).
+		// The anchor comes from the persisted row (B2.3), NOT a fresh session
+		// read: a concurrent same-session task may have advanced LastHead
+		// since this task's Prepare, and validation must use the original one.
+		gitSyncInfo = &GitSyncInfo{
+			DraftBranch:    persisted.DraftBranch,
+			BaseBranch:     task.BaseBranch,
+			BaseHEAD:       persisted.BaseHEAD,
+			AnchorHEAD:     persisted.AnchorHEAD,
+			RequiredFooter: RequiredFooter(task.ID),
+			HubPush:        true,
+		}
+		issuedKey = &IssuedDeployKey{KeyID: persisted.DeployKeyID}
 	}
 
 	if handle == nil {
 		var err error
 		handle, err = backend.Submit(ctx, tc)
 		if err != nil {
+			if issuedKey != nil {
+				f.cleanupGitSyncKey(transport, task, issuedKey)
+			}
 			return nil, fmt.Errorf("hub submit: %w", err)
 		}
 		// Persist the Handle immediately after Submit so a crash before the
 		// poll loop finishes is recoverable on restart (re-attach, not re-run).
 		if f.db != nil {
-			if serr := f.db.SaveHubHandle(&store.HubHandle{
+			row := &store.HubHandle{
 				TaskID:         task.ID,
 				Backend:        handle.Backend,
 				RemoteID:       handle.RemoteID,
 				IdempotencyKey: handle.IdempotencyKey,
 				Status:         store.HubHandleStatusRunning,
-			}); serr != nil {
+			}
+			if gitSyncInfo != nil {
+				row.DraftBranch = gitSyncInfo.DraftBranch
+				row.BaseHEAD = gitSyncInfo.BaseHEAD
+				row.AnchorHEAD = gitSyncInfo.AnchorHEAD
+			}
+			if issuedKey != nil {
+				row.DeployKeyID = issuedKey.KeyID
+			}
+			if serr := f.db.SaveHubHandle(row); serr != nil {
 				log.Printf("[WARN] hub execution task %d: failed to persist handle: %v", task.ID, serr)
 			}
 		}
@@ -182,17 +240,98 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			switch state {
 			case StateFailed:
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
+				f.cleanupGitSyncKey(transport, task, issuedKey)
 				if err != nil {
 					return nil, fmt.Errorf("hub backend %q reported task failure: %w", backend.Name(), err)
 				}
 				return nil, fmt.Errorf("hub backend %q reported task failure", backend.Name())
 			case StateCanceled:
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusCanceled)
+				f.cleanupGitSyncKey(transport, task, issuedKey)
 				if err != nil {
 					return nil, fmt.Errorf("hub backend %q cancelled the task: %w", backend.Name(), err)
 				}
 				return nil, fmt.Errorf("hub backend %q cancelled the task", backend.Name())
 			default: // StateDone
+				if writeViaGitSync {
+					// Write path (task A3/A4): the hub already committed and
+					// pushed the draft branch; Approve fetches, validates the
+					// four elements and opens the PR. finalizeWriteChanges'
+					// commit/push stage is intentionally bypassed.
+					//
+					// B5 hardening: do NOT mark the handle Done until Approve
+					// succeeds. A hub that reports Done but fails validation
+					// (wrong branch, missing footer, base drift, diff-policy
+					// violation, or pushed nothing) must leave the handle Failed
+					// so it is never re-attached and the task is terminal.
+					if gitSyncInfo == nil {
+						f.cleanupGitSyncKey(transport, task, issuedKey)
+						f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
+						return nil, fmt.Errorf("hub backend %q completed write task %d but no git_sync prepare state is available", backend.Name(), task.ID)
+					}
+					summary := ""
+					var gitSyncRes *GitSyncResult
+					if res != nil {
+						summary = res.Summary
+						gitSyncRes = res.GitSync
+					}
+					if gitSyncRes == nil {
+						// The draft branch name is deterministic and Approve's
+						// fetch is authoritative, so a hub that reports no
+						// explicit git_sync result (e.g. re-attached via Poll
+						// after a restart, or Hermes whose Poll output carries
+						// only the trailer) still completes — a hub that pushed
+						// nothing fails at the fetch ("not found on remote").
+						gitSyncRes = &GitSyncResult{
+							DraftBranch: gitSyncInfo.DraftBranch,
+							DraftHEAD:   ParseDraftHeadTrailer(summary),
+						}
+					} else {
+						// Partial result hardening (B1): a hub that reports a
+						// git_sync result with individual fields empty gets them
+						// filled from the authoritative Prepare-side contract
+						// and the trailer — the fetch validation downstream is
+						// the final arbiter either way.
+						if gitSyncRes.DraftBranch == "" {
+							gitSyncRes.DraftBranch = gitSyncInfo.DraftBranch
+						}
+						if gitSyncRes.DraftHEAD == "" {
+							gitSyncRes.DraftHEAD = ParseDraftHeadTrailer(summary)
+						}
+					}
+					owner, repo := splitOwnerRepo(task.Repo)
+					out, aerr := transport.Approve(ctx, task, agent, owner, repo, gitSyncInfo, gitSyncRes, summary)
+					f.cleanupGitSyncKey(transport, task, issuedKey)
+					if aerr != nil {
+						// B3: diff-whitelist violations are security-relevant —
+						// audit them to operation_logs before surfacing the error.
+						var viol *DiffPolicyViolationError
+						if errors.As(aerr, &viol) && f.db != nil {
+							f.db.LogOperation(agent.ID, task.ID, "git_sync_diff_violation",
+								fmt.Sprintf("backend=%q branch=%q paths=%s",
+									backend.Name(), gitSyncInfo.DraftBranch, strings.Join(viol.Paths, ",")))
+						}
+						f.markHubHandleTerminal(task.ID, store.HubHandleStatusFailed)
+						return nil, fmt.Errorf("git_sync approve: %w", aerr)
+					}
+					f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
+					// Session continuation state (B2.3): record the pushed draft
+					// branch + its authoritative head (Approve normalized
+					// gitSyncRes.DraftHEAD to the fetched value) as the next
+					// task's anchor, plus the rolling session summary that the
+					// next continuation prompt injects.
+					saveSessionProgress(f, task, gitSyncInfo.DraftBranch, gitSyncRes.DraftHEAD)
+					saveSessionMemory(f, task, summary)
+					f.emitDeliverEvent(backend.Name(), deliver.Event{
+						Event:   deliver.EventTaskCompleted,
+						Repo:    task.Repo,
+						IssueID: task.IssueID,
+						PRID:    out.PRID,
+						Action:  out.Action,
+						Content: summary,
+					}, false)
+					return out, nil
+				}
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusDone)
 				return f.mapHubResult(backend, res, task), nil
 			}
@@ -201,13 +340,15 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			// A cancelled/expired context surfaces as a transport error from
 			// Poll. Attribute it correctly and tell the hub to stop, instead
 			// of reporting it as a backend failure.
-		if pollCtx.Err() != nil {
-			return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
-		}
+			if pollCtx.Err() != nil {
+				f.cleanupGitSyncKey(transport, task, issuedKey)
+				return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
+			}
 			return nil, fmt.Errorf("hub poll: %w", err)
 		}
 		select {
 		case <-pollCtx.Done():
+			f.cleanupGitSyncKey(transport, task, issuedKey)
 			return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
 		case <-time.After(hubPollInterval):
 		}
@@ -223,6 +364,31 @@ func (f *RunnerFactory) markHubHandleTerminal(taskID int64, status string) {
 	}
 	if err := f.db.UpdateHubHandleStatus(taskID, status); err != nil {
 		log.Printf("[WARN] hub handle task %d: failed to mark %q: %v", taskID, status, err)
+	}
+}
+
+// splitOwnerRepo splits "owner/repo" task identifiers into their parts.
+func splitOwnerRepo(full string) (string, string) {
+	parts := strings.SplitN(full, "/", 2)
+	if len(parts) != 2 {
+		return full, ""
+	}
+	return parts[0], parts[1]
+}
+
+// cleanupGitSyncKey revokes the task-scoped deploy key after a git_sync run
+// reaches any terminal state. Best-effort: failures are logged (the Gitea
+// delete is idempotent, so an operator-side retry/sweep stays safe); a nil
+// key/transport is a no-op so read/reply tasks are unaffected.
+func (f *RunnerFactory) cleanupGitSyncKey(transport WorkspaceTransport, task *store.Task, key *IssuedDeployKey) {
+	if transport == nil || key == nil || key.KeyID == 0 {
+		return
+	}
+	owner, repo := splitOwnerRepo(task.Repo)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := transport.Cleanup(cleanupCtx, owner, repo, key); err != nil {
+		log.Printf("[WARN] task %d: git_sync deploy key %d revoke failed (safe to retry): %v", task.ID, key.KeyID, err)
 	}
 }
 
@@ -402,6 +568,34 @@ func (f *RunnerFactory) loadMemoryKeys(task *store.Task) map[string]string {
 		return nil
 	}
 	return m
+}
+
+// sessionLastHead returns the continuation anchor recorded on the task's
+// session (B2.3): the previous task's pushed draft head. "" when the task has
+// no session, the session is gone, or nothing has been recorded yet (fresh
+// session → the hub branches from the base tip per the default contract).
+func (f *RunnerFactory) sessionLastHead(task *store.Task) string {
+	if f.db == nil || task.SessionID == "" {
+		return ""
+	}
+	session, err := f.db.GetSession(task.SessionID)
+	if err != nil {
+		return ""
+	}
+	return session.LastHead
+}
+
+// loadSessionMemory returns the rolling per-session summary (B2.1 memory
+// column) for injection into continuation prompts (B2.3). "" when absent.
+func (f *RunnerFactory) loadSessionMemory(task *store.Task) string {
+	if f.db == nil || task.SessionID == "" {
+		return ""
+	}
+	session, err := f.db.GetSession(task.SessionID)
+	if err != nil {
+		return ""
+	}
+	return session.Memory
 }
 
 // saveAnalyzeMemory records an analyze task's conclusion under the

@@ -45,10 +45,10 @@ func (s *SessionService) GetOrCreate(repo string, issueID int, agentID int64, ro
 		CreatedAt:    now,
 	}
 
-	// For coder role, set workspace path
-	if role == store.RoleCoder && s.baseDir != "" {
-		session.WorkspacePath = fmt.Sprintf("%s/sessions/%s/repo", s.baseDir, sessionID)
-	}
+	// B2.2: no on-disk session workspace is assigned anymore — write-task
+	// continuation anchors on the session's LastHead (git-native). The
+	// deprecated workspace_path column stays empty for new sessions; the
+	// lifecycle GC still reclaims legacy pre-B2.2 workspace directories.
 
 	if err := s.db.CreateSession(session); err != nil {
 		return nil, fmt.Errorf("create session: %w", err)

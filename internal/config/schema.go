@@ -274,14 +274,16 @@ type AgentBackendsConfig struct {
 
 // BackendConfig describes one coding backend. Type distinguishes builtin vs opencode.
 type BackendConfig struct {
-	Type                  string                   `yaml:"type"`                    // builtin | hub-opencode
-	BaseURL               string                   `yaml:"base_url"`                // hub-opencode only
-	Auth                  BackendAuthConfig        `yaml:"auth"`                    // hub-opencode only
-	Timeout               string                   `yaml:"timeout"`                 // e.g. "45m"
-	WorkspaceMode         string                   `yaml:"workspace_mode"`          // first release: "matea_path" only
-	HealthCheck           BackendHealthCheckConfig `yaml:"health_check"`            // hub-opencode only
-	AllowFallbackBuiltin  bool                     `yaml:"allow_fallback_builtin"`  // default false
-	WorkspaceTransport    string                   `yaml:"workspace_transport"`     // shared_path (Phase 2) | mcp (Phase 3)
+	Type                 string                   `yaml:"type"`                   // builtin | hub-opencode
+	BaseURL              string                   `yaml:"base_url"`               // hub-opencode only
+	Auth                 BackendAuthConfig        `yaml:"auth"`                   // hub-opencode only
+	Timeout              string                   `yaml:"timeout"`                // e.g. "45m"
+	WorkspaceMode        string                   `yaml:"workspace_mode"`         // first release: "matea_path" only
+	HealthCheck          BackendHealthCheckConfig `yaml:"health_check"`           // hub-opencode only
+	AllowFallbackBuiltin bool                     `yaml:"allow_fallback_builtin"` // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
+	WorkspaceTransport   string                   `yaml:"workspace_transport"`    // git_sync only (A5+; shared_path removed, mcp Phase 3)
+	AllowedPaths         []string                 `yaml:"allowed_paths"`          // B3 git_sync diff whitelist: non-empty = every changed path must match one glob
+	DeniedPaths          []string                 `yaml:"denied_paths"`           // B3 git_sync diff denylist: extends the built-in always-on defaults
 }
 
 // BackendAuthConfig holds HTTP Basic auth credentials for a hub-opencode backend.
@@ -306,30 +308,33 @@ const (
 // WorkspaceTransport defines how the workspace is delivered to a hub backend.
 // D11 deployment tiers: L0 same-process host / L1 shared volume / L2 full isolation.
 //
-// Phase 2 only implements WorkspaceTransportSharedPath. WorkspaceTransportMCP
-// is Phase 3 (requires MCP Server, performance tax for cross-org isolation).
+// git_sync rollout (20260815-git-sync-3phase-plan.md v3.1): the A1–A4
+// coexistence window (shared_path + git_sync both accepted) closed at A5 —
+// git_sync is now the ONLY hub write transport. shared_path was removed
+// because it widened the trust model (Matea-side credentials touching a
+// hub-visible filesystem); the mcp transport constant was removed in C1 —
+// its L2 full-isolation tier returns in Phase 3 as 3.9 (requires MCP Server,
+// performance tax for cross-org isolation).
 const (
-	// WorkspaceTransportSharedPath delivers workspace via local absolute path
-	// (L0 same machine or L1 shared volume). Phase 2 default and only impl.
-	WorkspaceTransportSharedPath = "shared_path"
-
-	// WorkspaceTransportMCP delivers workspace via MCP file tools (L2 full
-	// isolation, cross-org boundary). Phase 3 only.
-	WorkspaceTransportMCP = "mcp"
+	// WorkspaceTransportGitSync delivers work via git: Matea issues a
+	// task-scoped deploy key and hands the hub a GitSyncInfo; the hub clones,
+	// commits and pushes a draft branch itself; Matea fetches, validates and
+	// opens the PR. The only hub write transport (A5+).
+	WorkspaceTransportGitSync = "git_sync"
 )
 
 // ValidWorkspaceTransports returns all valid workspace_transport values.
 func ValidWorkspaceTransports() []string {
-	return []string{WorkspaceTransportSharedPath, WorkspaceTransportMCP}
+	return []string{WorkspaceTransportGitSync}
 }
 
 // IsWorkspaceTransportValid reports whether a value is a valid workspace_transport.
 func IsWorkspaceTransportValid(v string) bool {
 	switch v {
-	case "", WorkspaceTransportSharedPath:
-		return true
+	case "", WorkspaceTransportGitSync:
+		return true // A5+: git_sync is the only accepted hub write transport
 	default:
-		return false // Phase 2: reject mcp and any unknown value
+		return false // shared_path removed in A5; mcp removed in C1 (Phase 3.9)
 	}
 }
 

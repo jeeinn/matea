@@ -3,6 +3,8 @@ package agents
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -98,13 +100,56 @@ type TaskContext struct {
 	// Memory correlation keys for hub-side recall (matea.repo / matea.issue / ...).
 	MemoryKeys map[string]string `json:"memory_keys,omitempty"`
 
+	// SessionMemory is the rolling per-session summary (agent_sessions.memory,
+	// B2.1) injected into continuation prompts so the hub recalls what the
+	// previous task in this session did (B2.3). Distinct from MemoryKeys,
+	// which is repo/issue-scoped (memories table).
+	SessionMemory string `json:"session_memory,omitempty"`
+
 	// Code tasks only: sandbox prepared by Matea; hub operates files via ToolAccess.
 	SandboxPath string           `json:"sandbox_path,omitempty"`
 	ToolAccess  *ToolAccessGrant `json:"tool_access,omitempty"`
 
+	// GitSync carries the draft-branch contract for hub write tasks under the
+	// git_sync transport (task A2): Matea Prepares it (deploy key + draft
+	// branch + base anchor) and the hub clones/commits/pushes with it.
+	// Nil for read/reply tasks (since A5 git_sync is the only hub write
+	// transport, so every hub write task carries it).
+	GitSync *GitSyncInfo `json:"git_sync,omitempty"`
+
 	// Channel routing for deliver events (IM bridges).
 	Channel  string `json:"channel,omitempty"`
 	ThreadID string `json:"thread_id,omitempty"`
+}
+
+// BuildMemoryContext renders the session + repo/issue memory blocks both hub
+// integrations append to the prompt (B2.3). Returns "" when the task carries
+// no memory, so callers can unconditionally append. Map keys are sorted for
+// deterministic prompt bytes. Kept in this package so OpenCode and Hermes
+// render memory identically (previously Hermes rendered MemoryKeys inline
+// while OpenCode dropped them entirely).
+func BuildMemoryContext(tc *TaskContext) string {
+	if tc == nil {
+		return ""
+	}
+	var b strings.Builder
+	if tc.SessionMemory != "" {
+		b.WriteString("## Session continuation memory\n")
+		b.WriteString(tc.SessionMemory)
+		b.WriteString("\n")
+	}
+	if len(tc.MemoryKeys) > 0 {
+		b.WriteString("## Previously remembered context (repo/issue memory)\n")
+		keys := make([]string, 0, len(tc.MemoryKeys))
+		for k := range tc.MemoryKeys {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&b, "- %s: %s\n", k, tc.MemoryKeys[k])
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // GiteaAction is an action the hub asks Matea to perform on Gitea.
@@ -136,6 +181,11 @@ type BackendResult struct {
 	Summary      string        `json:"summary"`
 	GiteaActions []GiteaAction `json:"gitea_actions,omitempty"`
 	Deliver      *DeliverRequest `json:"deliver,omitempty"`
+
+	// GitSync reports the hub-pushed draft branch for write tasks under the
+	// git_sync transport (task A2). Matea's WorkspaceTransport.Approve
+	// validates it (three elements) and opens the PR.
+	GitSync *GitSyncResult `json:"git_sync,omitempty"`
 
 	// ExternallyHandled is true when the hub already performed git/PR itself
 	// (only honored when Capabilities().HandlesGit is true). Default false:

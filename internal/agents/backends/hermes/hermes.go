@@ -296,16 +296,25 @@ func (b *Backend) buildRunRequest(tc *agents.TaskContext) *hermesRunRequest {
 		req.Input = fmt.Sprintf("## Diff\n%s\n\n## Question\n%s", tc.Diff, req.Input)
 	}
 
-	// Inject repo/issue memory (D3 cross-task sharing, task 2.1.5) so the hub
-	// can recall prior task conclusions (e.g. an analyze summary) on the same
-	// repo+issue. Appended only when present, so existing callers are unaffected.
-	if len(tc.MemoryKeys) > 0 {
-		var mb strings.Builder
-		mb.WriteString("\n\n## Previously remembered context (repo/issue memory)\n")
-		for k, v := range tc.MemoryKeys {
-			mb.WriteString(fmt.Sprintf("- %s: %s\n", k, v))
-		}
-		req.Input += mb.String()
+	// Inject session + repo/issue memory (B2.3 / D3 cross-task sharing, task
+	// 2.1.5) so the hub recalls prior task conclusions on the same repo+issue
+	// and what the previous session task did. Rendered by the shared
+	// agents.BuildMemoryContext so both hubs get identical memory blocks.
+	// Appended only when present, so existing callers are unaffected.
+	if mc := agents.BuildMemoryContext(tc); mc != "" {
+		req.Input += "\n\n" + mc
+	}
+
+	// git_sync write tasks (task B1): inject the shared hub-push contract —
+	// the same BuildGitSyncInstructions block OpenCode receives (task A4). It
+	// carries the task-scoped deploy key (base64), the clone URL, the draft
+	// branch Hermes may push, the required commit footer and the result
+	// trailer. Hermes executes the git steps with its own tools; Matea never
+	// sees a patch (no patch-return special case). Appended last so the
+	// mandatory workflow sits in the recency window of the prompt.
+	if tc.GitSync != nil {
+		req.Input = strings.TrimSpace(req.Input + "\n\n" +
+			agents.BuildGitSyncInstructions(tc.GitSync, fmt.Sprintf("matea-hub-%d", tc.TaskID)))
 	}
 
 	return req

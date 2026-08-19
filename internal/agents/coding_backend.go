@@ -225,9 +225,12 @@ func (b *BuiltinCodingBackend) Abort(ctx context.Context, handle string) error {
 //  4. If the named backend is not found in config → error
 //  5. If the backend type is unknown → error
 //
-// The returned backend is ready to call Run. For hub-opencode backends, the
-// instance is constructed fresh each call (they hold no state between calls);
-// the builtin backend is reused (it has no state).
+// Since A5 this resolver effectively only returns the builtin backend: hub
+// backends (hub-opencode/hub-hermes) must carry workspace_transport=git_sync
+// and are diverted into runViaHub's write channel before this resolver runs
+// (see runWriteTask). A hub backend that reaches here lacks git_sync — a
+// configuration error, surfaced with a migration hint instead of the generic
+// "unsupported type".
 func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend, error) {
 	// Normalize legacy identifiers (internal → builtin, opencode_http →
 	// hub-opencode) so DB rows and configs written before 1.2.6 keep working.
@@ -254,23 +257,13 @@ func (f *RunnerFactory) ResolveCodingBackend(agent *store.Agent) (CodingBackend,
 	switch config.NormalizeBackend(cfg.Type) {
 	case config.BackendTypeBuiltin:
 		return f.builtinBackend, nil
-	case config.BackendTypeHubOpenCode:
-		backend, err := NewOpenCodeHTTPBackend(name, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("create opencode backend %q: %w", name, err)
-		}
-		return backend, nil
+	case config.BackendTypeHubOpenCode, config.BackendTypeHubHermes:
+		// A5: the shared_path CodingBackend.Run write path was removed. Hub
+		// write tasks only run through runViaHub's git_sync channel; reaching
+		// here means the backend is missing workspace_transport=git_sync.
+		return nil, fmt.Errorf("hub backend %q (type %q) no longer serves write tasks via a local workspace — set workspace_transport: %s (shared_path removed in A5)",
+			name, cfg.Type, config.WorkspaceTransportGitSync)
 	default:
 		return nil, fmt.Errorf("unsupported coding backend type %q for %q", cfg.Type, name)
 	}
-}
-
-// allowsBuiltinFallback reports whether a backend may silently switch to the
-// builtin BuiltinCodingBackend when its health check fails.
-// Only OpenCodeHTTPBackend currently exposes allow_fallback_builtin.
-func allowsBuiltinFallback(backend CodingBackend) bool {
-	if b, ok := backend.(*OpenCodeHTTPBackend); ok {
-		return b.cfg.AllowFallbackBuiltin
-	}
-	return false
 }

@@ -39,8 +39,16 @@ type HubHandle struct {
 	RemoteID       string    `json:"remote_id"`       // hub-side session/job id
 	IdempotencyKey string    `json:"idempotency_key"` // dedup key for safe resubmission
 	Status         string    `json:"status"`          // HubHandleStatus*
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+
+	// git_sync fields (task A2): the draft-branch contract state for hub write
+	// tasks. Empty/zero for read/reply tasks.
+	DraftBranch string `json:"draft_branch,omitempty"`  // matea/hub-{taskID} registered at Prepare
+	BaseHEAD    string `json:"base_head,omitempty"`     // base branch head anchor at Prepare
+	AnchorHEAD  string `json:"anchor_head,omitempty"`   // B2.3 continuation anchor (session LastHead); empty = BaseHEAD
+	DeployKeyID int64  `json:"deploy_key_id,omitempty"` // Gitea deploy key id for Cleanup revoke
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // SaveHubHandle persists (INSERT OR REPLACE) the hub handle for a task. The
@@ -54,9 +62,9 @@ func (db *DB) SaveHubHandle(h *HubHandle) error {
 		h.Status = HubHandleStatusRunning
 	}
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO hub_handles (task_id, backend, remote_id, idempotency_key, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		h.TaskID, h.Backend, h.RemoteID, h.IdempotencyKey, h.Status,
+		`INSERT OR REPLACE INTO hub_handles (task_id, backend, remote_id, idempotency_key, status, draft_branch, base_head, anchor_head, deploy_key_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		h.TaskID, h.Backend, h.RemoteID, h.IdempotencyKey, h.Status, h.DraftBranch, h.BaseHEAD, h.AnchorHEAD, h.DeployKeyID,
 	)
 	if err != nil {
 		return fmt.Errorf("save hub handle: %w", err)
@@ -69,9 +77,9 @@ func (db *DB) SaveHubHandle(h *HubHandle) error {
 func (db *DB) GetHubHandle(taskID int64) (*HubHandle, error) {
 	var h HubHandle
 	err := db.QueryRow(
-		`SELECT task_id, backend, remote_id, idempotency_key, status, created_at, updated_at
+		`SELECT task_id, backend, remote_id, idempotency_key, status, draft_branch, base_head, anchor_head, deploy_key_id, created_at, updated_at
 		 FROM hub_handles WHERE task_id = ?`, taskID,
-	).Scan(&h.TaskID, &h.Backend, &h.RemoteID, &h.IdempotencyKey, &h.Status, &h.CreatedAt, &h.UpdatedAt)
+	).Scan(&h.TaskID, &h.Backend, &h.RemoteID, &h.IdempotencyKey, &h.Status, &h.DraftBranch, &h.BaseHEAD, &h.AnchorHEAD, &h.DeployKeyID, &h.CreatedAt, &h.UpdatedAt)
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {
 			return nil, nil
@@ -103,7 +111,7 @@ func (db *DB) UpdateHubHandleStatus(taskID int64, status string) error {
 // terminal state. Used at startup to find hub runs that must be re-attached.
 func (db *DB) ListNonTerminalHubHandles() ([]*HubHandle, error) {
 	rows, err := db.Query(
-		`SELECT task_id, backend, remote_id, idempotency_key, status, created_at, updated_at
+		`SELECT task_id, backend, remote_id, idempotency_key, status, draft_branch, base_head, anchor_head, deploy_key_id, created_at, updated_at
 		 FROM hub_handles
 		 WHERE status NOT IN (?, ?, ?)
 		 ORDER BY created_at ASC`,
@@ -117,7 +125,7 @@ func (db *DB) ListNonTerminalHubHandles() ([]*HubHandle, error) {
 	var out []*HubHandle
 	for rows.Next() {
 		var h HubHandle
-		if err := rows.Scan(&h.TaskID, &h.Backend, &h.RemoteID, &h.IdempotencyKey, &h.Status, &h.CreatedAt, &h.UpdatedAt); err != nil {
+		if err := rows.Scan(&h.TaskID, &h.Backend, &h.RemoteID, &h.IdempotencyKey, &h.Status, &h.DraftBranch, &h.BaseHEAD, &h.AnchorHEAD, &h.DeployKeyID, &h.CreatedAt, &h.UpdatedAt); err != nil {
 			return out, fmt.Errorf("scan hub handle: %w", err)
 		}
 		out = append(out, &h)
@@ -147,6 +155,53 @@ func (db *DB) DeleteHubHandle(taskID int64) error {
 		return fmt.Errorf("delete hub handle: %w", err)
 	}
 	return nil
+}
+
+// ListHubHandleRepos returns the distinct repos (owner/name, via the owning
+// task) that have ever had a hub handle row. The B4 deploy-key sweep scans
+// exactly these repos: a repo without any handle row can never hold a
+// matea-issued key record, so scanning more would be noise.
+func (db *DB) ListHubHandleRepos() ([]string, error) {
+	rows, err := db.Query(
+		`SELECT DISTINCT tasks.repo FROM hub_handles JOIN tasks ON tasks.id = hub_handles.task_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list hub handle repos: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var repo string
+		if err := rows.Scan(&repo); err != nil {
+			return out, fmt.Errorf("scan hub handle repo: %w", err)
+		}
+		out = append(out, repo)
+	}
+	return out, rows.Err()
+}
+
+// ListNonTerminalHubTaskIDsByRepo returns the task IDs owning a non-terminal
+// hub handle on the given repo. Those tasks' deploy keys are IN USE (run in
+// flight, possibly re-attaching after a restart) and the B4 sweep must not
+// revoke them.
+func (db *DB) ListNonTerminalHubTaskIDsByRepo(repo string) ([]int64, error) {
+	rows, err := db.Query(
+		`SELECT hub_handles.task_id FROM hub_handles JOIN tasks ON tasks.id = hub_handles.task_id
+		 WHERE tasks.repo = ? AND hub_handles.status NOT IN (?, ?, ?)`,
+		repo, HubHandleStatusDone, HubHandleStatusFailed, HubHandleStatusCanceled,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list non-terminal hub task ids: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return out, fmt.Errorf("scan non-terminal hub task id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // FailOrphanedRunningTasksExceptHub marks running tasks as failed on startup

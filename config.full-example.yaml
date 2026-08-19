@@ -135,9 +135,17 @@ agents:
     #   - "go test ./..."
     #   - "npm test"
 
-  # 编码后端配置（OpenCode Path A）
-  # 默认 builtin（内置 AgentLoop）；非写任务（analyze/review/reply）始终 builtin
-  # opencode-local 为可选 sidecar，需本机启动 opencode serve
+  # 编码后端配置（Hub 后端）
+  # 默认 builtin（内置 AgentLoop）；非写任务（analyze/review/reply）也可路由到 hub 后端
+  # workspace_transport 仅接受 git_sync（缺省即 git_sync）：
+  #   Matea 签发任务级 deploy key → Hub 持凭据自 clone/commit/push 草稿分支
+  #   → Matea fetch 校验四要素后开 PR 并回收 key。详见 docs/HUB-BACKENDS.md
+  #
+  # 【旧 config.yaml 迁移示例】
+  #   旧（A5 之前）:  workspace_transport: shared_path   → 直接删除该行（git_sync 为默认）
+  #   旧（C1 之前）:  workspace_transport: mcp          → 直接删除该行（Phase 3.9 才回归）
+  #   已废弃字段:     workspace_mode / allow_fallback_builtin —— A5 起失效，留着不报错但无作用，
+  #                  建议删除（hub 写任务失败永不回退 builtin，避免信任模型被替换）。
   backends:
     default: builtin
     backends:
@@ -150,11 +158,19 @@ agents:
       #     username: opencode
       #     password: "${OPENCODE_SERVER_PASSWORD}"
       #   timeout: "45m"
-      #   workspace_mode: matea_path   # 第一期唯一合法值
+      #   workspace_transport: git_sync    # 唯一合法值；缺省同效
+      #   # denied_paths: ["deploy/*"]     # B3：追加 diff deny（内置已含 .env*/密钥材料）
+      #   # allowed_paths: ["src/*"]       # B3：进一步收敛（deny 仍绝对优先）
       #   health_check:
       #     path: /global/health
       #     interval: 30s
-      #   allow_fallback_builtin: false  # false=探活失败任务 failed；true=降级到 builtin Loop
+      # hermes-local:
+      #   type: hub-hermes
+      #   base_url: "http://127.0.0.1:9090"
+      #   auth:
+      #     password: "${HERMES_RUNS_TOKEN}"
+      #   timeout: "45m"
+      #   workspace_transport: git_sync
 
   templates:
     analyze:

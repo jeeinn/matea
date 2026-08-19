@@ -37,6 +37,28 @@ func (g *Git) CloneBranch(repoURL, branch string) *Result {
 	return result
 }
 
+// CloneFull clones the repository with full history into the workspace.
+// Session continuation (B2.2) needs this: the anchor SHA recorded on the
+// session (LastHead) lives on the session's draft branch, which a shallow
+// clone of the default branch cannot reach.
+func (g *Git) CloneFull(repoURL string) *Result {
+	result := g.sandbox.Execute("git", "clone", repoURL, ".")
+	if result.Error != nil {
+		return result
+	}
+	log.Printf("[INFO] Cloned repository (full history) into workspace")
+	return result
+}
+
+// HeadSHA returns the full SHA of the current HEAD, or "" on error.
+func (g *Git) HeadSHA() string {
+	res := g.sandbox.Execute("git", "rev-parse", "HEAD")
+	if res.Error != nil {
+		return ""
+	}
+	return strings.TrimSpace(res.Stdout)
+}
+
 // CreateBranch creates and switches to a new branch.
 func (g *Git) CreateBranch(branch string) *Result {
 	result := g.sandbox.Execute("git", "checkout", "-b", branch)

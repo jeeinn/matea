@@ -224,6 +224,8 @@ func TestCreateAndGetSession(t *testing.T) {
 		Status:        SessionActive,
 		Branch:        "ai/fix-10",
 		WorkspacePath: "/data/sessions/sess-abc-123/repo",
+		LastHead:      "0123456789abcdef0123456789abcdef01234567",
+		Memory:        "task 7: pushed matea/hub-7",
 		LastActiveAt:  now,
 		CreatedAt:     now,
 	}
@@ -238,6 +240,9 @@ func TestCreateAndGetSession(t *testing.T) {
 	assert.Equal(t, RoleCoder, got.Role)
 	assert.Equal(t, SessionActive, got.Status)
 	assert.Equal(t, "ai/fix-10", got.Branch)
+	// B2.1: git-native continuation state round-trips.
+	assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", got.LastHead)
+	assert.Equal(t, "task 7: pushed matea/hub-7", got.Memory)
 }
 
 func TestGetSessionByRepoIssueAgentRole(t *testing.T) {
@@ -316,6 +321,8 @@ func TestUpdateSession(t *testing.T) {
 	s.Branch = "ai/fix-1"
 	s.LastTaskID = 99
 	s.Status = SessionIdle
+	s.LastHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	s.Memory = "rolling summary"
 	err := db.UpdateSession(s)
 	require.NoError(t, err)
 
@@ -325,6 +332,25 @@ func TestUpdateSession(t *testing.T) {
 	assert.Equal(t, "ai/fix-1", got.Branch)
 	assert.Equal(t, int64(99), got.LastTaskID)
 	assert.Equal(t, SessionIdle, got.Status)
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", got.LastHead)
+	assert.Equal(t, "rolling summary", got.Memory)
+}
+
+// TestSessionLastHeadMemoryDefaults covers the B2.1 migration defaults: a DB
+// created before last_head/memory existed (or rows written without them)
+// surfaces empty strings, never NULL scan errors.
+func TestSessionLastHeadMemoryDefaults(t *testing.T) {
+	db := newTestDB(t)
+
+	// Simulate a pre-B2.1 row by writing through the legacy column set.
+	_, err := db.Exec(`INSERT INTO agent_sessions (id, repo, issue_id, agent_id, role, status, branch, workspace_path)
+		VALUES ('legacy-sess', 'o/r', 3, 1, ?, ?, 'ai/fix-3', '/tmp/x')`, RoleCoder, SessionIdle)
+	require.NoError(t, err)
+
+	got, err := db.GetSession("legacy-sess")
+	require.NoError(t, err)
+	assert.Equal(t, "", got.LastHead)
+	assert.Equal(t, "", got.Memory)
 }
 
 func TestListSessionsByIssue(t *testing.T) {
