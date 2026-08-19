@@ -84,45 +84,57 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 > 详细方案：[CONFIG-AUTOMATION.md](CONFIG-AUTOMATION.md)（细化版）  
 > 实施顺序建议：P0 与 Phase 2 收尾并行开发 → P1 → P2。
 
-### P0（优先落地）
+### P0（优先落地）✅ 已完成（phase2.5/config-automation）
 
-- [ ] **C-1 `/setup` 向导页面（三步：Gitea → LLM → 确认）**
+- [x] **C-1 `/setup` 向导页面（三步：Gitea → LLM → 确认）**
   前端新建 `SetupWizard.vue`；后端支持批量配置写入；完成后跳转强制改密。
+  落地：`web/src/views/SetupWizard.vue`（Token 门禁 → Gitea → LLM → 确认 → 成功页展示一次性 webhook_secret）；批量写入走 `POST /api/setup/complete`。
 
-- [ ] **C-2 Setup Token 安全模型**
+- [x] **C-2 Setup Token 安全模型**
   首次启动生成一次性随机 token，打印在控制台；30 分钟有效期；与默认密码解耦；未初始化时 `/setup` 可免登访问。
+  落地：`internal/api/setup_token.go` — 24 字节随机 hex（48 字符）打印横幅；30min TTL，过期惰性重新生成并再次打印；常量时间比较；完成后 `Invalidate()`。
 
-- [ ] **C-3 未初始化时 `/` 自动跳转 `/setup`，初始化后 `/setup` 跳登录**
+- [x] **C-3 未初始化时 `/` 自动跳转 `/setup`，初始化后 `/setup` 跳登录**
   前端路由守卫根据 `/api/setup/status` 判断。
+  落地：`GET /api/setup/status` 改为**公开端点**（只暴露缺失键名，不暴露值）；`web/src/stores/setup.js` 缓存状态，路由守卫双向跳转。
 
-- [ ] **C-4 自动检测本地 Ollama**
+- [x] **C-4 自动检测本地 Ollama**
   扫描 `http://localhost:11434/api/tags`；命中后自动填充 base_url 并拉取模型列表。
+  落地：`GET /api/setup/detect`（1.5s 超时探测），向导 LLM 步骤展示已安装模型标签，点击即选。
 
-- [ ] **C-5 自动检测本地 OpenCode（端口可配置）**
+- [x] **C-5 自动检测本地 OpenCode（端口可配置）**
   允许用户输入端口，扫描 `/health`；命中后提示可在 Hub 后端配置中接入。
+  落地：探测顺序 = 已配置 hub-opencode 后端 URL → localhost:4096 → 8081；冒烟实测命中本机 :4096。端口来源 = 后端配置（C-14 子页面属 P1）。
 
-- [ ] **C-6 `gitea.webhook_secret` 可选，留空自动生成**
+- [x] **C-6 `gitea.webhook_secret` 可选，留空自动生成**
   修改 `internal/config/setup.go:CheckSetup` 不再把 `webhook_secret` 视为必填；向导完成时自动生成 32 字节 hex 写入 DB。
+  落地：CheckSetup 移除该项；`GenerateWebhookSecret()`；`setup/complete` 与 `PUT /api/config`（配置 Gitea 且无 secret 时）均自动生成——空 secret 会静默关闭 webhook 签名校验。
 
-- [ ] **C-7 Gitea Token scope 自检**
+- [x] **C-7 Gitea Token scope 自检**
   `TestConnection()` 调用 `/api/v1/user` 解析权限；至少检查 `write:admin` + `repo`。
+  落地：`/api/setup/test/gitea` + 向导测试按钮复用 `TestConnection()`（非管理员时返回 write:admin 警告）；`setup/complete` 服务端强制复测。
 
-- [ ] **C-8 配置写入 DB + 热重启组件**
+- [x] **C-8 配置写入 DB + 热重启组件**
   复用现有 `ConfigManager.Update()` 与 `onConfigChange` 回调；向导完成页批量写入并触发 LLM Registry / Gitea Client / Dispatcher 热更新。
+  落地：`setup/complete` 逐项 `Update()`（含 llm.providers 合并保留其他 provider）后 `notifyConfigChange()`。
 
-- [ ] **C-9 首次登录强制修改默认管理员密码**
+- [x] **C-9 首次登录强制修改默认管理员密码**
   向导完成后跳转 `/setup-password`；不改密码无法进入 Dashboard；支持 `auth.default_admin_password` 自动生成。
+  落地：**此前已完整实现**（`MustChangePassword` 标记 + jwtWrap 403 `must_change_password` + 前端守卫跳 `/change-password` + 改密拒绝默认密码）；向导成功页提示 admin/admin123 首登改密。
 
-- [ ] **C-10 Dashboard 初始化引导卡**
+- [x] **C-10 Dashboard 初始化引导卡**
   未初始化时显示引导卡片，点击跳转 `/setup`。
+  落地：Dashboard 欢迎卡改为 setup-aware（`setupStore.setupRequired` 时也显示，步骤高亮跟随真实进度）；未初始化时路由已全局重定向 `/setup`（C-3）。
 
 ### P1
 
-- [ ] **C-11 Provider 预设模板**
+- [~] **C-11 Provider 预设模板**
   DeepSeek / OpenAI / Anthropic / SenseNova / Ollama / 自定义；选择预设后自动填充 base_url + 默认模型，用户只填 API Key。
+  部分落地（P0 向导内）：预设列表硬编码在 `SetupWizard.vue`（6 项，选择即填充）；剩余：SystemConfig 复用同一预设源、后端预设端点。
 
-- [ ] **C-12 自动拉取 LLM 模型列表**
+- [~] **C-12 自动拉取 LLM 模型列表**
   测试连接时请求 `/models` 或 `/api/tags`，返回可选模型下拉。
+  部分落地：`GET /api/config/providers/{name}/models` 已有（保存后）；Ollama 模型列表经 `/api/setup/detect` 进入向导；剩余：向导内对任意 provider 的即选即拉（未保存时）。
 
 - [ ] **C-13 站点级 Webhook 自动注册/状态检查**
   向导完成时调用 `GET /api/v1/admin/hooks` 检查目标 URL 是否已存在；可选自动注册站点级 webhook。
@@ -133,11 +145,13 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [ ] **C-15 精简 `config.example.yaml` 到 ~15 行**
   只保留 `server` / `database` / 可选的 `gitea` / `llm` / `auth`；其余全部移到 Web UI 或自动检测。
 
-- [ ] **C-16 配置变更审计日志**
+- [x] **C-16 配置变更审计日志**（随 P0 提前完成）
   利用 `operation_logs` 表记录 who/when/key（敏感值 mask）。
+  落地：`config_update` / `config_delete` / `setup_complete` 三类动作落 `operation_logs`；token/secret/api_key/password 全 mask，llm.providers 内 api_key 单独 mask；who 维度待用户上下文接入（当前 agent_id=0）。
 
-- [ ] **C-17 敏感配置字段 API 不回显、前端 mask**
+- [x] **C-17 敏感配置字段 API 不回显、前端 mask**（随 P0 提前完成）
   `gitea.admin_token`、`llm.providers.*.api_key`、`gitea.webhook_secret` 等返回时 mask，表单显示 `••••••••`。
+  落地：`GET /api/config` 返回 `********` 占位（结构保留）；PUT 中占位 = 保持原值（含 llm.providers 内 api_key 还原）；测试连接端点对占位回退到已存真值；前端三处掩码提示。
 
 ### P2
 

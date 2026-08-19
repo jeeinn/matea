@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Phase 2.5 配置自动化与首次用户体验（branch `phase2.5/config-automation`，P0 + 提前落地的 P1 项）：
+
+### Added
+- **首次运行向导 `/setup`**（C-1/C-3）：未初始化实例所有页面重定向到三步向导（Gitea → LLM → 确认）；`GET /api/setup/status` 改为公开端点（只暴露缺失键名）；初始化完成后 `/setup` 自动关闭并跳登录
+- **Setup Token 安全模型**（C-2）：首次启动控制台打印一次性随机 Token（48 hex，30min TTL，过期惰性重新生成再打印，常量时间比较），门禁全部 `/api/setup/*` 写端点；与默认管理员密码解耦；向导完成后立即失效
+- **本地服务自动检测**（C-4/C-5）：`/api/setup/detect` 探测 Ollama `:11434/api/tags`（返回已装模型列表，向导一键选用）与 OpenCode `/health`（已配置 hub-opencode URL → 4096 → 8081 顺序探测）
+- **配置变更审计**（C-16）：`config_update` / `config_delete` / `setup_complete` 落 `operation_logs`，token/secret/api_key/password 全脱敏
+- **敏感字段掩码**（C-17）：`GET /api/config` 对 `gitea.admin_token` / `gitea.webhook_secret` / `llm.providers.*.api_key` 返回 `********` 占位；PUT 中占位 = 保持原值（含 providers JSON 内 api_key 还原）；测试连接端点对占位自动回退已存真值；前端表单三处掩码提示
+
+### Changed
+- **`gitea.webhook_secret` 不再必填**（C-6）：`CheckSetup` 移除该项；向导完成与 `PUT /api/config`（配置 Gitea 且无 secret 时）自动生成 32 字节 hex——空 secret 此前会静默关闭 webhook 签名校验
+- **向导完成即生效**（C-8）：`POST /api/setup/complete` 服务端复测 Gitea（C-7）→ 批量写入 DB（llm.providers 合并保留既有 provider）→ `onConfigChange` 热重载 LLM Registry / Gitea Client / Dispatcher / webhook ingress → 审计 → 关闭 setup 面
+- **Dashboard 引导卡**（C-10）：setup-aware，步骤高亮跟随真实初始化进度
+- **C-9 首次登录强制改密**经核对此前已完整实现（`MustChangePassword` + jwtWrap 403 + 前端守卫），向导成功页补充首登提示
+
 git_sync 写传输改造（branch `phase2.6/git-sync`，三阶段计划 v3.1）：
 
 ### Added
