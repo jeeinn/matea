@@ -1,6 +1,21 @@
 package config
 
-import "strings"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"strings"
+)
+
+// GenerateWebhookSecret returns a new random 32-byte hex secret for
+// gitea.webhook_secret (C-6). Called when the setup wizard completes without
+// an explicit secret, or when webhook ingress starts with an empty one.
+func GenerateWebhookSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
 
 // SetupStatus reports whether essential Gitea / LLM settings are incomplete.
 type SetupStatus struct {
@@ -28,9 +43,10 @@ func CheckSetup(cfg *Config) SetupStatus {
 	if strings.TrimSpace(cfg.Gitea.AdminToken) == "" {
 		missing = append(missing, "gitea.admin_token")
 	}
-	if strings.TrimSpace(cfg.Gitea.WebhookSecret) == "" {
-		missing = append(missing, "gitea.webhook_secret")
-	}
+	// C-6 (Phase 2.5): gitea.webhook_secret is NOT required for setup — when
+	// absent it is auto-generated (32-byte hex) at setup completion or on first
+	// webhook-ingress use. Blocking first-run on a secret the user never typed
+	// violates "能自动的绝不手动".
 
 	giteaOK := len(missing) == 0
 

@@ -112,6 +112,16 @@ func main() {
 	// Get active config (may have DB overrides)
 	activeCfg := cfgManager.Get()
 
+	// First-run setup (Phase 2.5): while Gitea/LLM config is incomplete, arm
+	// the Setup Token that gates the public /api/setup/* wizard endpoints.
+	// The token is printed to the console (the root of trust); it is decoupled
+	// from the default admin password and self-regenerates on expiry.
+	var setupTokens *api.SetupTokenManager
+	if setup := config.CheckSetup(activeCfg); setup.SetupRequired {
+		setupTokens = api.NewSetupTokenManager()
+		log.Printf("[INFO] Setup incomplete (missing: %s) — Web UI will open the setup wizard", strings.Join(setup.Missing, ", "))
+	}
+
 	// Initialize LLM registry
 	llmRegistry := llm.NewRegistry(&activeCfg.LLM)
 	llmRegistry.SetRateLimitBackoff(activeCfg.Dispatcher.RateLimitBackoff, activeCfg.LLM.RateLimitRetries)
@@ -229,6 +239,9 @@ func main() {
 		log.Printf("[INFO] LLM registry, Gitea client, workflow policy, and deliver config reloaded")
 	})
 	apiHandler.SetIssueController(d)
+	if setupTokens != nil {
+		apiHandler.SetSetupTokenManager(setupTokens)
+	}
 	apiHandler.RegisterRoutes(mux)
 
 	// Auth API

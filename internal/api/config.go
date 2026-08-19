@@ -16,6 +16,101 @@ import (
 
 // --- System Config endpoints ---
 
+// configMaskedPlaceholder is the sentinel shown in place of sensitive values
+// by GET /api/config (C-17). On PUT, a key carrying this exact value is left
+// unchanged ("keep current"), so the admin UI can round-trip a masked form
+// without clobbering secrets.
+const configMaskedPlaceholder = "********"
+
+// sensitiveConfigKeys are masked in GET /api/config responses.
+var sensitiveConfigKeys = map[string]bool{
+	"gitea.admin_token":    true,
+	"gitea.webhook_secret": true,
+}
+
+// maskDisplayMap returns a copy of the display map with sensitive values
+// replaced by the placeholder. llm.providers keeps its structure but each
+// provider's api_key is masked. Internal consumers (test endpoints) use the
+// raw GetDisplayMap; only HTTP responses are masked.
+func maskDisplayMap(display map[string]interface{}) map[string]interface{} {
+	masked := make(map[string]interface{}, len(display))
+	for k, v := range display {
+		masked[k] = v
+	}
+	for key := range sensitiveConfigKeys {
+		if v, ok := masked[key]; ok {
+			if s, isStr := v.(string); isStr && s != "" {
+				masked[key] = configMaskedPlaceholder
+			}
+		}
+	}
+	if raw, ok := masked["llm.providers"]; ok {
+		if providers, err := config.ParseProvidersFromInterface(raw); err == nil && len(providers) > 0 {
+			cp := make(map[string]config.ProviderConfig, len(providers))
+			for name, pc := range providers {
+				if pc.APIKey != "" {
+					pc.APIKey = configMaskedPlaceholder
+				}
+				cp[name] = pc
+			}
+			masked["llm.providers"] = cp
+		}
+	}
+	return masked
+}
+
+// resolveMaskedEntries rewrites an update payload so masked values mean
+// "keep current": sensitive keys equal to the placeholder are dropped, and
+// sentinel api_keys inside llm.providers are restored from the active config.
+// Returns the filtered entries (may be empty).
+func (h *Handler) resolveMaskedEntries(entries map[string]string) map[string]string {
+	resolved := make(map[string]string, len(entries))
+	for key, value := range entries {
+		if sensitiveConfigKeys[key] && value == configMaskedPlaceholder {
+			continue
+		}
+		if key == "llm.providers" {
+			value = h.restoreMaskedProviderKeys(value)
+		}
+		resolved[key] = value
+	}
+	return resolved
+}
+
+// restoreMaskedProviderKeys replaces placeholder api_keys in a providers JSON
+// payload with the currently configured keys.
+func (h *Handler) restoreMaskedProviderKeys(payload string) string {
+	incoming, err := config.ParseProvidersJSON(payload)
+	if err != nil {
+		return payload // let Update() surface the validation error
+	}
+	needsRestore := false
+	for _, pc := range incoming {
+		if pc.APIKey == configMaskedPlaceholder {
+			needsRestore = true
+			break
+		}
+	}
+	if !needsRestore {
+		return payload
+	}
+	current := map[string]config.ProviderConfig{}
+	if h.cfgManager != nil {
+		current = h.cfgManager.Get().LLM.Providers
+	}
+	for name, pc := range incoming {
+		if pc.APIKey == configMaskedPlaceholder {
+			pc.APIKey = current[name].APIKey // zero value when provider is new
+			incoming[name] = pc
+		}
+	}
+	data, err := json.Marshal(incoming)
+	if err != nil {
+		return payload
+	}
+	return string(data)
+}
+
 func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
 	if h.cfgManager == nil {
 		writeError(w, 500, "config manager not initialized")
@@ -26,7 +121,7 @@ func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, display)
+	writeJSON(w, 200, maskDisplayMap(display))
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +141,19 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C-17: masked placeholders mean "keep current value".
+	entries = h.resolveMaskedEntries(entries)
+	if len(entries) == 0 {
+		// Everything submitted was a keep-current placeholder: no-op.
+		display, err := h.cfgManager.GetDisplayMap()
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, maskDisplayMap(display))
+		return
+	}
+
 	// Validate all keys first
 	for key := range entries {
 		if !config.IsConfigKey(key) {
@@ -55,21 +163,28 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply all entries
+	var applied []string
 	for key, value := range entries {
 		if err := h.cfgManager.Update(key, value); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
+		applied = append(applied, fmt.Sprintf("%s=%s", key, maskConfigValue(key, value)))
 	}
 
 	h.notifyConfigChange()
+
+	// C-16: audit config changes (values masked; never log secrets).
+	if h.db != nil {
+		h.db.LogOperation(0, 0, "config_update", strings.Join(applied, "; "))
+	}
 
 	display, err := h.cfgManager.GetDisplayMap()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, display)
+	writeJSON(w, 200, maskDisplayMap(display))
 }
 
 func (h *Handler) deleteConfigEntry(w http.ResponseWriter, r *http.Request) {
@@ -91,12 +206,17 @@ func (h *Handler) deleteConfigEntry(w http.ResponseWriter, r *http.Request) {
 
 	h.notifyConfigChange()
 
+	// C-16: audit the revert-to-file-default (no value to mask on delete).
+	if h.db != nil {
+		h.db.LogOperation(0, 0, "config_delete", key+" (reverted to file config)")
+	}
+
 	display, err := h.cfgManager.GetDisplayMap()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, display)
+	writeJSON(w, 200, maskDisplayMap(display))
 }
 
 func (h *Handler) getProviderModels(w http.ResponseWriter, r *http.Request) {
@@ -290,6 +410,34 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// maskConfigValue redacts sensitive values for the audit log (C-16): token /
+// secret / api_key / password keys are fully masked; llm.providers keeps its
+// structure but masks each provider's api_key.
+func maskConfigValue(key, value string) string {
+	lower := strings.ToLower(key)
+	if strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "api_key") || strings.Contains(lower, "password") {
+		return "****"
+	}
+	if key == "llm.providers" {
+		var providers map[string]map[string]interface{}
+		if err := json.Unmarshal([]byte(value), &providers); err != nil {
+			return "****" // unparseable — don't risk leaking
+		}
+		for _, fields := range providers {
+			if v, ok := fields["api_key"]; ok && v != "" {
+				fields["api_key"] = "****"
+			}
+		}
+		data, err := json.Marshal(providers)
+		if err != nil {
+			return "****"
+		}
+		return string(data)
+	}
+	return value
 }
 
 func asString(v interface{}) string {

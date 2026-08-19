@@ -205,7 +205,8 @@ func TestCheckSetupIncomplete(t *testing.T) {
 	assert.False(t, st.LLMOK)
 	assert.Contains(t, st.Missing, "gitea.url")
 	assert.Contains(t, st.Missing, "gitea.admin_token")
-	assert.Contains(t, st.Missing, "gitea.webhook_secret")
+	// C-6: webhook_secret is optional (auto-generated) — never blocks setup.
+	assert.NotContains(t, st.Missing, "gitea.webhook_secret")
 	assert.Contains(t, st.Missing, "llm.providers")
 }
 

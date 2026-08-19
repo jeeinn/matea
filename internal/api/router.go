@@ -22,6 +22,7 @@ type Handler struct {
 	cfgManager     *config.ConfigManager
 	onConfigChange func(cfg *config.Config)
 	issueCtrl      IssueController
+	setupTokens    *SetupTokenManager
 }
 
 // IssueController cancels in-flight work and resets issue/task state.
@@ -50,6 +51,12 @@ func (h *Handler) SetIssueController(c IssueController) {
 	h.issueCtrl = c
 }
 
+// SetSetupTokenManager wires the first-run setup token (C-2). Called by main
+// only while setup is incomplete; a nil manager disables the setup endpoints.
+func (h *Handler) SetSetupTokenManager(m *SetupTokenManager) {
+	h.setupTokens = m
+}
+
 // RegisterRoutes registers all API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// User management endpoints
@@ -69,8 +76,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/config/test/gitea", h.jwtWrap(h.testGiteaConfig))
 	mux.HandleFunc("POST /api/config/test/llm", h.jwtWrap(h.testLLMConfig))
 
-	// Setup status (JWT; used by Web UI banner)
-	mux.HandleFunc("GET /api/setup/status", h.jwtWrap(h.getSetupStatus))
+	// First-run setup (Phase 2.5). Status is PUBLIC: the unauthenticated Web
+	// UI needs it to choose between the wizard and the login page (it exposes
+	// only missing-key names, never values). Mutation endpoints are gated by
+	// the console-printed Setup Token (C-2) and self-disable once setup is
+	// complete.
+	mux.HandleFunc("GET /api/setup/status", h.getSetupStatus)
+	mux.HandleFunc("POST /api/setup/verify", h.requireSetupToken(h.verifySetupToken))
+	mux.HandleFunc("GET /api/setup/detect", h.requireSetupToken(h.detectLocalServices))
+	mux.HandleFunc("POST /api/setup/test/gitea", h.requireSetupToken(h.testSetupGitea))
+	mux.HandleFunc("POST /api/setup/test/llm", h.requireSetupToken(h.testSetupLLM))
+	mux.HandleFunc("POST /api/setup/complete", h.requireSetupToken(h.completeSetup))
 
 	// Prompt template endpoints
 	mux.HandleFunc("GET /api/prompt-templates", h.authorizeWrap(h.listPromptTemplates))
