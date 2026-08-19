@@ -22,7 +22,7 @@ Phase 2.5 配置自动化与首次用户体验（branch `phase2.5/config-automat
 - **Dashboard 引导卡**（C-10）：setup-aware，步骤高亮跟随真实初始化进度
 - **C-9 首次登录强制改密**经核对此前已完整实现（`MustChangePassword` + jwtWrap 403 + 前端守卫），向导成功页补充首登提示
 
-git_sync 写传输改造（branch `phase2.6/git-sync`，三阶段计划 v3.1）：
+git_sync 写传输改造（branch `phase2.6/git-sync`，**已合入 master，PR #29**，三阶段计划 v3.1）：
 
 ### Added
 - **git_sync 信任模型**：Hub 持任务级凭据自 clone/commit/push 草稿分支 `matea/hub-{taskID}`，Matea 只 fetch + 校验 + 开 PR + 回收凭据；admin/agent token 永不离开 Matea（docs/HUB-BACKENDS.md）
