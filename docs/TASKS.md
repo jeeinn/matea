@@ -288,8 +288,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 - [x] **C4 性能预算** ✅（2026-08-19）
   `internal/agents/gitsync_perf_test.go`：**CI 内回归** `TestGitSyncApproveLargeRepoStress`（fast-import 合成 300-commit 仓库 + 5 commit/150 路径草稿 → Approve 全过 + fetch 证据范围完整，无计时断言防 flake）；**opt-in benchmark** `BenchmarkGitSyncApprove` 三档（50/1k/5k base commits）。实测（Windows 11，file://）：1.4–1.8s/op，历史长度本地不敏感、固定进程/协议开销为主。**SLO 落档 HUB-BACKENDS.md §七**：Approve Matea 侧 ≤2s @5k commits、≤1.5s @1k；超预算既定缓解 `--filter=blob:none`（merge-base/log/diff --name-only 无需 blob，传输降一个数量级）。修复 fixture bug：fast-import 流内每个 commit 都带 `from` 会反复重置父提交（draft 链断成单提交）——仅首 commit 携带。
 
-- [ ] **C5 阶段 C 验收 + 发版**
-  配置仅 `git_sync` 一种 transport；全量测试 PASS；文档齐备；发版（新 tag）。
+- [x] **C5 阶段 C 验收** ✅（2026-08-19，发版按用户决定留待手动）
+  **验收清单全过**：① 配置仅 `git_sync` 一种 transport（C1 后 `ValidWorkspaceTransports()=[git_sync]`，测试 pin 死）；② 全量 17 包 `go test ./...` PASS + `go vet` 干净 + `go build` 成功；③ 文档齐备——[HUB-BACKENDS.md](HUB-BACKENDS.md)（信任模型/契约/SLO）、CHANGELOG（Phase 2 合入标注 + git_sync A–C 条目）、remote-hub-deployment-flow.md（实现状态横幅）、config.full-example.yaml（迁移示例）；④ 工作树干净，`phase2.6/git-sync` 领先 master 19 commits（A0–C5 全链）。**发版（新 tag）按用户决定留待手动执行**——分支已就绪，可随时合并 master 并打 tag。
 
 ---
 
