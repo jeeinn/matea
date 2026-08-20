@@ -73,6 +73,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config", h.jwtWrap(h.updateConfig))
 	mux.HandleFunc("DELETE /api/config/{key}", h.jwtWrap(h.deleteConfigEntry))
 	mux.HandleFunc("GET /api/config/providers/{name}/models", h.jwtWrap(h.getProviderModels))
+	mux.HandleFunc("GET /api/config/provider-presets", h.jwtWrap(h.listProviderPresets))
+	mux.HandleFunc("POST /api/config/discover-models", h.jwtWrap(h.discoverModelsHandler))
+	mux.HandleFunc("POST /api/config/gitea-webhook", h.jwtWrap(h.giteaWebhookHandler))
 	mux.HandleFunc("POST /api/config/test/gitea", h.jwtWrap(h.testGiteaConfig))
 	mux.HandleFunc("POST /api/config/test/llm", h.jwtWrap(h.testLLMConfig))
 
@@ -87,6 +90,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/test/gitea", h.requireSetupToken(h.testSetupGitea))
 	mux.HandleFunc("POST /api/setup/test/llm", h.requireSetupToken(h.testSetupLLM))
 	mux.HandleFunc("POST /api/setup/complete", h.requireSetupToken(h.completeSetup))
+	mux.HandleFunc("GET /api/setup/provider-presets", h.requireSetupToken(h.listProviderPresets))
+	mux.HandleFunc("POST /api/setup/discover-models", h.requireSetupToken(h.discoverModelsHandler))
 
 	// Prompt template endpoints
 	mux.HandleFunc("GET /api/prompt-templates", h.authorizeWrap(h.listPromptTemplates))

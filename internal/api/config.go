@@ -56,6 +56,13 @@ func maskDisplayMap(display map[string]interface{}) map[string]interface{} {
 			masked["llm.providers"] = cp
 		}
 	}
+	// C-14: mask hub backend passwords in the agents.backends document so GET
+	// /config never leaks credentials (matches llm.providers api_key masking).
+	if raw, ok := masked["agents.backends"]; ok {
+		if s, isStr := raw.(string); isStr {
+			masked["agents.backends"] = config.MaskSensitiveInBackendsJSON(s)
+		}
+	}
 	return masked
 }
 
@@ -71,6 +78,9 @@ func (h *Handler) resolveMaskedEntries(entries map[string]string) map[string]str
 		}
 		if key == "llm.providers" {
 			value = h.restoreMaskedProviderKeys(value)
+		}
+		if key == "agents.backends" {
+			value = h.restoreMaskedBackendPasswords(value)
 		}
 		resolved[key] = value
 	}
@@ -102,6 +112,34 @@ func (h *Handler) restoreMaskedProviderKeys(payload string) string {
 		if pc.APIKey == configMaskedPlaceholder {
 			pc.APIKey = current[name].APIKey // zero value when provider is new
 			incoming[name] = pc
+		}
+	}
+	data, err := json.Marshal(incoming)
+	if err != nil {
+		return payload
+	}
+	return string(data)
+}
+
+// restoreMaskedBackendPasswords replaces placeholder passwords inside an
+// agents.backends JSON payload with the currently configured passwords,
+// mirroring restoreMaskedProviderKeys (C-14 / C-17). This keeps the DB from
+// persisting masked values so a server restart does not corrupt credentials.
+func (h *Handler) restoreMaskedBackendPasswords(payload string) string {
+	incoming, err := config.ParseAgentBackendsJSON(payload)
+	if err != nil {
+		return payload // let Update() surface the validation error
+	}
+	current := config.AgentBackendsConfig{}
+	if h.cfgManager != nil {
+		current = h.cfgManager.Get().Agents.Backends
+	}
+	for name, bc := range incoming.Backends {
+		if bc.Auth.Password == configMaskedPlaceholder {
+			if cur, ok := current.Backends[name]; ok {
+				bc.Auth.Password = cur.Auth.Password // zero value when backend is new
+			}
+			incoming.Backends[name] = bc
 		}
 	}
 	data, err := json.Marshal(incoming)
@@ -266,6 +304,130 @@ func (h *Handler) getProviderModels(w http.ResponseWriter, r *http.Request) {
 		"source":  source,
 		"models":  models,
 	})
+}
+
+// listProviderPresets returns the built-in LLM provider presets (C-11).
+// The single source of truth lives in config.DefaultProviderPresets; both the
+// first-run wizard and SystemConfig fetch it instead of hardcoding the list.
+func (h *Handler) listProviderPresets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]interface{}{"presets": config.DefaultProviderPresets()})
+}
+
+// discoverModelsHandler live-discovers models for an arbitrary (possibly
+// unsaved) provider from its connection details (C-12). Mirrors the response
+// shape of getProviderModels so the frontends can share rendering.
+func (h *Handler) discoverModelsHandler(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Provider string `json:"provider"`
+		BaseURL  string `json:"base_url"`
+		APIKey   string `json:"api_key"`
+		Type     string `json:"type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, 400, "invalid request body")
+		return
+	}
+	baseURL := strings.TrimSpace(payload.BaseURL)
+	if baseURL == "" {
+		writeError(w, 400, "base_url 不能为空")
+		return
+	}
+	providerType := strings.TrimSpace(payload.Type)
+	if providerType == "" {
+		providerType = "openai_compatible"
+	}
+	models, source, err := h.cfgManager.DiscoverModels(
+		strings.TrimSpace(payload.Provider),
+		baseURL,
+		strings.TrimSpace(payload.APIKey),
+		providerType,
+	)
+	success := err == nil
+	resp := map[string]interface{}{
+		"success": success,
+		"source":  source,
+		"models":  models,
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, 200, resp)
+}
+
+// giteaWebhookHandler checks or registers the inbound (Gitea→Matea) system
+// webhook (C-13). The callback URL is {server.public_url}/webhook/gitea.
+//   - action "check": report whether such a webhook already exists.
+//   - action "register": ensure it exists (idempotent), creating if missing.
+//
+// When server.public_url is empty the inbound webhook is considered closed and
+// the endpoint returns 200 with closed=true (no Gitea call is made).
+func (h *Handler) giteaWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	if h.cfgManager == nil {
+		writeError(w, 500, "config manager not initialized")
+		return
+	}
+	var payload struct {
+		Action string `json:"action"` // check | register
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, 400, "invalid request body")
+		return
+	}
+
+	cfg := h.cfgManager.Get()
+	publicURL := strings.TrimSpace(cfg.Server.PublicURL)
+	if publicURL == "" {
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true,
+			"closed":  true,
+			"message": "server.public_url 未配置，入站 Webhook 已关闭（请在「入站 Webhook」中填写 Matea 对外地址）",
+		})
+		return
+	}
+	if strings.TrimSpace(cfg.Gitea.URL) == "" || strings.TrimSpace(cfg.Gitea.AdminToken) == "" {
+		writeError(w, 400, "Gitea 地址或管理员 Token 未配置，无法操作站点级 Webhook")
+		return
+	}
+
+	callbackURL := strings.TrimRight(publicURL, "/") + "/webhook/gitea"
+	client := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.AdminToken)
+
+	switch strings.TrimSpace(payload.Action) {
+	case "check":
+		hooks, err := client.ListAdminWebhooks()
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "error": err.Error(), "callback_url": callbackURL})
+			return
+		}
+		registered, hookID := false, int64(0)
+		for _, wh := range hooks {
+			if wh.Config.URL == callbackURL {
+				registered, hookID = true, wh.ID
+				break
+			}
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"success":     true,
+			"registered":  registered,
+			"hook_id":     hookID,
+			"callback_url": callbackURL,
+		})
+	case "register":
+		registered, created, hookID, err := client.EnsureWebhook(callbackURL, cfg.Gitea.WebhookSecret, nil)
+		if err != nil {
+			writeJSON(w, 200, map[string]interface{}{"success": false, "error": err.Error(), "callback_url": callbackURL})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"success":     true,
+			"registered":  registered,
+			"created":     created,
+			"hook_id":     hookID,
+			"callback_url": callbackURL,
+		})
+	default:
+		writeError(w, 400, "action 必须为 check 或 register")
+	}
 }
 
 func (h *Handler) notifyConfigChange() {
@@ -478,6 +640,10 @@ func maskConfigValue(key, value string) string {
 			return "****"
 		}
 		return string(data)
+	}
+	// C-14: redact hub backend passwords in the audit log (declared in config).
+	if key == "agents.backends" {
+		return config.MaskSensitiveInBackendsJSON(value)
 	}
 	return value
 }
