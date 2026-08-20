@@ -1,49 +1,19 @@
-# Matea — 精简可运行示例
-# 复制为 config.yaml 并修改（config.yaml 已在 .gitignore，请勿提交含 Token 的配置）
-# 完整选项与注释见 config.full-example.yaml
-# 敏感项建议用环境变量：见 .env.example（复制为 .env，勿提交）
-
+# Matea 最小示例：复制为 config.yaml 后修改；完整选项见 config.full-example.yaml
 server:
   host: "0.0.0.0"
   port: 8080
-
-gitea:
-  url: "http://localhost:3000"
-  # Gitea → 个人设置 → 应用 → 生成令牌（需 write:admin）
-  admin_token: "${GITEA_ADMIN_TOKEN}"
-  # 与 Gitea Webhook 设置中的密钥一致
-  webhook_secret: "your-webhook-secret-here"
-
-workspace:
-  # Session / 任务工作区根目录（省略时代码默认为 ./data/work）
-  base_dir: "./data/work"
-
 database:
   path: "./data/matea.db"
-
-logging:
-  level: "info"
-  path: "./data/logs"
-
+# 可选：不配也能启动，但无法触发 Issue/PR 自动化
+gitea:
+  url: "http://localhost:3000"
+  admin_token: "${GITEA_ADMIN_TOKEN}"
+  webhook_secret: "your-webhook-secret-here"
+# 可选：仅 builtin 时可不配；hub 后端在 Web UI「Hub 后端」配置
 llm:
-  providers:
-    deepseek:
-      base_url: "https://api.deepseek.com/v1"
-      api_key: "${DEEPSEEK_API_KEY}"
-      type: "openai_compatible"
-  defaults:
-    provider: "deepseek"
-    model: "deepseek-v4-flash"
-
-# 生产环境必须更换 jwt_secret；首次登录后立即修改默认管理员密码
+  providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "${DEEPSEEK_API_KEY}", type: "openai_compatible" } }
+  defaults: { provider: "deepseek", model: "deepseek-v4-flash" }
+# 生产必须更换；首次登录后立即改默认管理员密码
 auth:
   jwt_secret: "${JWT_SECRET:-change-me-in-production}"
   default_admin_password: "${ADMIN_PASSWORD:-admin123}"
-
-# 出站扇出（task 2.3.3）：把 Agent 完成事件 POST 到外部 webhook（飞书/企微机器人、自建 bridge、Hub 接收端）
-# 仅出站、无入站；OpenCode 无自带 IM 渠道，配置后 Analyze/Review/Reply 结果才会通知人类；Hermes 自带渠道可留空
-# 留空 = 关闭（结果只落 Gitea，不通知）
-deliver:
-  webhook_url: ""
-  timeout: "10s"
-  max_retries: 1
