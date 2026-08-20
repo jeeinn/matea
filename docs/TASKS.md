@@ -128,22 +128,30 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ### P1
 
-- [~] **C-11 Provider 预设模板**
+- [x] **C-11 Provider 预设模板**
   DeepSeek / OpenAI / Anthropic / SenseNova / Ollama / 自定义；选择预设后自动填充 base_url + 默认模型，用户只填 API Key。
-  部分落地（P0 向导内）：预设列表硬编码在 `SetupWizard.vue`（6 项，选择即填充）；剩余：SystemConfig 复用同一预设源、后端预设端点。
+  落地：`internal/config/provider_presets.go` 单一事实源 + `GET /api/config/provider-presets`（JWT）与 `GET /api/setup/provider-presets`（Setup Token）成对端点；`SetupWizard.vue` 与 `SystemConfig.vue` 均改为从后端拉取同一预设源（移除向导内硬编码；SystemConfig 新增 Provider 对话框「预设」快捷填充）。单测 `TestDefaultProviderPresets` PASS，`go build ./...` + vite build 通过。
 
-- [~] **C-12 自动拉取 LLM 模型列表**
-  测试连接时请求 `/models` 或 `/api/tags`，返回可选模型下拉。
-  部分落地：`GET /api/config/providers/{name}/models` 已有（保存后）；Ollama 模型列表经 `/api/setup/detect` 进入向导；剩余：向导内对任意 provider 的即选即拉（未保存时）。
+- [x] **C-12 自动拉取 LLM 模型列表（即选即拉，未保存 provider 也支持）**
+  向导/SystemConfig 填 base_url + api_key + type 后，点「拉取模型」即调用 discover。
+  落地：复用 `ConfigManager.discoverModels`（已注入 `modelDiscoveryFn`）；新增导出方法 `DiscoverModels(providerName, baseURL, apiKey, providerType)`；`internal/api/config.go` 新增 `discoverModelsHandler`（POST，校验 base_url 非空否则 400，返回 `{success, source, models, error?}`）；路由 `POST /api/config/discover-models`（JWT）与 `POST /api/setup/discover-models`（Setup Token）成对；前端 `setup.js`/`index.js` 新增 `discoverModels`；`SetupWizard.vue` 默认模型改为「拉取模型」按钮 + 下拉；`SystemConfig.vue` Provider 对话框高级区新增「拉取模型列表」按钮。单测 `TestDiscoverModels` / `TestDiscoverModelsEmptyBaseURL` PASS，`go build ./...` + vite build 通过；`/api/setup/discover-models` 实测：空 base_url→400、不可达→200 干净报错（真实 HTTP 探测已触发）。
 
-- [ ] **C-13 站点级 Webhook 自动注册/状态检查**
-  向导完成时调用 `GET /api/v1/admin/hooks` 检查目标 URL 是否已存在；可选自动注册站点级 webhook。
+- [x] **C-13 站点级 Webhook 自动注册/状态检查（入站 Gitea→Matea）**
+  新增 `server.public_url` 配置（默认空=关闭）；SystemConfig 新增「入站 Webhook」Tab：填对外地址后「检查状态」/「自动注册」站点级 webhook（回调固定 `{public_url}/webhook/gitea`）；向导完成时若已配 public_url 则最佳努力自动注册（非阻塞，失败仅日志）。
+  落地：`internal/config/schema.go` 加 `ServerConfig.PublicURL`；`keys.go` 注册 `server.public_url`（四处处）；`internal/gitea/hooks.go` 新增 `ListAdminWebhooks`/`CreateAdminWebhook`/`EnsureWebhook`（默认事件 issues/issue_comment/pull_request/pull_request_comment）；`internal/api/config.go` 新增 `giteaWebhookHandler`（`POST /api/config/gitea-webhook`，action=check|register，空 public_url 返回 closed，缺 Gitea 凭据返回 400）；`internal/api/setup.go` 完成时 `go ensureInboundWebhook` 最佳努力注册；`SystemConfig.vue` 新增 Tab + 对外地址输入 + 检查/注册按钮 + 回调 URL 展示。
+  测试：`internal/gitea/hooks_test.go`（List/Existing/Create/Empty 4 例）、`internal/api/config_webhook_test.go`（closed/register/check-existing/missing-gitea 4 例）均 PASS；`go build ./...` + vite build 通过。
 
-- [ ] **C-14 `agents.backends`（Hub 后端）配置子页面**
-  在 `ConfigManager` 中新增对 `agents.backends` 的 CRUD 支持；或拆分为独立命名后端资源；SystemConfig 新增「Hub 后端」Tab。
+- [x] **C-14 `agents.backends`（Hub 后端）配置子页面**
+  在 `ConfigManager` 中新增对 `agents.backends` 的 CRUD 支持；SystemConfig 新增「Hub 后端」Tab（默认后端选择 + 后端列表表格 + 新增/编辑/删除弹窗，builtin 不可编辑/删除）。
+  落地：
+  - 配置层 `internal/config/backends.go`：`ParseAgentBackendsJSON`（校验 type/base_url/workspace_transport/default）、`MarshalAgentBackendsJSON`（密码脱敏 `********`）、`MaskSensitiveInBackendsJSON`、`ApplyAgentBackendsJSON`（占位符还原真值）。
+  - 注册键 `agents.backends` 到 `keys.go` 五处（configKeys / getConfigValueTyped / applyConfigEntry / getConfigEntry / parseConfigValue）+ `schema.go` 结构 JSON 标签。
+  - `internal/api/config.go`：`maskDisplayMap` 与 `maskConfigValue` 对 `agents.backends` 脱敏；新增 `restoreMaskedBackendPasswords` 在 API 层还原 `********` 占位符（与 `llm.providers` 一致的 C-17 模式），避免 DB 持久化掩码值、重启后密码损坏。
+  - 前端 `web/src/views/SystemConfig.vue`：「Hub 后端」Tab + 编辑弹窗 + `saveAll`/`applyConfigData` 接入（保存序列化 `backendsConfig`、加载解析 `agents.backends`）。
+  - 测试：`internal/config/backends_test.go`（解析/空值/非法 type/base_url/transport/default、脱敏、占位符还原/新密码 9 例）、`internal/api/config_agents_backends_test.go`（PUT 掩码保持真值 + 重启安全、API 层还原 2 例）均 PASS；`go build ./...` + vite build 通过。
 
-- [ ] **C-15 精简 `config.example.yaml` 到 ~15 行**
-  只保留 `server` / `database` / 可选的 `gitea` / `llm` / `auth`；其余全部移到 Web UI 或自动检测。
+- [x] **C-15 精简 `config.example.yaml` 到 ~15 行**
+  只保留 `server` / `database` / 可选的 `gitea` / `llm` / `auth`；`workspace`/`logging`/`deliver` 移除（workspace=自动默认 ./data/work，logging=默认 info，deliver=SystemConfig「Deliver 通知」Tab 配置）。YAML 已校验可解析（含内联 map 写法）。
 
 - [x] **C-16 配置变更审计日志**（随 P0 提前完成）
   利用 `operation_logs` 表记录 who/when/key（敏感值 mask）。
