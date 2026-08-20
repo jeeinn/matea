@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -254,6 +255,12 @@ func (h *Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	// Hot-reload LLM registry / Gitea clients / webhook ingress (C-8).
 	h.notifyConfigChange()
 
+	// C-13: best-effort auto-register the inbound webhook if a public URL is
+	// configured. Non-fatal: failures are logged, never block setup completion.
+	if pu := strings.TrimSpace(h.cfgManager.Get().Server.PublicURL); pu != "" {
+		go h.ensureInboundWebhook(pu, webhookSecret)
+	}
+
 	// Audit (C-16): never log secrets.
 	if h.db != nil {
 		h.db.LogOperation(0, 0, "setup_complete",
@@ -289,6 +296,30 @@ func maskSecret(s string) string {
 		return "****"
 	}
 	return "****" + s[len(s)-4:]
+}
+
+// ensureInboundWebhook best-effort registers the Gitea system webhook that
+// delivers Issue/PR events to Matea (C-13). It runs in its own goroutine so
+// setup completion is never blocked; errors are logged, never surfaced.
+func (h *Handler) ensureInboundWebhook(publicURL, secret string) {
+	cfg := h.cfgManager.Get()
+	if strings.TrimSpace(cfg.Gitea.URL) == "" || strings.TrimSpace(cfg.Gitea.AdminToken) == "" {
+		log.Printf("[WARN] inbound webhook: Gitea URL/token 未配置，跳过自动注册")
+		return
+	}
+	callbackURL := strings.TrimRight(strings.TrimSpace(publicURL), "/") + "/webhook/gitea"
+	client := gitea.NewClient(cfg.Gitea.URL, cfg.Gitea.AdminToken)
+	registered, created, hookID, err := client.EnsureWebhook(callbackURL, secret, nil)
+	if err != nil {
+		log.Printf("[WARN] inbound webhook: 自动注册失败 %s: %v", callbackURL, err)
+		return
+	}
+	if created {
+		log.Printf("[INFO] inbound webhook: 已创建站点级 webhook hook_id=%d → %s", hookID, callbackURL)
+	} else {
+		log.Printf("[INFO] inbound webhook: 已存在 hook_id=%d → %s（无需重复创建）", hookID, callbackURL)
+	}
+	_ = registered
 }
 
 // isLikelyLocalBaseURL mirrors config.isLikelyLocalLLM for payload-time

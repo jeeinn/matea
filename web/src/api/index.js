@@ -49,3 +49,13 @@ api.interceptors.response.use(
 )
 
 export default api
+
+// Provider presets (C-11): single source of truth lives in the backend.
+export function getProviderPresets() {
+  return api.get('/config/provider-presets')
+}
+
+// C-12: discover models for an (unsaved) provider by base_url/type/api_key.
+export function discoverModels(payload) {
+  return api.post('/config/discover-models', payload)
+}

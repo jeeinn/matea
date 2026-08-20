@@ -50,4 +50,14 @@ export function completeSetup(token, payload) {
   return setupApi.post('/setup/complete', payload, withToken(token))
 }
 
+// Provider presets (C-11): single source of truth lives in the backend.
+export function getProviderPresets(token) {
+  return setupApi.get('/setup/provider-presets', withToken(token))
+}
+
+// C-12: discover models for an (unsaved) provider by base_url/type/api_key.
+export function discoverSetupModels(token, payload) {
+  return setupApi.post('/setup/discover-models', payload, withToken(token))
+}
+
 export default setupApi

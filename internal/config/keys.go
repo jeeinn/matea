@@ -12,6 +12,7 @@ var configKeys = []string{
 	"gitea.admin_token",
 	"gitea.webhook_secret",
 	"gitea.auto_provision",
+	"server.public_url",
 	"llm.defaults.provider",
 	"llm.defaults.model",
 	"llm.providers",
@@ -32,6 +33,7 @@ var configKeys = []string{
 	"agents.loop.no_progress_limit",
 	"agents.loop.verify_commands",
 	"agents.loop.independent_checker",
+	"agents.backends",
 	"debug.conversation_log.enabled",
 	"debug.conversation_log.max_content_chars",
 	"workflow.preset",
@@ -115,6 +117,16 @@ func parseConfigValue(key, value string) (interface{}, error) {
 		return n, nil
 	case "deliver.webhook_url", "deliver.timeout":
 		return value, nil
+	case "agents.backends":
+		parsed, err := ParseAgentBackendsJSON(value)
+		if err != nil {
+			return nil, err
+		}
+		s, err := MarshalAgentBackendsJSON(parsed)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
 	default:
 		return value, nil
 	}
@@ -130,6 +142,8 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Gitea.WebhookSecret
 	case "gitea.auto_provision":
 		return cfg.Gitea.AutoProvision
+	case "server.public_url":
+		return cfg.Server.PublicURL
 	case "llm.defaults.provider":
 		return cfg.LLM.Defaults.Provider
 	case "llm.defaults.model":
@@ -170,6 +184,9 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Agents.Loop.VerifyCommands
 	case "agents.loop.independent_checker":
 		return cfg.Agents.Loop.IndependentChecker
+	case "agents.backends":
+		s, _ := MarshalAgentBackendsJSON(cfg.Agents.Backends)
+		return s
 	case "debug.conversation_log.enabled":
 		return cfg.Debug.ConversationLog.Enabled
 	case "debug.conversation_log.max_content_chars":
@@ -204,6 +221,8 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 			return fmt.Errorf("not a boolean: %s", value)
 		}
 		cfg.Gitea.AutoProvision = b
+	case "server.public_url":
+		cfg.Server.PublicURL = value
 	case "llm.defaults.provider":
 		cfg.LLM.Defaults.Provider = value
 	case "llm.defaults.model":
@@ -307,6 +326,10 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 			return fmt.Errorf("not a boolean: %s", value)
 		}
 		cfg.Agents.Loop.IndependentChecker = b
+	case "agents.backends":
+		if err := ApplyAgentBackendsJSON(cfg, value); err != nil {
+			return err
+		}
 	case "debug.conversation_log.enabled":
 		b, err := parseBoolValue(value)
 		if err != nil {
@@ -354,6 +377,8 @@ func getConfigEntry(cfg *Config, key string) string {
 		return cfg.Gitea.WebhookSecret
 	case "gitea.auto_provision":
 		return strconv.FormatBool(cfg.Gitea.AutoProvision)
+	case "server.public_url":
+		return cfg.Server.PublicURL
 	case "llm.defaults.provider":
 		return cfg.LLM.Defaults.Provider
 	case "llm.defaults.model":
@@ -396,6 +421,9 @@ func getConfigEntry(cfg *Config, key string) string {
 		return string(data)
 	case "agents.loop.independent_checker":
 		return strconv.FormatBool(cfg.Agents.Loop.IndependentChecker)
+	case "agents.backends":
+		s, _ := MarshalAgentBackendsJSON(cfg.Agents.Backends)
+		return s
 	case "debug.conversation_log.enabled":
 		return strconv.FormatBool(cfg.Debug.ConversationLog.Enabled)
 	case "debug.conversation_log.max_content_chars":

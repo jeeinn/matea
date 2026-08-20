@@ -112,7 +112,21 @@
               <el-input v-model="llm.api_key" type="password" show-password size="large" />
             </el-form-item>
             <el-form-item label="默认模型">
-              <el-input v-model="llm.model" size="large" />
+              <div class="model-field">
+                <el-select
+                  v-model="llm.model"
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="选择或输入模型"
+                  size="large"
+                  style="flex: 1"
+                >
+                  <el-option v-for="m in modelOptions" :key="m.id" :label="m.name || m.id" :value="m.id" />
+                </el-select>
+                <el-button :loading="discovering" size="large" @click="discoverModels">拉取模型</el-button>
+              </div>
+              <div class="form-tip">填写 Base URL / 类型 / API Key 后点击「拉取模型」，按当前连接从 /models 接口拉取；也可直接输入自定义模型名。</div>
             </el-form-item>
             <el-alert
               v-if="llmTest.message"
@@ -188,7 +202,9 @@ import {
   detectLocalServices,
   testSetupGitea,
   testSetupLLM,
-  completeSetup
+  completeSetup,
+  getProviderPresets,
+  discoverSetupModels
 } from '../api/setup'
 
 const router = useRouter()
@@ -228,7 +244,10 @@ const generatedSecret = ref('')
 const gitea = ref({ url: 'http://localhost:3000', token: '' })
 const giteaTest = ref({ testing: false, ok: false, message: '' })
 
-const presets = [
+// Presets are fetched from the backend (single source of truth, C-11); the
+// static list below is only a fallback so the UI still renders if the endpoint
+// is momentarily unreachable.
+const fallbackPresets = [
   { key: 'deepseek', label: 'DeepSeek（云端）', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', type: 'openai_compatible' },
   { key: 'openai', label: 'OpenAI（云端）', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', type: 'openai_compatible' },
   { key: 'anthropic', label: 'Anthropic Claude（云端）', provider: 'claude', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-5', type: 'anthropic' },
@@ -236,10 +255,13 @@ const presets = [
   { key: 'ollama', label: 'Ollama（本地）', provider: 'ollama', base_url: 'http://localhost:11434/v1', model: '', type: 'openai_compatible' },
   { key: 'custom', label: '自定义…', provider: '', base_url: '', model: '', type: 'openai_compatible' }
 ]
+const presets = ref(fallbackPresets)
 
 const llm = ref({ preset: 'deepseek', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_key: '', model: 'deepseek-v4-flash', type: 'openai_compatible' })
 const llmTest = ref({ testing: false, ok: false, message: '' })
 const detect = ref({ loading: false, ollama: null, opencode: null })
+const modelOptions = ref([])
+const discovering = ref(false)
 let detectStarted = false
 
 const isLocalBaseURL = computed(() => {
@@ -248,7 +270,7 @@ const isLocalBaseURL = computed(() => {
 })
 
 function applyPreset(key) {
-  const p = presets.find((x) => x.key === key)
+  const p = presets.value.find((x) => x.key === key)
   if (!p) return
   llm.value.provider = p.provider
   llm.value.base_url = p.base_url
@@ -278,6 +300,13 @@ async function enterLLMStep() {
   } catch (e) {
     detect.value.loading = false
   }
+  // Refresh provider presets from the backend (single source of truth, C-11).
+  try {
+    const pr = await getProviderPresets(token.value.trim())
+    if (Array.isArray(pr.presets) && pr.presets.length) presets.value = pr.presets
+  } catch (e) {
+    // keep the static fallback already in `presets`
+  }
 }
 
 async function testGitea() {
@@ -302,6 +331,37 @@ async function testLLM() {
     llmTest.value = { testing: false, ok: !!res.ok, message: res.message || '连接成功' }
   } catch (e) {
     llmTest.value = { testing: false, ok: false, message: e.payload?.message || e.message }
+  }
+}
+
+// C-12: live-discover models from the current (unsaved) provider connection.
+async function discoverModels() {
+  if (!llm.value.base_url.trim()) {
+    ElMessage.warning('请先填写 Base URL')
+    return
+  }
+  discovering.value = true
+  try {
+    const res = await discoverSetupModels(token.value.trim(), {
+      provider: llm.value.provider,
+      base_url: llm.value.base_url.trim(),
+      api_key: llm.value.api_key.trim(),
+      type: llm.value.type
+    })
+    if (res.success && Array.isArray(res.models) && res.models.length) {
+      modelOptions.value = res.models
+      const ids = res.models.map((m) => m.id)
+      if (!ids.includes(llm.value.model)) llm.value.model = res.models[0].id
+      ElMessage.success(`已拉取 ${res.models.length} 个模型`)
+    } else if (res.error) {
+      ElMessage.warning(`拉取失败：${res.error}`)
+    } else {
+      ElMessage.info('未返回模型列表')
+    }
+  } catch (e) {
+    ElMessage.warning(e.payload?.error || e.message || '拉取失败')
+  } finally {
+    discovering.value = false
   }
 }
 
@@ -391,6 +451,20 @@ function goLogin() {
 
 .mb-16 {
   margin-bottom: 16px;
+}
+
+.model-field {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .btn-row {
