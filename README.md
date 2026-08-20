@@ -330,11 +330,11 @@ agents:
   backends:
     my-opencode:
       type: hub-opencode
-      base_url: "http://localhost:8080"
+      base_url: "http://localhost:4096"
       auth:
         username: "matea"
         password: "${OPENCODE_PASSWORD}"
-      workspace_mode: matea_path   # Phase 1 仅支持 matea_path（Matea 准备沙箱路径，OpenCode 在该目录工作）
+      # workspace_transport 默认 git_sync，无需填写
 ```
 
 ### 2. 创建/编辑 Agent 选择 backend
@@ -348,12 +348,12 @@ agents:
 
 ### 3. 运行方式差异
 
-| 任务 | builtin | hub-opencode |
-|------|---------|--------------|
-| `analyze_issue` / `review_pr` / `reply_comment` | 内置 Agent Loop + Tool-Use | 提交 Prompt/上下文给 OpenCode，结果写回 Gitea |
-| `solve_issue` / `fix_bug` | 内置沙箱 + git/PR | OpenCode 在 Matea 准备的沙箱路径工作，Matea 仍负责 git/PR |
+| 任务 | builtin | hub-opencode / hub-hermes |
+|------|---------|---------------------------|
+| `analyze_issue` / `review_pr` / `reply_comment` | 内置 Agent Loop + Tool-Use | 提交 Prompt/上下文给 Hub，结果写回 Gitea |
+| `solve_issue` / `fix_bug` | 内置沙箱 + git/PR | Matea 为任务签发只读/读写 deploy key，Hub 自 clone/commit/push 草稿分支 `matea/hub-{taskID}`；Matea fetch + 四要素校验后开 PR，终态回收 key |
 
-> **注意**：`hub-hermes` / `hub-openclaw` / `hub-api` 在 Phase 1 尚未实现，选择这些 backend 会返回明确错误；完整 Hub 后端支持是 Phase 2 目标。
+> **注意**：`hub-opencode` 与 `hub-hermes` 均已落地，统一走 `git_sync` 工作区传输；`hub-openclaw` / `hub-api` 尚未实现。
 
 ### 4. 出站通知：`deliver` 配置（OpenCode 必备）
 

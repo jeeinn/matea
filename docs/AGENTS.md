@@ -55,11 +55,11 @@ agents:
   backends:
     my-opencode:
       type: hub-opencode
-      base_url: "http://localhost:8080"
+      base_url: "http://localhost:4096"
       auth:
         username: "matea"
         password: "${OPENCODE_PASSWORD}"
-      workspace_mode: matea_path   # Phase 1 仅支持 matea_path
+      # workspace_transport 默认 git_sync，无需填写
 ```
 
 2. 创建 Agent 时 **Coding Backend** 选择 `my-opencode`。
