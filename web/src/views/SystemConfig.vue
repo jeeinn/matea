@@ -20,6 +20,8 @@
         style="margin-bottom: 16px"
       />
 
+      <HealthStatus style="margin-bottom: 16px" />
+
       <el-tabs v-model="activeTab">
         <!-- Tab 1: Gitea 连接 -->
         <el-tab-pane label="Gitea 连接" name="gitea">
@@ -37,19 +39,20 @@
               <el-input v-model="form['gitea.admin_token']" type="password" show-password placeholder="Gitea 管理员 Token" />
               <div class="form-tip">
                 用于自动创建 Agent 账号，需包含 <code>write:admin</code> 权限。<br>
-                获取路径：登录管理员 → 头像 → 设置 → 应用 → 生成新令牌（勾选 admin / repository 相关写权限）
+                获取路径：登录管理员 → 头像 → 设置 → 应用 → 生成新令牌（勾选 admin / repository 相关写权限）<br>
+                <strong>安全提示：已保存的 Token 以 <code>********</code> 掩码显示——保持掩码不变则沿用原值，输入新值即替换。</strong>
                 <el-tag v-if="sourceTag('gitea.admin_token')" size="small" :type="sourceTag('gitea.admin_token') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('gitea.admin_token') }}
                 </el-tag>
               </div>
             </el-form-item>
             <el-form-item label="Webhook 密钥">
-              <el-input v-model="form['gitea.webhook_secret']" type="password" show-password placeholder="Webhook 签名密钥" />
+              <el-input v-model="form['gitea.webhook_secret']" type="password" show-password placeholder="留空则保存时自动生成" />
               <div class="form-tip">
-                自拟一串密钥填到此处，并在 Gitea Webhook 的「密钥」里填<strong>相同值</strong>（两边一致即可，不是从 Gitea 导出的）。<br>
+                自拟一串密钥填到此处，并在 Gitea Webhook 的「密钥」里填<strong>相同值</strong>（两边一致即可，不是从 Gitea 导出的）；<strong>留空保存时系统会自动生成随机密钥</strong>。<br>
                 全站（推荐）：站点管理 → Webhooks → 添加 Webhook（Gitea），目标 URL
                 <code>http://&lt;matea-host&gt;:8080/webhook/gitea</code>，勾选 Issues / Issue 评论 / Pull Request / PR 评论。<br>
-                也可只配组织级（组织设置 → Webhooks）或单个仓库（仓库设置 → Webhooks）。
+                也可只配组织级（组织设置 → Webhooks）或单个仓库（仓库设置 → Webhooks）。掩码规则同上方 Token。
                 <el-tag v-if="sourceTag('gitea.webhook_secret')" size="small" :type="sourceTag('gitea.webhook_secret') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('gitea.webhook_secret') }}
                 </el-tag>
@@ -129,7 +132,7 @@
                   @input="onProvidersJsonInput"
                 />
                 <div class="form-tip">
-                  字段名使用 <code>base_url</code> 与 <code>api_key</code>
+                  字段名使用 <code>base_url</code> 与 <code>api_key</code>；已保存的 api_key 以 <code>********</code> 掩码显示，保持掩码不变则沿用原 Key
                   <el-button type="primary" link size="small" class="help-link" @click="$refs.providerHelp.show()">查看配置示例</el-button>
                   <span v-if="providerNames.length" class="provider-tags">
                     已识别：{{ providerNames.join('、') }}
@@ -385,6 +388,87 @@ npm test'
           </el-form>
         </el-tab-pane>
 
+        <!-- Tab: 入站 Webhook（Gitea → Matea） -->
+        <el-tab-pane label="入站 Webhook" name="inbound">
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            <template #title>入站 Webhook（Gitea → Matea）</template>
+            填写 Matea 对外可访问地址后，可检查 / 自动注册 Gitea 站点级 Webhook，让 Gitea 的 Issue / PR 事件推送到 Matea。
+            <b>留空 = 关闭自动注册（默认）</b>。回调路径固定为 <code>{{ callbackURL || '{public_url}/webhook/gitea' }}</code>。
+          </el-alert>
+          <el-form label-width="160px" class="config-form">
+            <el-form-item label="Matea 对外地址">
+              <el-input
+                v-model="form['server.public_url']"
+                placeholder="https://matea.example.com"
+              />
+              <div class="form-tip">
+                其他服务（如 Gitea）访问 Matea 的公网 / 内网地址，不含尾部斜杠。留空则不注册站点级 Webhook。
+                <el-tag v-if="sourceTag('server.public_url')" size="small" :type="sourceTag('server.public_url') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
+                  {{ sourceTag('server.public_url') }}
+                </el-tag>
+              </div>
+            </el-form-item>
+            <el-form-item label="回调 URL">
+              <code v-if="callbackURL">{{ callbackURL }}</code>
+              <span v-else class="text-muted">（未配置 server.public_url）</span>
+            </el-form-item>
+            <el-form-item label=" ">
+              <el-button :loading="webhookChecking" @click="checkWebhook">检查状态</el-button>
+              <el-button type="primary" :loading="webhookRegistering" @click="registerWebhook">自动注册</el-button>
+              <span v-if="webhookMsg" :class="['test-result', webhookOk ? 'ok' : 'error']">{{ webhookMsg }}</span>
+            </el-form-item>
+            <el-form-item label=" ">
+              <div class="form-tip">
+                手动配置替代方案：Gitea 站点管理 → Webhooks → 添加 Webhook（Gitea），目标 URL 填上面的回调地址，
+                密钥填「Gitea 连接」页的 Webhook 密钥（两边一致），勾选 Issues / Issue 评论 / Pull Request / PR 评论。
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
+        <!-- Tab: Hub 后端（agents.backends CRUD，C-14） -->
+        <el-tab-pane label="Hub 后端" name="backends">
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            <template #title>Hub 后端（agents.backends）</template>
+            配置用于写任务（solve / fix_bug）的编码后端：hub-opencode / hub-hermes。
+            builtin 为内置后端（始终存在，无需配置）。修改后点「保存全部」即时热重载。
+          </el-alert>
+          <el-form label-width="160px" class="config-form">
+            <el-form-item label="默认后端">
+              <el-select v-model="backendsConfig.default" placeholder="选择默认后端" style="width: 100%">
+                <el-option label="builtin（内置）" value="builtin" />
+                <el-option v-for="(_, name) in backendsConfig.backends" :key="name" :label="name" :value="name" />
+              </el-select>
+              <div class="form-tip">新建写任务时使用的编码后端；builtin 始终可用。</div>
+            </el-form-item>
+            <el-form-item label="后端列表">
+              <div class="provider-toolbar">
+                <el-button type="primary" size="small" @click="openBackendDialog()">
+                  <el-icon><Plus /></el-icon> 新增后端
+                </el-button>
+                <span class="form-tip" style="margin-left: 8px">共 {{ Object.keys(backendsConfig.backends).length }} 个后端</span>
+              </div>
+              <el-table :data="backendList" border style="width: 100%; margin-top: 8px" empty-text="暂无 Hub 后端">
+                <el-table-column prop="name" label="名称" width="160" />
+                <el-table-column label="类型" width="130">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.type === 'builtin' ? 'info' : 'primary'">{{ row.type }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="base_url" label="Base URL" />
+                <el-table-column prop="auth.username" label="认证用户" width="120" />
+                <el-table-column prop="health_check.path" label="健康检查" width="140" />
+                <el-table-column label="操作" width="140" fixed="right">
+                  <template #default="{ row }">
+                    <el-button v-if="row.name !== 'builtin'" size="small" type="primary" link @click="openBackendDialog(row.name)">编辑</el-button>
+                    <el-button v-if="row.name !== 'builtin'" size="small" type="danger" link @click="deleteBackend(row.name)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <!-- Tab 6: Prompt 模板 -->
         <el-tab-pane label="Prompt 模板" name="prompts">
           <el-alert title="管理内置 Prompt 模板。自定义模板优先级高于内置模板（DB > 内置）。" type="info" :closable="false" style="margin-bottom: 16px" />
@@ -414,6 +498,49 @@ npm test'
               </template>
             </el-table-column>
           </el-table>
+        </el-tab-pane>
+
+        <!-- Tab: 备份与恢复 (C-20) -->
+        <el-tab-pane label="备份与恢复" name="backup">
+          <el-alert
+            title="导出当前系统配置为 JSON 文件用于备份；导入可将之前导出（或手工编辑）的配置恢复。导入会以占位符 ******** 视为「保持当前值」，不会覆盖现有密钥。"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 16px"
+          />
+          <el-form label-width="120px" class="config-form">
+            <el-form-item label="导出配置">
+              <el-button :loading="exporting" type="primary" @click="exportConfigFile">
+                <el-icon><Download /></el-icon>
+                下载配置备份 (JSON)
+              </el-button>
+              <el-checkbox v-model="exportWithSecrets" style="margin-left: 16px">
+                包含密钥（完整还原用）
+              </el-checkbox>
+              <div v-if="exportWithSecrets" class="form-tip" style="color: var(--el-color-danger)">
+                导出的文件将包含全部真实密钥（admin_token、api_key 等），仅用于完整还原，请务必妥善保管。
+              </div>
+              <div v-else class="form-tip">
+                默认导出已脱敏（密钥显示为 ********）：可安全分享/存档；导入本实例时占位符表示「保持当前值」。
+              </div>
+            </el-form-item>
+            <el-form-item label="导入配置">
+              <el-upload
+                accept=".json,application/json"
+                :auto-upload="false"
+                :show-file-list="true"
+                :limit="1"
+                :on-change="onImportFile"
+              >
+                <el-button :loading="importing" type="warning">
+                  <el-icon><Upload /></el-icon>
+                  选择并导入 JSON
+                </el-button>
+              </el-upload>
+              <div class="form-tip">仅支持从本系统导出的扁平配置格式；非法键会被拒绝。</div>
+            </el-form-item>
+          </el-form>
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -455,6 +582,12 @@ npm test'
       :close-on-click-modal="false"
     >
       <el-form :model="providerForm" label-width="120px">
+        <el-form-item label="预设">
+          <el-select v-model="selectedPreset" placeholder="选择预设快速填充（可选）" style="width: 100%" clearable @change="applyProviderPreset">
+            <el-option v-for="p in presets" :key="p.key" :label="p.label" :value="p.key" />
+          </el-select>
+          <div class="form-tip">选择预设自动填充类型与 Base URL；API Key 仍需手动填写</div>
+        </el-form-item>
         <el-form-item label="Provider 名称" required>
           <el-input
             v-model="providerForm.name"
@@ -483,6 +616,7 @@ npm test'
             show-password
             placeholder="sk-xxx"
           />
+          <div class="form-tip">已保存的 Key 以 <code>********</code> 掩码显示——保持掩码不变则沿用原 Key，输入新值即替换。</div>
         </el-form-item>
 
         <el-collapse v-model="providerAdvancedOpen" class="provider-advanced">
@@ -495,6 +629,15 @@ npm test'
               </el-radio-group>
               <div class="form-tip">
                 自动发现：尝试调用 Provider 的 /models 接口获取模型列表；失败时回退到内置目录
+              </div>
+            </el-form-item>
+            <el-form-item label="模型列表">
+              <div class="model-field">
+                <el-button :loading="discoveringModels" @click="discoverProviderModels">拉取模型列表</el-button>
+                <span v-if="discoverMsg" :class="['test-result', discoverOk ? 'ok' : 'error']">{{ discoverMsg }}</span>
+              </div>
+              <div class="form-tip">
+                按当前「类型 / Base URL / API Key」调用 Provider 的 /models 接口拉取，并填充到下方自定义模型表（选择后自动切到「自定义列表」模式）。
               </div>
             </el-form-item>
             <el-form-item v-if="providerForm.model_discovery === 'custom'" label="自定义模型">
@@ -621,6 +764,67 @@ npm test'
       </template>
     </el-dialog>
 
+    <!-- Hub 后端编辑弹窗（C-14） -->
+    <el-dialog
+      v-model="backendDialogVisible"
+      :title="editingBackendName ? '编辑后端：' + editingBackendName : '新增 Hub 后端'"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="backendForm" label-width="140px">
+        <el-form-item label="后端名称" required>
+          <el-input v-model="backendForm.name" placeholder="如 hub-opencode-1" :disabled="!!editingBackendName" />
+          <div class="form-tip">唯一标识，创建后不可修改</div>
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-select v-model="backendForm.type" style="width: 100%">
+            <el-option label="hub-opencode" value="hub-opencode" />
+            <el-option label="hub-hermes" value="hub-hermes" />
+            <el-option label="builtin（内置）" value="builtin" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Base URL">
+          <el-input v-model="backendForm.base_url" placeholder="http://localhost:8081" :disabled="backendForm.type === 'builtin'" />
+          <div class="form-tip">hub-* 后端的访问地址</div>
+        </el-form-item>
+        <el-form-item label="认证用户">
+          <el-input v-model="backendForm.auth.username" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+        <el-form-item label="认证密码">
+          <el-input v-model="backendForm.auth.password" type="password" show-password placeholder="留空或保持 ******** 表示沿用已存密码" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+        <el-form-item label="超时">
+          <el-input v-model="backendForm.timeout" placeholder="45m" :disabled="backendForm.type === 'builtin'" />
+          <div class="form-tip">编码任务总超时（Go duration）</div>
+        </el-form-item>
+        <el-form-item label="工作区模式">
+          <el-input v-model="backendForm.workspace_mode" placeholder="matea_path" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+        <el-form-item label="工作区传输">
+          <el-select v-model="backendForm.workspace_transport" style="width: 100%" :disabled="backendForm.type === 'builtin'">
+            <el-option label="git_sync（唯一）" value="git_sync" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="健康检查路径">
+          <el-input v-model="backendForm.health_check.path" placeholder="/global/health" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+        <el-form-item label="健康检查间隔">
+          <el-input v-model="backendForm.health_check.interval" placeholder="30s" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+        <el-form-item label="允许路径（glob）">
+          <el-input v-model="backendAllowedText" type="textarea" :rows="3" placeholder="每行一个 glob，如 src/**" :disabled="backendForm.type === 'builtin'" />
+          <div class="form-tip">git_sync diff 白名单：非空时每个变更路径必须匹配其一</div>
+        </el-form-item>
+        <el-form-item label="拒绝路径（glob）">
+          <el-input v-model="backendDeniedText" type="textarea" :rows="3" placeholder="每行一个 glob" :disabled="backendForm.type === 'builtin'" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="backendDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveBackend">保存</el-button>
+      </template>
+    </el-dialog>
+
     <TemplateHelp ref="templateHelp" />
     <ProviderConfigHelp ref="providerHelp" />
   </div>
@@ -628,11 +832,12 @@ npm test'
 
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
-import api from '../api'
-import { Check, Plus, Document, Edit } from '@element-plus/icons-vue'
+import api, { getProviderPresets, discoverModels, exportConfig, importConfig } from '../api'
+import { Check, Plus, Document, Edit, Download, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import TemplateHelp from '../components/TemplateHelp.vue'
 import ProviderConfigHelp from '../components/ProviderConfigHelp.vue'
+import HealthStatus from './HealthStatus.vue'
 
 const activeTab = ref('gitea')
 const form = ref({})
@@ -645,6 +850,141 @@ const giteaTestOk = ref(false)
 const llmTestMessage = ref('')
 const llmTestOk = ref(false)
 const providersJson = ref('')
+
+// C-13: inbound (Gitea→Matea) webhook check/register state.
+const webhookChecking = ref(false)
+const webhookRegistering = ref(false)
+const webhookMsg = ref('')
+const webhookOk = ref(false)
+
+// 回调地址 = server.public_url 去掉尾部斜杠 + /webhook/gitea
+const callbackURL = computed(() => {
+  const u = (form.value['server.public_url'] || '').trim()
+  if (!u) return ''
+  return u.replace(/\/+$/, '') + '/webhook/gitea'
+})
+
+// C-14: Hub 后端（agents.backends）CRUD 状态。
+const backendsConfig = ref({ default: 'builtin', backends: {} })
+const backendDialogVisible = ref(false)
+const editingBackendName = ref('')
+const backendForm = ref({
+  name: '',
+  type: 'hub-opencode',
+  base_url: '',
+  auth: { username: '', password: '' },
+  timeout: '',
+  workspace_mode: 'matea_path',
+  workspace_transport: 'git_sync',
+  health_check: { path: '', interval: '' },
+  allowed_paths: [],
+  denied_paths: []
+})
+const backendAllowedText = ref('')
+const backendDeniedText = ref('')
+
+const backendList = computed(() =>
+  Object.entries(backendsConfig.value.backends || {}).map(([name, cfg]) => ({
+    name,
+    type: cfg.type || 'builtin',
+    base_url: cfg.base_url || '',
+    auth: cfg.auth || { username: '', password: '' },
+    health_check: cfg.health_check || { path: '', interval: '' }
+  }))
+)
+
+const openBackendDialog = (name = null) => {
+  editingBackendName.value = name || ''
+  if (name) {
+    const cur = backendsConfig.value.backends[name] || {}
+    backendForm.value = {
+      name,
+      type: cur.type || 'hub-opencode',
+      base_url: cur.base_url || '',
+      auth: { username: (cur.auth && cur.auth.username) || '', password: (cur.auth && cur.auth.password) || '' },
+      timeout: cur.timeout || '',
+      workspace_mode: cur.workspace_mode || 'matea_path',
+      workspace_transport: cur.workspace_transport || 'git_sync',
+      health_check: { path: (cur.health_check && cur.health_check.path) || '', interval: (cur.health_check && cur.health_check.interval) || '' },
+      allowed_paths: cur.allowed_paths || [],
+      denied_paths: cur.denied_paths || []
+    }
+    backendAllowedText.value = (cur.allowed_paths || []).join('\n')
+    backendDeniedText.value = (cur.denied_paths || []).join('\n')
+  } else {
+    backendForm.value = {
+      name: '',
+      type: 'hub-opencode',
+      base_url: '',
+      auth: { username: '', password: '' },
+      timeout: '',
+      workspace_mode: 'matea_path',
+      workspace_transport: 'git_sync',
+      health_check: { path: '', interval: '' },
+      allowed_paths: [],
+      denied_paths: []
+    }
+    backendAllowedText.value = ''
+    backendDeniedText.value = ''
+  }
+  backendDialogVisible.value = true
+}
+
+const saveBackend = () => {
+  const name = backendForm.value.name.trim()
+  if (!name) {
+    ElMessage.warning('请填写后端名称')
+    return
+  }
+  if (!['hub-opencode', 'hub-hermes', 'builtin'].includes(backendForm.value.type)) {
+    ElMessage.warning('类型无效')
+    return
+  }
+  const isBuiltin = backendForm.value.type === 'builtin'
+  if (!isBuiltin && !backendForm.value.base_url.trim()) {
+    ElMessage.warning('hub-* 后端的 Base URL 不能为空')
+    return
+  }
+  if (editingBackendName.value !== name && backendsConfig.value.backends[name]) {
+    ElMessage.warning('后端名称已存在')
+    return
+  }
+  const entry = {
+    type: backendForm.value.type,
+    base_url: isBuiltin ? '' : backendForm.value.base_url.trim(),
+    auth: isBuiltin
+      ? { username: '', password: '' }
+      : { username: backendForm.value.auth.username.trim(), password: backendForm.value.auth.password },
+    timeout: isBuiltin ? '' : backendForm.value.timeout.trim(),
+    workspace_mode: isBuiltin ? '' : backendForm.value.workspace_mode.trim(),
+    workspace_transport: isBuiltin ? '' : backendForm.value.workspace_transport,
+    health_check: isBuiltin
+      ? { path: '', interval: '' }
+      : { path: backendForm.value.health_check.path.trim(), interval: backendForm.value.health_check.interval.trim() },
+    allowed_paths: isBuiltin ? [] : backendAllowedText.value.split('\n').map(s => s.trim()).filter(Boolean),
+    denied_paths: isBuiltin ? [] : backendDeniedText.value.split('\n').map(s => s.trim()).filter(Boolean)
+  }
+  // rename: drop old key when name changed
+  if (editingBackendName.value && editingBackendName.value !== name) {
+    delete backendsConfig.value.backends[editingBackendName.value]
+  }
+  backendsConfig.value.backends[name] = entry
+  backendDialogVisible.value = false
+  ElMessage.success(editingBackendName.value ? '已更新后端' : '已添加后端')
+}
+
+const deleteBackend = async (name) => {
+  try {
+    await ElMessageBox.confirm(`确定删除后端 "${name}"？`, '确认', { type: 'warning' })
+    delete backendsConfig.value.backends[name]
+    if (backendsConfig.value.default === name) {
+      backendsConfig.value.default = 'builtin'
+    }
+    ElMessage.success('已删除')
+  } catch {
+    // cancel
+  }
+}
 const templateList = ref([])
 const showViewTemplate = ref(false)
 const viewingTemplate = ref(null)
@@ -682,10 +1022,96 @@ const providerForm = ref({
   models: []
 })
 
+// Provider presets (C-11): fetched from the backend, the single source of truth.
+// 后端不可达时的兜底预设（与 SetupWizard.vue 同源同构），避免下拉空白。
+const fallbackPresets = [
+  { key: 'deepseek', label: 'DeepSeek（云端）', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', type: 'openai_compatible' },
+  { key: 'openai', label: 'OpenAI（云端）', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', type: 'openai_compatible' },
+  { key: 'anthropic', label: 'Anthropic Claude（云端）', provider: 'claude', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-5', type: 'anthropic' },
+  { key: 'ollama', label: 'Ollama（本地）', provider: 'ollama', base_url: 'http://localhost:11434/v1', model: '', type: 'openai_compatible' },
+  { key: 'custom', label: '自定义…', provider: '', base_url: '', model: '', type: 'openai_compatible' }
+]
+const presets = ref(fallbackPresets)
+const selectedPreset = ref('')
+const loadProviderPresets = async () => {
+  try {
+    const r = await getProviderPresets()
+    if (Array.isArray(r.presets) && r.presets.length) presets.value = r.presets
+  } catch (e) {
+    // 后端不可达时保留兜底预设，保证预设下拉不空白
+  }
+}
+const applyProviderPreset = (key) => {
+  const p = presets.value.find((x) => x.key === key)
+  if (!p) return
+  if (!providerForm.value.name) providerForm.value.name = p.provider
+  providerForm.value.type = p.type
+  providerForm.value.base_url = p.base_url
+}
+
 // 模型编辑弹窗状态
 const modelDialogVisible = ref(false)
 const editingModelIndex = ref(-1)
 const modelAdvancedOpen = ref([])
+
+// C-12: live model discovery for the provider being edited.
+const discoveringModels = ref(false)
+const discoverMsg = ref('')
+const discoverOk = ref(false)
+
+async function discoverProviderModels() {
+  if (!providerForm.value.base_url.trim()) {
+    ElMessage.warning('请先填写 Base URL')
+    return
+  }
+  if (providerForm.value.models.length > 0) {
+    try {
+      await ElMessageBox.confirm('拉取将覆盖当前自定义模型列表，是否继续？', '确认', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  discoveringModels.value = true
+  discoverMsg.value = ''
+  try {
+    const res = await discoverModels({
+      provider: providerForm.value.name,
+      base_url: providerForm.value.base_url.trim(),
+      api_key: providerForm.value.api_key.trim(),
+      type: providerForm.value.type
+    })
+    if (res.success && Array.isArray(res.models) && res.models.length) {
+      providerForm.value.models = res.models.map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        context_window: m.context_window || 0,
+        max_output: 0,
+        supports_tools: !!m.supports_tools,
+        is_reasoning: !!m.is_reasoning,
+        description: '',
+        input_price: 0,
+        output_price: 0,
+        default_params: {}
+      }))
+      providerForm.value.model_discovery = 'custom'
+      providerAdvancedOpen.value = ['advanced']
+      discoverOk.value = true
+      discoverMsg.value = `已拉取 ${res.models.length} 个模型`
+      ElMessage.success(`已拉取 ${res.models.length} 个模型`)
+    } else if (res.error) {
+      discoverOk.value = false
+      discoverMsg.value = `拉取失败：${res.error}`
+    } else {
+      discoverOk.value = false
+      discoverMsg.value = '未返回模型列表'
+    }
+  } catch (e) {
+    discoverOk.value = false
+    discoverMsg.value = e.payload?.error || e.message || '拉取失败'
+  } finally {
+    discoveringModels.value = false
+  }
+}
 const modelForm = ref({
   id: '',
   name: '',
@@ -786,6 +1212,7 @@ const openProviderDialog = (row = null, index = -1) => {
       model_discovery: 'builtin',
       models: []
     }
+    selectedPreset.value = ''
   }
   providerAdvancedOpen.value = []
   providerDialogVisible.value = true
@@ -1010,6 +1437,21 @@ const applyConfigData = (data) => {
   if (data['llm.providers']) {
     providersJson.value = formatProvidersJson(data['llm.providers'])
   }
+  // C-14: agents.backends arrives as a masked JSON string; parse it into the
+  // backendsConfig editing model. Passwords are masked ("********") and only
+  // replaced on save when the admin types a new value.
+  if (data['agents.backends']) {
+    try {
+      const raw = data['agents.backends']
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      backendsConfig.value = {
+        default: parsed.default || 'builtin',
+        backends: parsed.backends || {}
+      }
+    } catch {
+      backendsConfig.value = { default: 'builtin', backends: {} }
+    }
+  }
   if (data['workflow.gates'] && typeof data['workflow.gates'] === 'object') {
     gatesForm.value = { ...gatesForm.value, ...data['workflow.gates'] }
   }
@@ -1123,6 +1565,7 @@ const saveAll = async () => {
     const entries = {}
     for (const [key, value] of Object.entries(form.value)) {
       if (key === 'llm.providers') continue // handle separately
+      if (key === 'agents.backends') continue // handle separately (C-14)
       if (value === null || value === undefined) continue
       if (value === '' && typeof value !== 'boolean') continue
       if (key === 'agents.loop.verify_commands') {
@@ -1133,6 +1576,9 @@ const saveAll = async () => {
       }
     }
     entries['llm.providers'] = JSON.stringify(providersData)
+    // C-14: agents.backends is a JSON document; passwords left as "********"
+    // mean "keep current" and are restored server-side.
+    entries['agents.backends'] = JSON.stringify(backendsConfig.value)
     entries['workflow.gates'] = JSON.stringify(gatesForm.value)
 
     const data = await api.put('/config', entries)
@@ -1191,10 +1637,147 @@ const testLLM = async () => {
   }
 }
 
+const checkWebhook = async () => {
+  webhookChecking.value = true
+  webhookMsg.value = ''
+  try {
+    const res = await api.post('/config/gitea-webhook', { action: 'check' })
+    if (res.closed) {
+      webhookOk.value = false
+      webhookMsg.value = res.message
+      return
+    }
+    webhookOk.value = res.success
+    if (res.registered) {
+      webhookMsg.value = `已注册（hook_id=${res.hook_id}）→ ${res.callback_url}`
+    } else {
+      webhookMsg.value = `未注册 → ${res.callback_url}（可点「自动注册」）`
+    }
+  } catch (e) {
+    webhookOk.value = false
+    webhookMsg.value = e.response?.data?.error || e.message || '检查失败'
+  } finally {
+    webhookChecking.value = false
+  }
+}
+
+const registerWebhook = async () => {
+  webhookRegistering.value = true
+  webhookMsg.value = ''
+  try {
+    const res = await api.post('/config/gitea-webhook', { action: 'register' })
+    if (res.closed) {
+      webhookOk.value = false
+      webhookMsg.value = res.message
+      return
+    }
+    webhookOk.value = res.success
+    if (res.success) {
+      webhookMsg.value = res.created
+        ? `已创建（hook_id=${res.hook_id}）→ ${res.callback_url}`
+        : `已存在（hook_id=${res.hook_id}），无需重复创建`
+    } else {
+      webhookOk.value = false
+      webhookMsg.value = `注册失败：${res.error}`
+    }
+  } catch (e) {
+    webhookOk.value = false
+    webhookMsg.value = e.response?.data?.error || e.message || '注册失败'
+  } finally {
+    webhookRegistering.value = false
+  }
+}
+
 onMounted(() => {
   loadConfig()
   loadTemplates()
+  loadProviderPresets()
 })
+
+// C-20: 导出当前系统配置为 JSON 文件。默认脱敏；勾选「包含密钥」才带真实密钥。
+const exporting = ref(false)
+const exportWithSecrets = ref(false)
+const exportConfigFile = async () => {
+  exporting.value = true
+  try {
+    const data = await exportConfig(exportWithSecrets.value)
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    a.download = `matea-config-${ts}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    // 延迟释放：部分浏览器在 click 后立即 revoke 会取消下载
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    ElMessage.success('配置已导出')
+  } catch (e) {
+    ElMessage.error('导出失败：' + (e.message || e))
+  } finally {
+    exporting.value = false
+  }
+}
+
+// C-20: 导入所选 JSON 文件并合并到配置。先做客户端预检（大小 / JSON /
+// 格式标识），再弹确认框列出键名，用户确认后才提交，避免误触覆盖系统配置。
+const importing = ref(false)
+const onImportFile = async (file) => {
+  const raw = file?.raw
+  if (!raw) return
+  if (raw.size > 1024 * 1024) {
+    ElMessage.error('文件超过 1MiB，拒绝导入')
+    return
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(await raw.text())
+  } catch (e) {
+    ElMessage.error('文件不是合法的 JSON：' + (e.message || e))
+    return
+  }
+  if (parsed && parsed.format && parsed.format !== 'matea-config-v1') {
+    ElMessage.error(`配置文件格式不符（format=${parsed.format}），仅支持 matea-config-v1`)
+    return
+  }
+  const config = parsed.config || parsed
+  const keys = Object.keys(config || {})
+  if (!keys.length) {
+    ElMessage.warning('文件中没有可导入的配置键')
+    return
+  }
+  const preview = keys.slice(0, 10).join('、') + (keys.length > 10 ? ` 等共 ${keys.length} 项` : '')
+  try {
+    await ElMessageBox.confirm(
+      `即将导入 ${keys.length} 个配置键：${preview}。导入将覆盖系统配置，是否继续？`,
+      '确认导入',
+      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return // 用户取消
+  }
+  importing.value = true
+  try {
+    const res = await importConfig(config)
+    if (res?.errors && res.errors.length) {
+      ElMessage.error((res.message ? res.message + '：' : '导入失败：') + res.errors[0])
+    } else {
+      ElMessage.success(res?.message || '配置已导入')
+    }
+    await loadConfig()
+  } catch (e) {
+    // 400（全量失败 / 校验失败）：优先展示后端 message 与首条错误
+    const payload = e.payload || e.response?.data
+    if (payload?.errors?.length) {
+      ElMessage.error((payload.message ? payload.message + '：' : '导入失败：') + payload.errors[0])
+    } else {
+      ElMessage.error('导入失败：' + (e.message || e))
+    }
+  } finally {
+    importing.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -1281,6 +1864,12 @@ onMounted(() => {
 
 .provider-advanced {
   margin-top: 8px;
+}
+
+.model-field {
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 .model-list-toolbar {

@@ -5,7 +5,7 @@
 > 凭据模型（v3 纠正、v3.1 沿用）：**凭据交给 Hub-* 持有并使用**——Matea 在 `Prepare` 签发限定前缀 read-write deploy key 注入 `GitSyncInfo` 交给 Hub；Hub 持凭据 clone/编辑/commit/push 草稿分支 `matea/hub-{taskID}`；Matea 只 fetch + 三要素校验 + 开 PR（审批）。绝不给 Hub admin token。  
 > OpenCode 与 Hermes **路径对齐**：两者纯作"远端 Hub"对待，**OpenCode 未必同机 sidecar，也可能非同机部署**；差异只在运行位置，同一 Hub 自 push 契约。  
 > 本轮评审微调（v3 → v3.1）：① 阶段 A 之前加 **A0 前置验证**（OpenCode git 能力 spike + deploy key API spike + 决策点）；② 阶段 A 内部 **保留 shared_path/git_sync 共存窗口**（A1-A4 不收紧 `IsWorkspaceTransportValid`，A5 双路径验证后才删）；③ **base_head 漂移默认 fail+告警**（不自动 rebase）；④ **CreatePR helper 提前提取**（A1）；⑤ **SQLite 迁移提前到 A2**；⑥ **B2 拆为 3 子项**。  
-> 配套评估：[20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md)；任务落地：[TASKS.md](TASKS.md) Phase 2.6（本文件与之同步修订）。
+> 配套评估：[20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md)；任务落地：[TASKS.md](../TASKS.md) Phase 2.6（本文件与之同步修订）。
 
 ---
 

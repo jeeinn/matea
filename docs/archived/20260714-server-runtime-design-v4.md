@@ -1,10 +1,10 @@
 # 服务器端 Agent 运行时设计（Server Runtime Design）v4
 
-> 状态：**Path A 已落地**（现行设计权威）；A+ 可选后续见 [TASKS.md](./TASKS.md)  
+> 状态：**Path A 已落地**（现行设计权威）；A+ 可选后续见 [TASKS.md](../TASKS.md)  
 > 目标：锁定产品边界——**内置 Agent 默认保留**；**OpenCode 以本机 sidecar（HTTP）可选接入**；编排与执行分界清晰。  
 > 部署目标：个人/小团队自用，已开源。Gateway 与 OpenCode **同机**为第一期硬约束。  
-> 前身：[v3](./archived/20260714-server-runtime-design-v3.md) · [v2](./archived/20260714-server-runtime-design-v2.md) · [v1](./archived/20260714-server-runtime-design.md) · 早期 CLI 方案：[archived/20260710-opencode-integration.md](./archived/20260710-opencode-integration.md)  
-> Path A 实施清单（已归档）：[archived/20260714-todo-opencode-path-a.md](./archived/20260714-todo-opencode-path-a.md) · 字段笔记：[archived/20260715-opencode-a0-notes.md](./archived/20260715-opencode-a0-notes.md)
+> 前身：[v3](./20260714-server-runtime-design-v3.md) · [v2](./20260714-server-runtime-design-v2.md) · [v1](./20260714-server-runtime-design.md) · 早期 CLI 方案：[archived/20260710-opencode-integration.md](./20260710-opencode-integration.md)  
+> Path A 实施清单（已归档）：[archived/20260714-todo-opencode-path-a.md](./20260714-todo-opencode-path-a.md) · 字段笔记：[archived/20260715-opencode-a0-notes.md](./20260715-opencode-a0-notes.md)
 
 ---
 
@@ -427,12 +427,12 @@ Path C（按需）
 
 | 文档 | 关系 |
 |------|------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 现状实现 |
-| [archived/20260714-server-runtime-design-v3.md](./archived/20260714-server-runtime-design-v3.md) | 编排边界 / Session·worktree；CLI 清单作历史参考 |
-| [archived/20260714-server-runtime-design-v2.md](./archived/20260714-server-runtime-design-v2.md) | 长期 Runtime 愿景（Path B/C） |
-| [archived/20260714-server-runtime-design.md](./archived/20260714-server-runtime-design.md) | v1 初稿（已归档） |
-| [archived/20260710-opencode-integration.md](./archived/20260710-opencode-integration.md) | 早期 OpenCode 规划（CLI 主路径，已废弃） |
-| [archived/20260714-todo-opencode-path-a.md](./archived/20260714-todo-opencode-path-a.md) | Path A 实施清单（已归档；A+ 见 TASKS） |
+| [ARCHITECTURE.md](../ARCHITECTURE.md) | 现状实现 |
+| [archived/20260714-server-runtime-design-v3.md](./20260714-server-runtime-design-v3.md) | 编排边界 / Session·worktree；CLI 清单作历史参考 |
+| [archived/20260714-server-runtime-design-v2.md](./20260714-server-runtime-design-v2.md) | 长期 Runtime 愿景（Path B/C） |
+| [archived/20260714-server-runtime-design.md](./20260714-server-runtime-design.md) | v1 初稿（已归档） |
+| [archived/20260710-opencode-integration.md](./20260710-opencode-integration.md) | 早期 OpenCode 规划（CLI 主路径，已废弃） |
+| [archived/20260714-todo-opencode-path-a.md](./20260714-todo-opencode-path-a.md) | Path A 实施清单（已归档；A+ 见 TASKS） |
 
 ---
 

@@ -1,7 +1,7 @@
 # 服务器端 Agent 运行时设计（Server Runtime Design）
 
 > 状态：已归档（原设计草案 v0.1 / v1）  
-> 现行决策见 [server-runtime-design-v4.md](../server-runtime-design-v4.md)。  
+> 现行决策见 [server-runtime-design-v4.md](20260714-server-runtime-design-v4.md)。  
 > 目标：为 Gitea Agent Gateway 的服务器端 Agent 执行提供可复现、可并发、可持久化记忆的运行时。  
 > 部署目标：Linux（可与 Gitea 同机或独立部署）。定位：个人/小团队自用，最终开源。
 

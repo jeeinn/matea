@@ -283,24 +283,24 @@ auth:
 
 | 缺口 | 当前状态 | 建议处理 |
 |---|---|---|
-| `CheckSetup` 把 `webhook_secret` 当必填 | `internal/config/setup.go:31` | 移除必填，改为向导自动生成 |
-| `/api/setup/status` 需要 JWT | `internal/api/router.go:73` | 新增 public 端点，仅返回布尔 + 是否需要 setup token |
-| `agents.backends` 不在 `configKeys` | `internal/config/keys.go` | 新增支持，或拆分为独立后端资源 |
-| OpenCode 默认端口 8081 不通用 | 文档旧写 8081 | 改为端口可配置 + 常见端口扫描 |
-| 默认管理员密码写死 `admin123` | `internal/config/bootstrap.go:45` | 支持自动生成并打印；首次登录强制改密 |
-| 配置变更无审计 | 当前只有任务日志 | 写入 `operation_logs` 表 |
-| 自动注册 Webhook 范围不清 | 文档写「在 Gitea 上自动注册」 | 明确为站点级，仓库级留到 Agent/Route 配置 |
+| `CheckSetup` 把 `webhook_secret` 当必填 | ~~`internal/config/setup.go:31`~~ ✅ 已修复（C-6） | 移除必填，改为向导自动生成 |
+| `/api/setup/status` 需要 JWT | ~~`internal/api/router.go:73`~~ ✅ 已改公开（C-3） | 新增 public 端点，仅返回布尔 + 是否需要 setup token |
+| `agents.backends` 不在 `configKeys` | `internal/config/keys.go` — 仍待 C-14（P1） | 新增支持，或拆分为独立后端资源 |
+| OpenCode 默认端口 8081 不通用 | ✅ 已修复（C-5）：探测已配置 hub-opencode URL → 4096 → 8081 | 改为端口可配置 + 常见端口扫描 |
+| 默认管理员密码写死 `admin123` | `internal/config/bootstrap.go:45` — 强制改密已生效（C-9），自动生成随机密码仍开放 | 支持自动生成并打印；首次登录强制改密 |
+| 配置变更无审计 | ✅ 已修复（C-16）：`config_update` / `config_delete` / `setup_complete` 落 `operation_logs`（脱敏） | 写入 `operation_logs` 表 |
+| 自动注册 Webhook 范围不清 | 文档写「在 Gitea 上自动注册」— C-13（P1）按站点级实施 | 明确为站点级，仓库级留到 Agent/Route 配置 |
 
 ---
 
 ## 九、验收标准
 
-- [ ] 删除 `config.yaml` 后首次启动，控制台打印 setup token 和 `/setup` 地址；
-- [ ] 在 30 分钟内用 setup token 打开 `/setup`，无需登录完成三步向导；
-- [ ] 向导完成后必须修改默认管理员密码，否则无法进入 Dashboard；
-- [ ] Gitea 测试连接失败时明确提示「Token 无效」或「缺少 write:admin 权限」；
-- [ ] `webhook_secret` 留空可正常完成初始化，且后续在 SystemConfig 中可见自动生成的密钥；
-- [ ] LLM 选择 DeepSeek 预设后只需填 API Key，测试连接成功；
-- [ ] 配置保存后 `system_config` 表有对应记录，且服务无需重启即可生效（热更新）；
-- [ ] 敏感字段（`admin_token`、`api_key`、`webhook_secret`）在 API 响应和前端表单中均 mask；
-- [ ] 配置变更在审计日志中可查。
+- [x] 删除 `config.yaml` 后首次启动，控制台打印 setup token 和 `/setup` 地址；✅ 冒烟验证（横幅 + `/health.setup_required=true`）
+- [x] 在 30 分钟内用 setup token 打开 `/setup`，无需登录完成三步向导；✅ token 门禁 + 公开 status + 失效自动关端点均有测试
+- [x] 向导完成后必须修改默认管理员密码，否则无法进入 Dashboard；✅ 既有 `MustChangePassword` 链路（jwtWrap 403 + 前端守卫）
+- [x] Gitea 测试连接失败时明确提示「Token 无效」或「缺少 write:admin 权限」；✅ 复用 `TestConnection()`（非管理员附警告），complete 服务端复测
+- [x] `webhook_secret` 留空可正常完成初始化，且后续在 SystemConfig 中可见自动生成的密钥；✅ complete 与 PUT /api/config 双路径自动生成（掩码显示）
+- [x] LLM 选择 DeepSeek 预设后只需填 API Key，测试连接成功；✅ 向导 6 预设 + `/api/setup/test/llm`
+- [x] 配置保存后 `system_config` 表有对应记录，且服务无需重启即可生效（热更新）；✅ `TestSetupCompleteFlow` 断言 DB 落库 + notifyConfigChange
+- [x] 敏感字段（`admin_token`、`api_key`、`webhook_secret`）在 API 响应和前端表单中均 mask；✅ `********` 占位 + 保持原值语义
+- [x] 配置变更在审计日志中可查。✅ `operation_logs`（脱敏）

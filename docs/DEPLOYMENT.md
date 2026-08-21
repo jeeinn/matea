@@ -70,10 +70,12 @@ chmod +x matea-linux-amd64
 
 然后：
 
-1. 浏览器打开 http://127.0.0.1:8080  
+1. 浏览器打开 http://127.0.0.1:8080/setup 进入**首启三步向导**（Gitea 连接 → LLM 模型 → 确认完成）。向导接口需 **Setup Token** 鉴权：首次启动时打印在控制台横幅中（48 位十六进制，**30 分钟 TTL**，过期后自动重新生成并再次打印）
 2. 使用 `admin` / `admin123` 登录并**修改密码**  
-3. 在 **系统配置** 填写 Gitea URL / Token / Webhook Secret 与 LLM Provider  
+3. 向导之外，也可随时在 **系统配置** 调整 Gitea URL / Token / Webhook Secret 与 LLM Provider  
 4. 顶栏「未完成初始化」提示消失后即可配置 Agent 并接收 Webhook  
+
+> **可选：自动注册入站 Webhook**。配置 `server.public_url`（Matea 对外地址，如反代 HTTPS 域名）后，向导完成时会**最佳努力**自动向 Gitea 注册站点级入站 Webhook（回调固定 `{public_url}/webhook/gitea`；失败仅记日志、不阻塞完成）。也可稍后在「系统配置 → 入站 Webhook」Tab 手动检查/注册。
 
 Windows 下载 `matea-windows-amd64.exe` 后双击或在终端运行即可。
 
@@ -250,8 +252,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=gateway
-Group=gateway
+User=matea
+Group=matea
 WorkingDirectory=/opt/matea
 ExecStart=/opt/matea/matea -config /opt/matea/config.yaml
 Restart=on-failure
@@ -286,7 +288,7 @@ API_AUTH_TOKEN=your-api-token
 
 ```bash
 # 创建用户和目录
-sudo useradd -r -s /bin/false gateway
+sudo useradd -r -s /bin/false matea
 sudo mkdir -p /opt/matea/data
 sudo cp matea config.yaml /opt/matea/
 sudo cp .env /opt/matea/
@@ -294,12 +296,12 @@ sudo chown -R matea:matea /opt/matea
 
 # 启动
 sudo systemctl daemon-reload
-sudo systemctl enable gateway
-sudo systemctl start gateway
+sudo systemctl enable matea
+sudo systemctl start matea
 
 # 查看状态
-sudo systemctl status gateway
-sudo journalctl -u gateway -f
+sudo systemctl status matea
+sudo journalctl -u matea -f
 ```
 
 ## 容器部署（暂未提供）
@@ -428,15 +430,20 @@ Matea 接收地址固定为：`http://<matea-host>:8080/webhook/gitea`（经反�
 
 ### 使用 Agent
 
-在 Issue 或 PR 中通过标签触发 Agent：
+v2 已移除 `ai:analyze` / `ai:review` / `ai:solve` / `ai:fix` Label 触发（连同 routes 配置一并弃用），改为 Assign / @提及 / 斜杠命令模型：
 
 | 操作 | 方式 |
 |------|------|
-| 需求分析 | 给 Issue 添加 `ai:analyze` 标签 |
-| 代码审查 | 给 PR 添加 `ai:review` 标签 |
-| 开发实现 | 给 Issue 添加 `ai:solve` 标签 |
-| Bug 修复 | 给 Issue 添加 `ai:fix` 标签 |
-| 评论互动 | 在评论中 @Agent 用户名 |
+| 需求分析 | Issue 上 **Assign** 分析 Agent（如 `matea-analyst`） |
+| 开发实现 / Bug 修复 | Issue 上 **Assign** 开发 Agent（如 `matea-coder`） |
+| 代码审查 | PR 上 **Request Reviewer** 审查 Agent（如 `matea-review`） |
+| 评论互动 / 续作追问 | 在评论中 @Agent 用户名 |
+| 强制开发（跳过分析） | 评论 `/dev` |
+| 强制回复（只答不改码） | 评论 `/reply` |
+| 跳过 soft 门禁警告 | 评论 `/force` |
+| 重置工作流 | 评论 `/matea reset` |
+
+> 触发方式速查与推荐默认三件套（analyst / coder / review）详见 [AGENTS.md](AGENTS.md)。
 
 ## 运维管理
 
@@ -482,6 +489,14 @@ cp data/matea.db data/matea.db.bak
 
 # 或使用 SQLite 命令
 sqlite3 data/matea.db ".backup data/matea-backup.db"
+
+# 备份系统配置（导出 JSON，默认脱敏，密钥以 ******** 占位）
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/config/export -o matea-config.json
+
+# 完整还原用途需显式包含真实密钥（导出动作落审计 config_export）
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/api/config/export?include_secrets=1" -o matea-config-full.json
 ```
 
 ### 日志查看
@@ -490,13 +505,13 @@ sqlite3 data/matea.db ".backup data/matea-backup.db"
 
 ```bash
 # 实时日志
-journalctl -u gateway -f
+journalctl -u matea -f
 
 # 最近 100 行
-journalctl -u gateway -n 100
+journalctl -u matea -n 100
 
 # 按时间过滤
-journalctl -u gateway --since "2024-01-01" --until "2024-01-02"
+journalctl -u matea --since "2024-01-01" --until "2024-01-02"
 ```
 
 日志级别在配置中设置：`debug` / `info` / `warn` / `error`。
@@ -532,7 +547,7 @@ journalctl -u gateway --since "2024-01-01" --until "2024-01-02"
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok","version":"0.10.0"}
+# {"status":"ok","version":"0.11.4"}
 ```
 
 ### 数据库检查
@@ -550,9 +565,9 @@ SELECT status, COUNT(*) FROM tasks GROUP BY status;
 SELECT id, task_type, status, created_at FROM tasks ORDER BY id DESC LIMIT 10;
 ```
 
-## OpenCode sidecar（可选 Path A）
+## OpenCode sidecar（可选 Hub 后端）
 
-默认写任务走内置 `AgentLoop`（`agents.backends.default=internal`）。若 coder Agent 配置 `backend: opencode-local`，需在**同一台机器**运行 OpenCode HTTP 服务，且能访问 Gateway 准备的 workspace 绝对路径。
+默认所有任务走内置 `AgentLoop`（`agents.backends.default=builtin`）。若要把任务外包给 OpenCode Hub，需运行 OpenCode HTTP 服务；写任务的工作区经 **git_sync** 交接——Hub 需能**经 SSH 访问 Gitea**（用任务级 deploy key 自行 clone/push）。
 
 ### 启动
 
@@ -572,25 +587,28 @@ agents:
       opencode-local:
         type: hub-opencode
         base_url: "http://127.0.0.1:4096"
-        workspace_mode: matea_path   # 第一期唯一合法值
         health_check:
-          path: /health                # 或 /global/health，视 OpenCode 版本
-        allow_fallback_builtin: false # true=探活失败时降级内置 Loop（默认勿开）
+          path: /global/health      # 或 /health，视 OpenCode 版本
+        # workspace_transport 仅接受 git_sync 且为默认值，无需填写
 ```
 
-Agent 侧设置 `backend: opencode-local`（仅 solve / fix_bug 写任务生效；analyze/review 强制 builtin）。
+`workspace_mode` 与 `allow_fallback_builtin` 均已废弃：旧配置中如有请直接删除——git_sync 下健康探针失败即任务 **failed**，**永不回退 builtin**（避免信任模型被静默替换）。
+
+Agent 侧将 **Coding Backend** 设为 `opencode-local`；hub 后端也可接 analyze/review/reply 等非写任务，不再强制 builtin。
 
 > **OpenCode 无自带 IM 渠道**：若需向飞书/企微/钉钉通知任务完成事件，必须配置 `deliver.webhook_url` 指向自建 bridge（见 README「接入 Hub 后端 → 出站通知」）。否则结果只写回 Gitea 评论，不会 IM 推送。
 
-### 行为说明
+### 写任务语义（git_sync 契约）
 
-| 场景 | 任务状态 |
-|------|----------|
-| sidecar 探活失败且 `allow_fallback_builtin=false` | **failed**（可读错误评论） |
-| 探活失败且 `allow_fallback_builtin=true` | 切到 builtin 继续 |
-| 探活成功但改码/提 PR 失败 | failed / partial（写回规则见 P0.1） |
+不再是「共享路径、Matea 负责 git」：
 
-工作目录绑定：`POST /session?directory=<workspace>` + `X-Opencode-Directory`（见 [archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。
+1. **Prepare**：Matea 生成一次性 ed25519 密钥对，在目标仓库注册 repo 级 rw deploy key（标题 `matea-hub-task-{taskID}`），私钥以 base64 经 prompt 下发给 Hub（不落库、不进日志）。
+2. **Hub 执行**：Hub 持 deploy key 自行 clone → 建草稿分支 `matea/hub-{taskID}` → 改码 → commit（每个提交必须带 `matea-task-id: {taskID}` footer）→ push。
+3. **Approve**：Matea 用自己的凭据 fetch，做**四要素校验**（分支独占 / 起点锚定 / footer / diff 白名单）全过后开 PR，并当场回收 deploy key。
+
+目录绑定（`POST /session?directory=<path>` + `X-Opencode-Directory`）仅剩非写只读任务的最小工作区用途（见 [archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。
+
+> 信任模型、完整契约与 SLO 详见 [HUB-BACKENDS.md](HUB-BACKENDS.md)。
 
 ### 自检
 

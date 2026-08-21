@@ -2,7 +2,7 @@
 
 > 状态：**已归档决策**（2026-07-14 确认）  
 > 日期：2026-07-14  
-> 相关：[server-runtime-design-v4](../server-runtime-design-v4.md) · [agent-development-decisions](./20260601-agent-development-decisions.md)  
+> 相关：[server-runtime-design-v4](20260714-server-runtime-design-v4.md) · [agent-development-decisions](./20260601-agent-development-decisions.md)  
 > 参考实现：`x:\ai-git-bot`、`x:\wshm`（借鉴边界，不照搬多平台范围）
 >
 > **冻结结论**：面向中小团队，深度做好 Gitea（Forgejo 跟测）；不立项 GitHub/GitLab/Gitee 多平台抽象；Issue 级目标分支不做。后续实现围绕 Gitea 深化。
@@ -142,7 +142,7 @@ flowchart LR
 ## 5. 当前推荐里程碑
 
 1. **文档冻结本决策**：Gitea-first；Forgejo 跟测；GitHub/GitLab/Gitee 非目标；Issue 级 base 不做  
-2. **深化 Gitea 路径**：事件覆盖、写回正确性、门禁/Session、OpenCode 可选接入（见 [server-runtime-design-v4](../server-runtime-design-v4.md)）  
+2. **深化 Gitea 路径**：事件覆盖、写回正确性、门禁/Session、OpenCode 可选接入（见 [server-runtime-design-v4](20260714-server-runtime-design-v4.md)）  
 3. **可选**：仓库级 `base_branch` 配置（替代仓库 default，仍非 Issue 解析）  
 4. **明确不做**：多 Host SPI 预埋、Gitee/GitLab adapter、Issue 目标分支约定  
 

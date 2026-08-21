@@ -190,8 +190,18 @@ func TestE2EGitSyncFullCycle(t *testing.T) {
 	footer := RequiredFooter(taskID)
 
 	// Prepare: issue the task-scoped deploy key.
+	// Drop any orphan sharing this title from a prior (failed) run so Issue
+	// doesn't 422 on re-runs (mirrors TestE2EGitSyncDeployKeyLifecycle).
+	keyTitle := fmt.Sprintf("matea-hub-task-%d", taskID)
+	if existing, lerr := client.ListDeployKeys(owner, repo); lerr == nil {
+		for _, k := range existing {
+			if k.Title == keyTitle {
+				_ = client.DeleteDeployKey(owner, repo, k.ID)
+			}
+		}
+	}
 	issuer := NewGiteaDeployKeyIssuer(client)
-	key, err := issuer.Issue(ctx, owner, repo, fmt.Sprintf("matea-hub-task-%d", taskID))
+	key, err := issuer.Issue(ctx, owner, repo, keyTitle)
 	require.NoError(t, err)
 	require.NotZero(t, key.KeyID)
 
@@ -202,11 +212,15 @@ func TestE2EGitSyncFullCycle(t *testing.T) {
 	e2eCloneWithKey(t, cloneURL, key.PrivateKey, work)
 	e2eRunGit(t, work, "config", "user.email", "hub@matea.test")
 	e2eRunGit(t, work, "config", "user.name", "Simulated Hub")
-	e2eRunGit(t, work, "checkout", "-q", "-b", branch)
+	// Use a simple local branch name for the commit (some Windows git builds
+	// fail to materialize a local ref whose name contains a slash during the
+	// unborn→first-commit transition); push it to the mandated draft ref so
+	// the remote branch is created server-side. Cross-platform safe.
+	e2eRunGit(t, work, "checkout", "-q", "-b", "e2e-local")
 	require.NoError(t, os.WriteFile(filepath.Join(work, "FIX.md"), []byte("fix from hub\n"), 0o644))
 	e2eRunGit(t, work, "add", "-A")
 	e2eRunGit(t, work, "commit", "-q", "-m", "feat: real hub fix", "-m", footer)
-	e2eRunGit(t, work, "push", "-q", "origin", branch)
+	e2eRunGit(t, work, "push", "-q", "origin", "e2e-local:refs/heads/"+branch)
 
 	// Approve through the real transport.
 	factory := &gitSyncTestGiteaFactory{client: client}

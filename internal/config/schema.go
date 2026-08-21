@@ -90,8 +90,12 @@ func DefaultSessionConfig() SessionConfig {
 }
 
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host      string `yaml:"host"`
+	Port      int    `yaml:"port"`
+	// PublicURL is the externally reachable address of Matea used to build the
+	// inbound webhook callback URL (Gitea → Matea). Empty means the inbound
+	// webhook auto-registration is disabled (C-13).
+	PublicURL string `yaml:"public_url"`
 }
 
 type GiteaConfig struct {
@@ -268,34 +272,34 @@ type ToolPackConfig struct {
 // Non-write tasks (Analyze/Review/Reply) always use the implicit `builtin` backend
 // regardless of this config. See server-runtime-design-v4.md §3 / §4.4.
 type AgentBackendsConfig struct {
-	Default  string                   `yaml:"default"`  // backend name; empty → "builtin"
-	Backends map[string]BackendConfig `yaml:"backends"` // named backends; "builtin" is implicit
+	Default  string                   `yaml:"default" json:"default"`   // backend name; empty → "builtin"
+	Backends map[string]BackendConfig `yaml:"backends" json:"backends"` // named backends; "builtin" is implicit
 }
 
 // BackendConfig describes one coding backend. Type distinguishes builtin vs opencode.
 type BackendConfig struct {
-	Type                 string                   `yaml:"type"`                   // builtin | hub-opencode
-	BaseURL              string                   `yaml:"base_url"`               // hub-opencode only
-	Auth                 BackendAuthConfig        `yaml:"auth"`                   // hub-opencode only
-	Timeout              string                   `yaml:"timeout"`                // e.g. "45m"
-	WorkspaceMode        string                   `yaml:"workspace_mode"`         // first release: "matea_path" only
-	HealthCheck          BackendHealthCheckConfig `yaml:"health_check"`           // hub-opencode only
-	AllowFallbackBuiltin bool                     `yaml:"allow_fallback_builtin"` // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
-	WorkspaceTransport   string                   `yaml:"workspace_transport"`    // git_sync only (A5+; shared_path removed, mcp Phase 3)
-	AllowedPaths         []string                 `yaml:"allowed_paths"`          // B3 git_sync diff whitelist: non-empty = every changed path must match one glob
-	DeniedPaths          []string                 `yaml:"denied_paths"`           // B3 git_sync diff denylist: extends the built-in always-on defaults
+	Type                 string                   `yaml:"type" json:"type"`                                     // builtin | hub-opencode
+	BaseURL              string                   `yaml:"base_url" json:"base_url"`                             // hub-opencode only
+	Auth                 BackendAuthConfig        `yaml:"auth" json:"auth"`                                     // hub-opencode only
+	Timeout              string                   `yaml:"timeout" json:"timeout"`                               // e.g. "45m"
+	WorkspaceMode        string                   `yaml:"workspace_mode" json:"workspace_mode"`                 // first release: "matea_path" only
+	HealthCheck          BackendHealthCheckConfig `yaml:"health_check" json:"health_check"`                     // hub-opencode only
+	AllowFallbackBuiltin bool                     `yaml:"allow_fallback_builtin" json:"allow_fallback_builtin"` // deprecated: dead since A5 (hub write tasks never fall back to builtin); kept for YAML compat
+	WorkspaceTransport   string                   `yaml:"workspace_transport" json:"workspace_transport"`       // git_sync only (A5+; shared_path removed, mcp Phase 3)
+	AllowedPaths         []string                 `yaml:"allowed_paths" json:"allowed_paths"`                   // B3 git_sync diff whitelist: non-empty = every changed path must match one glob
+	DeniedPaths          []string                 `yaml:"denied_paths" json:"denied_paths"`                     // B3 git_sync diff denylist: extends the built-in always-on defaults
 }
 
 // BackendAuthConfig holds HTTP Basic auth credentials for a hub-opencode backend.
 type BackendAuthConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
 }
 
 // BackendHealthCheckConfig configures a periodic readiness probe for a backend.
 type BackendHealthCheckConfig struct {
-	Path     string `yaml:"path"`     // e.g. "/global/health"
-	Interval string `yaml:"interval"` // e.g. "30s"
+	Path     string `yaml:"path" json:"path"`         // e.g. "/global/health"
+	Interval string `yaml:"interval" json:"interval"` // e.g. "30s"
 }
 
 // Backend type constants.

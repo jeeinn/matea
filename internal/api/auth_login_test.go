@@ -178,7 +178,9 @@ func TestJwtWrapBlocksWhenMustChangePassword(t *testing.T) {
 	token, err := jwt.GenerateToken(admin.ID, "admin", "admin", true)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
+	// /api/setup/status is public since Phase 2.5 (C-3) — use a JWT-protected
+	// endpoint to pin the must_change_password block.
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)

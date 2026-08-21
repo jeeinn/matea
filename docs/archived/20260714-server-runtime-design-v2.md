@@ -4,7 +4,7 @@
 > 目标：为 Gitea Agent Gateway 的服务器端 Agent 执行提供可复现、可并发、可持久化记忆、可插拔扩展的运行时。
 > 部署目标：Linux（可与 Gitea 同机或独立部署）。定位：个人/小团队自用，最终开源。
 > 前身：[20260714-server-runtime-design.md](./20260714-server-runtime-design.md)（v1，已归档）  
-> 状态：已归档；现行决策见 [server-runtime-design-v4.md](../server-runtime-design-v4.md)。  
+> 状态：已归档；现行决策见 [server-runtime-design-v4.md](20260714-server-runtime-design-v4.md)。  
 > 说明：v2 在 v1 基础上重构分层边界、结构化 EnvSpec、补齐 Agent 生命周期 / Services / 记忆策略 / 可观测性 / 插件机制。
 
 ---

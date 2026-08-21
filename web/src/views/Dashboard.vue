@@ -1,12 +1,23 @@
 <template>
   <div class="dashboard">
-    <!-- 新用户引导 -->
-    <el-card v-if="agents.length === 0" class="welcome-card" shadow="hover">
+    <!-- C-22: disk space warning banner -->
+    <el-alert
+      v-if="diskWarning"
+      :title="diskWarning"
+      type="error"
+      :closable="false"
+      show-icon
+      class="disk-warning"
+    />
+
+    <!-- 新用户引导 (C-10): shown until the first Agent exists, or whenever
+         Gitea/LLM 配置仍不完整 -->
+    <el-card v-if="agents.length === 0 || setupStore.setupRequired" class="welcome-card" shadow="hover">
       <div class="welcome-content">
         <h2>👋 欢迎使用 Matea</h2>
         <p class="welcome-desc">按照以下步骤快速开始使用</p>
         <el-steps :active="welcomeStep" direction="vertical" class="welcome-steps">
-          <el-step title="配置 Gitea 连接" description="在系统配置中填写 Gitea 地址和管理员 Token">
+          <el-step title="配置 Gitea 连接" description="在系统配置中填写 Gitea 地址和管理员 Token；Webhook Secret 已在初始化时自动生成，可在系统配置中查看">
             <template #icon>
               <el-icon><Setting /></el-icon>
             </template>
@@ -133,16 +144,28 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- C-18/C-19/C-22: aggregate dependency health -->
+    <el-row :gutter="20" class="mt-20" v-if="healthSummary">
+      <el-col :span="24">
+        <el-card shadow="hover">
+          <HealthStatus :summary="healthSummary" />
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import api from '../api'
+import api, { getHealthSummary } from '../api'
+import { useSetupStore } from '../stores/setup'
 import { User, List, Clock, CircleCheck, Setting, Promotion } from '@element-plus/icons-vue'
+import HealthStatus from './HealthStatus.vue'
 
 const router = useRouter()
+const setupStore = useSetupStore()
 
 const stats = ref({})
 const agents = ref([])
@@ -160,6 +183,9 @@ const successRate = computed(() => {
 })
 
 const welcomeStep = computed(() => {
+  // C-10: reflect real progress — Gitea/LLM unfinished → step 0; configured
+  // but no Agent yet → step 1; otherwise the guide is effectively done.
+  if (setupStore.setupRequired) return 0
   if (agents.value.length === 0) return 1
   return 3
 })
@@ -169,6 +195,22 @@ const statusLabels = { pending: '待处理', running: '运行中', success: '成
 const getStatusType = (status) => {
   const types = { pending: 'warning', running: 'info', success: 'success', partial: 'warning', failed: 'danger' }
   return types[status] || 'info'
+}
+
+// C-22: fetch health summary to drive the disk warning banner (best-effort).
+const healthSummary = ref(null)
+const diskWarning = computed(() => {
+  const d = healthSummary.value?.components?.disk
+  if (d && d.status === 'degraded') return d.message
+  return ''
+})
+
+const loadHealth = async () => {
+  try {
+    healthSummary.value = await getHealthSummary()
+  } catch (e) {
+    // Non-fatal: dashboard still works without the health panel.
+  }
 }
 
 onMounted(async () => {
@@ -184,6 +226,7 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to load dashboard data:', error)
   }
+  loadHealth()
 })
 </script>
 
@@ -238,5 +281,8 @@ onMounted(async () => {
 
 .mt-20 {
   margin-top: 20px;
+}
+.disk-warning {
+  margin-bottom: 20px;
 }
 </style>

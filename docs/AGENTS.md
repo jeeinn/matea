@@ -32,17 +32,18 @@ Gitea Webhook → Matea Dispatcher → builtin Agent Loop → 写回 Gitea
 
 | backend | 状态 | 说明 |
 |---------|------|------|
-| `hub-opencode` | Phase 1 可用 | 将 Prompt/上下文提交到 OpenCode Hub 执行 |
-| `hub-hermes` / `hub-openclaw` / `hub-api` | Phase 2 | 当前不可用，选择会明确报错 |
+| `hub-opencode` | 可用 | 将 Prompt/上下文提交到 OpenCode Hub 执行（git_sync 契约） |
+| `hub-hermes` | 可用 | 经 Hermes Runs API 执行，与 hub-opencode 同一 git_sync 契约 |
+| `hub-openclaw` / `hub-api` | 未实现 | 选择会明确报错 |
 
 ### hub-opencode 与 builtin 的差异
 
 | 维度 | builtin | hub-opencode |
 |------|---------|--------------|
 | LLM 配置 | 读取 `llm.providers` | Hub 自管，Matea 不读取 `llm.providers` |
-| 连接参数 | 无 | 在 `agents.backends.<name>` 统一设置 |
+| 连接参数 | 无 | 在 `agents.backends.backends.<name>` 统一设置 |
 | Agent 页字段 | Provider/Model/Temperature/Loop Config 全显 | 仅显 System Prompt/User Template + `opencode_model`/`opencode_provider`/`opencode_agent` 覆盖 |
-| 沙箱/PR | Matea 负责 | Matea 准备路径并负责 git/PR，OpenCode 在该路径工作 |
+| 沙箱/PR | Matea 负责 | git_sync：Matea 签发任务级 deploy key，OpenCode 自 clone/commit/push 草稿分支 `matea/hub-{taskID}`，Matea 四要素校验后开 PR |
 | IM 通知 | 评论已写回 Gitea，按需配 `deliver` | **OpenCode 无自带 IM**，必须配 `deliver.webhook_url` 才能通知人类（见 README §接入 Hub 后端 → 出站通知） |
 
 ### 如何启用 hub-opencode
@@ -51,15 +52,16 @@ Gitea Webhook → Matea Dispatcher → builtin Agent Loop → 写回 Gitea
 
 ```yaml
 agents:
-  default: builtin
   backends:
-    my-opencode:
-      type: hub-opencode
-      base_url: "http://localhost:8080"
-      auth:
-        username: "matea"
-        password: "${OPENCODE_PASSWORD}"
-      workspace_mode: matea_path   # Phase 1 仅支持 matea_path
+    default: builtin
+    backends:
+      my-opencode:
+        type: hub-opencode
+        base_url: "http://localhost:4096"
+        auth:
+          username: "matea"
+          password: "${OPENCODE_PASSWORD}"
+        # workspace_transport 默认 git_sync（唯一合法值），无需填写
 ```
 
 2. 创建 Agent 时 **Coding Backend** 选择 `my-opencode`。

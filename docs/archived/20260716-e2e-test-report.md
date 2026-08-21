@@ -73,7 +73,7 @@
 ## A0 / TASKS.md
 
 - **E1 + E6 均 PASS**（directory 绑定 + OpenCode coder 端到端改码/PR）。  
-- **已勾选** [docs/TASKS.md](TASKS.md) P0.3「A0 本机 `opencode serve` PoC 端到端验收」。
+- **已勾选** [docs/TASKS.md](20260716-TASKS.md) P0.3「A0 本机 `opencode serve` PoC 端到端验收」。
 
 ## 复现命令
 

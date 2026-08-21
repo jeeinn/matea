@@ -190,3 +190,19 @@ func (m *ConfigManager) discoverModels(providerName string, pc ProviderConfig) (
 	}
 	return result, "api", nil
 }
+
+// DiscoverModels performs live model discovery for an arbitrary (possibly
+// unsaved) provider given its connection details (C-12). It reuses the exact
+// discovery path as saved providers so the wizard and SystemConfig can
+// "pull models on select" before the provider is persisted to the DB.
+func (m *ConfigManager) DiscoverModels(providerName, baseURL, apiKey, providerType string) ([]ModelDefinition, string, error) {
+	if providerType == "" {
+		providerType = "openai_compatible"
+	}
+	pc := ProviderConfig{
+		Type:    providerType,
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+	}
+	return m.discoverModels(providerName, pc)
+}

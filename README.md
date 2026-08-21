@@ -18,6 +18,8 @@ AI Agent 网关 —— 通过 Gitea Webhook 事件驱动，将 AI Agent 嵌入 G
 - 🔒 **轻量级沙箱** —— 目录隔离 + 命令白名单 + 超时控制 + 审计日志（不依赖 Docker）
 - 🎯 **可配置模板** —— 支持自定义 System Prompt 和 User Template，支持 Go template 语法
 - 🖥️ **Web UI** —— Vue 3 + Element Plus 管理界面，Dashboard / Agent 管理 / 任务列表 / Prompt 编辑
+- 🧭 **首次配置向导** —— `/setup` 三步向导（Gitea → LLM → 确认）+ 一次性 Setup Token；自动检测本地 Ollama/OpenCode、Provider 预设、即选即拉模型列表、环境变量一键吸入
+- 🩺 **健康与运维** —— 组件健康面板（Gitea/LLM/Hub/DB/磁盘逐组件实探）、磁盘空间预警、配置导出/导入备份（默认脱敏）、配置变更审计
 - 📡 **多 LLM 支持** —— OpenAI 兼容（DeepSeek / Qwen / Moonshot / Ollama）+ Anthropic Claude
 - ⚙️ **灵活配置** —— Agent 级别 loop_config 覆盖（最大迭代、Token 限制、超时控制）
 
@@ -36,8 +38,9 @@ Gitea Webhook → ingress/gitea (签名验证 + 去重)
 | backend | 说明 | 适用场景 |
 |---------|------|---------|
 | `builtin`（默认） | 内置 Agent Loop，多轮 Tool-Use 在 Matea 进程内执行 | 本地 / 自托管 LLM，需要完全控制沙箱 |
-| `hub-opencode` | 将 Prompt 与代码上下文提交到 OpenCode Hub 执行 | 已有 OpenCode 服务，希望复用其会话/工具 |
-| `hub-hermes` / `hub-openclaw` / `hub-api` | Phase 2 逐步接入 | 暂时不可用，选择会明确报错 |
+| `hub-opencode` | 将 Prompt 与代码上下文提交到 OpenCode Hub 执行（git_sync 自 push 契约） | 已有 OpenCode 服务，希望复用其会话/工具 |
+| `hub-hermes` | 经 Hermes Runs API 执行，与 hub-opencode 同一 git_sync 契约 | 已有 Hermes 部署 |
+| `hub-openclaw` / `hub-api` | 后续接入 | 暂不可用，选择会明确报错 |
 
 `llm.providers` 配置**仅对 `builtin` backend 生效**；Hub backend 自己管理 LLM 与连接参数。
 
@@ -69,15 +72,15 @@ chmod +x matea-linux-amd64   # Linux / macOS
 # Windows: matea-windows-amd64.exe
 ```
 
-首次启动若本地没有 `config.yaml`，会**自动写入最小 bootstrap**（监听 `8080`、数据目录 `./data/...`、随机 `auth.jwt_secret`、日志落盘 `./data/matea.log`），并打印 Web 访问地址。
+首次启动若本地没有 `config.yaml`，会**自动写入最小 bootstrap**（监听 `8080`、数据目录 `./data/...`、随机 `auth.jwt_secret`、日志落盘 `./data/matea.log`），并在控制台打印一次性 **Setup Token**（48 位 hex，30 分钟有效，过期自动重新打印）。
 
 然后：
 
-1. 打开 http://127.0.0.1:8080  
-2. 使用 `admin` / `admin123` 登录，**立即修改密码**（强制）  
-3. 在 **系统配置** 填写 Gitea / LLM（见下一步）  
+1. 打开 http://127.0.0.1:8080 —— 未初始化实例会自动进入 **`/setup` 三步向导**（输入控制台打印的 Setup Token → Gitea → LLM → 确认；向导可自动检测本地 Ollama/OpenCode、拉取模型列表、一键吸入环境变量）
+2. 向导完成后用 `admin` / `admin123` 登录，**立即修改密码**（强制）
+3. 后续调整在 **系统配置** 页面进行（含 Provider 预设、Hub 后端、入站 Webhook 自动注册、备份与恢复）
 
-> **安全警示**：bootstrap 会随机生成 `jwt_secret`；Token / API Key 勿写入 git。未完成 Gitea/LLM 配置时，顶栏会显示 Setup 引导。Web UI **系统配置**写入数据库后优先于文件。
+> **安全警示**：bootstrap 会随机生成 `jwt_secret`；Token / API Key 勿写入 git。Web UI **系统配置**写入数据库后优先于文件。
 
 生产部署、systemd 等见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
@@ -217,8 +220,8 @@ agents:
 ### Agent backend 与 LLM 边界
 
 - **默认 backend 是 `builtin`**：Agent Loop 在 Matea 进程内运行，使用 `llm.providers` 中的 Provider/Model。
-- **`hub-opencode` backend**：代码执行由 OpenCode Hub 完成，`llm.providers` 对该 Agent 不生效；Agent 编辑页仅可覆盖提交到 OpenCode 的模型/Provider，连接参数（URL/鉴权/工作区模式）在 `agents.backends.<name>` 中按命名后端统一设置。
-- **`hub-hermes` / `hub-openclaw` / `hub-api`**：Phase 2 接入，当前不可用。
+- **`hub-opencode` backend**：代码执行由 OpenCode Hub 完成，`llm.providers` 对该 Agent 不生效；Agent 编辑页仅可覆盖提交到 OpenCode 的模型/Provider，连接参数（URL/鉴权）在 `agents.backends.backends.<name>` 中按命名后端统一设置。
+- **`hub-hermes` backend**：已可用（与 hub-opencode 同一 git_sync 自 push 契约）；`hub-openclaw` / `hub-api` 尚未实现，选择会明确报错。
 
 完整 backend 配置示例见 [config.full-example.yaml](config.full-example.yaml) 的 `agents.backends` 段。
 
@@ -286,7 +289,7 @@ go vet ./...
 │   ├── llm/                # LLM Provider 接口 + 实现（builtin backend 使用）
 │   ├── sandbox/            # 沙箱（目录隔离 + 命令执行 + Git 操作）
 │   ├── store/              # SQLite 数据库 + 自动迁移
-│   └── webhook/            # Webhook HTTP Handler
+│   └── sysinfo/            # 跨平台系统信息（磁盘空间检测）
 ├── web/                    # Vue 3 + Element Plus 前端
 ├── tests/                  # 集成测试
 ├── docs/                   # 设计文档
@@ -326,15 +329,16 @@ Matea 的默认路径是 `builtin` backend：下载二进制、配置 LLM、创�
 
 ```yaml
 agents:
-  default: builtin
   backends:
-    my-opencode:
-      type: hub-opencode
-      base_url: "http://localhost:8080"
-      auth:
-        username: "matea"
-        password: "${OPENCODE_PASSWORD}"
-      workspace_mode: matea_path   # Phase 1 仅支持 matea_path（Matea 准备沙箱路径，OpenCode 在该目录工作）
+    default: builtin
+    backends:
+      my-opencode:
+        type: hub-opencode
+        base_url: "http://localhost:4096"
+        auth:
+          username: "matea"
+          password: "${OPENCODE_PASSWORD}"
+        # workspace_transport 默认 git_sync（唯一合法值），无需填写
 ```
 
 ### 2. 创建/编辑 Agent 选择 backend
@@ -348,12 +352,12 @@ agents:
 
 ### 3. 运行方式差异
 
-| 任务 | builtin | hub-opencode |
-|------|---------|--------------|
-| `analyze_issue` / `review_pr` / `reply_comment` | 内置 Agent Loop + Tool-Use | 提交 Prompt/上下文给 OpenCode，结果写回 Gitea |
-| `solve_issue` / `fix_bug` | 内置沙箱 + git/PR | OpenCode 在 Matea 准备的沙箱路径工作，Matea 仍负责 git/PR |
+| 任务 | builtin | hub-opencode / hub-hermes |
+|------|---------|---------------------------|
+| `analyze_issue` / `review_pr` / `reply_comment` | 内置 Agent Loop + Tool-Use | 提交 Prompt/上下文给 Hub，结果写回 Gitea |
+| `solve_issue` / `fix_bug` | 内置沙箱 + git/PR | Matea 为任务签发只读/读写 deploy key，Hub 自 clone/commit/push 草稿分支 `matea/hub-{taskID}`；Matea fetch + 四要素校验后开 PR，终态回收 key |
 
-> **注意**：`hub-hermes` / `hub-openclaw` / `hub-api` 在 Phase 1 尚未实现，选择这些 backend 会返回明确错误；完整 Hub 后端支持是 Phase 2 目标。
+> **注意**：`hub-opencode` 与 `hub-hermes` 均已落地，统一走 `git_sync` 工作区传输；`hub-openclaw` / `hub-api` 尚未实现。
 
 ### 4. 出站通知：`deliver` 配置（OpenCode 必备）
 
@@ -444,9 +448,9 @@ def event():
 
 - [技术架构](docs/ARCHITECTURE.md)
 - [Agent 指南](docs/AGENTS.md)
-- [任务清单](docs/TASKS.md)（按需 backlog，暂缓）
+- [任务清单](docs/TASKS.md)（Phase 3/4 规划 + 按需 backlog）
 - [部署指南](docs/DEPLOYMENT.md)
-- [服务器运行时设计 v4](docs/server-runtime-design-v4.md)
+- [Hub 后端（git_sync 信任模型与接入契约）](docs/HUB-BACKENDS.md)
 - [开源准备清单（已归档）](docs/archived/20260716-OPEN-SOURCE-CHECKLIST.md)
 - [平台策略：Gitea 优先（已归档）](docs/archived/20260714-coding-gateway-multi-vcs.md)
 - [Assign 工作流 v2 设计（已归档）](docs/archived/20260615-trigger-rules-and-workflow-improvement.md)
