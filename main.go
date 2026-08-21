@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/jeeinn/matea/internal/logging"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
+	"github.com/jeeinn/matea/internal/sysinfo"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
@@ -90,6 +92,19 @@ func main() {
 	}
 	defer db.Close()
 	log.Printf("[INFO] Database opened: %s", cfg.Database.Path)
+
+	// C-22: warn at startup when the volume holding the data directory is low
+	// on free space, so an operator is alerted before SQLite/WAL or workspaces
+	// run out of room.
+	if diskInfo, derr := sysinfo.CheckDisk(dataDirForDB(cfg.Database.Path), sysinfo.DefaultDiskWarnPercent); derr == nil {
+		if diskInfo.Warning {
+			log.Printf("[WARN] 磁盘空间不足：%s 已使用 %.1f%%（剩余 %s / 共 %s），请及时清理以免写入失败",
+				diskInfo.Path, diskInfo.UsedPercent,
+				sysinfo.HumanBytes(diskInfo.FreeBytes), sysinfo.HumanBytes(diskInfo.TotalBytes))
+		}
+	} else {
+		log.Printf("[WARN] 启动磁盘检测失败: %v", derr)
+	}
 
 	// Initialize config manager (DB overrides on top of file config)
 	cfgManager := config.NewConfigManager(cfg)
@@ -299,4 +314,16 @@ func parseSandboxConfig(cfg *config.SandboxConfig) sandbox.SandboxConfig {
 		MaxFileSize:    cfg.MaxFileSize,
 		CleanupAfter:   cleanupAfter,
 	}
+}
+
+// dataDirForDB resolves the directory whose filesystem should be checked for
+// the given SQLite path: the parent of the DB file, or cwd when no path is set.
+func dataDirForDB(p string) string {
+	if p == "" {
+		return "."
+	}
+	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+		return filepath.Dir(p)
+	}
+	return p
 }
