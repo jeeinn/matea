@@ -83,7 +83,14 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ## Phase 2.5 + Phase 2.6（已归档）
 
-- **Phase 2.5 配置自动化与首次用户体验（P0+P1）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
+- **Phase 2.5 配置自动化与首次用户体验（P0+P1+P2）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
+  - **P2 交付追踪（2026-08-21，当前分支 `phase2.5/config-automation`）**：
+    - [x] **C-18** 一键连接测试状态灯（`HealthStatus.vue` + `GET /api/health/summary`）
+    - [x] **C-19** 健康检查面板（Gitea/LLM/Hub/Deliver/DB 逐组件实探）
+    - [x] **C-20** 配置导入/导出（`GET /api/config/export` + `POST /api/config/import`，前端「备份与恢复」Tab）
+    - [x] **C-21** 环境变量自动发现与一键吸入（`GET /api/setup/env-detection` + `POST /api/setup/apply-env`，向导集成）
+    - [x] **C-22** 文件系统可用空间预警（`internal/sysinfo` + 启动日志 + 前端磁盘横幅）
+  - 后端单测：`internal/api/health_env_test.go`（健康/未配置/实探、env 检测与应用、配置导入导出往返）全部通过；`go build ./...` 通过。
 - **Phase 2.6 git_sync 落地（v3.1）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
 - **Phase 2.6 审核报告** → [`20260820-phase2.6-review.md`](20260820-phase2.6-review.md)
 
