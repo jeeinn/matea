@@ -2,7 +2,10 @@
 // used by Matea's health checks and startup warnings (Phase 2.5, C-22).
 package sysinfo
 
-import "path/filepath"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 // DefaultDiskWarnPercent is the used-space threshold above which a partition
 // is flagged as a warning.
@@ -56,51 +59,24 @@ func CheckDisk(dir string, warnPct float64) (DiskInfo, error) {
 	}, nil
 }
 
-// HumanBytes renders a byte count as a short, human-readable string.
+// HumanBytes renders a byte count as a short, human-readable string using
+// 1024-based (IEC) units: 512 -> "512 B", 5 GiB -> "5 GiB".
 func HumanBytes(b uint64) string {
 	const unit = 1024
 	if b < unit {
-		return "0 B"
+		return fmt.Sprintf("%d B", b)
 	}
 	div, exp := uint64(unit), 0
 	for n := b / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
-	return trimFloat(float64(b)/float64(div)) + " " + units[exp]
-}
-
-func trimFloat(f float64) string {
-	s := ""
-	// 1 decimal, dropped if .0
-	d := int(f*10 + 0.5)
-	if d%10 == 0 {
-		s = itoa(d / 10)
-	} else {
-		s = itoa(d/10) + "." + itoa(d%10)
+	// div is 1024^(exp+1), so the matching label is units[exp+1].
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	v := float64(b) / float64(div)
+	s := fmt.Sprintf("%.1f", v)
+	if s[len(s)-2:] == ".0" {
+		s = s[:len(s)-2]
 	}
-	return s
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return s + " " + units[exp+1]
 }

@@ -211,6 +211,12 @@ func (h *Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	webhookSecret := strings.TrimSpace(req.WebhookSecret)
 	secretGenerated := false
 	if webhookSecret == "" {
+		// Preserve an already-configured secret (e.g. absorbed earlier from
+		// GITEA_WEBHOOK_SECRET) instead of silently replacing it with a fresh
+		// random one — the old value would be unrecoverable.
+		webhookSecret = h.cfgManager.Get().Gitea.WebhookSecret
+	}
+	if webhookSecret == "" {
 		webhookSecret, err = config.GenerateWebhookSecret()
 		if err != nil {
 			writeError(w, 500, "生成 webhook_secret 失败: "+err.Error())

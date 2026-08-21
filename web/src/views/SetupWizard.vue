@@ -47,10 +47,10 @@
             勾选要吸入的环境变量，点击「应用」写入系统配置。变量值不会回显，仅写入对应配置项。
           </el-alert>
           <div v-loading="envDetect.loading">
-            <el-empty v-if="!envDetect.loading && envDetect.items.length === 0" description="未检测到已知环境变量" />
+            <el-empty v-if="!envDetect.loading && !envDetect.items.some(i => i.present)" description="未检测到已知环境变量" />
             <el-checkbox-group v-model="envDetect.selected">
               <div v-for="item in envDetect.items" :key="item.env" class="env-item">
-                <el-checkbox :label="item.env" :disabled="!item.present">
+                <el-checkbox :value="item.env" :disabled="!item.present">
                   <span class="env-name">{{ item.env }}</span>
                   <el-tag size="small" :type="item.present ? 'success' : 'info'">{{ item.present ? '已检测' : '未设置' }}</el-tag>
                   <span class="env-title">{{ item.title }}</span>
@@ -330,8 +330,20 @@ async function applyEnvSelected() {
       ElMessage.warning('部分应用失败：' + res.errors.join('；'))
     } else {
       ElMessage.success(res.message || '已应用')
+      if (res.skipped && res.skipped.length) {
+        ElMessage.info(`已跳过 ${res.skipped.length} 项：${res.skipped.join('；')}`)
+      }
+      if (res.note) {
+        ElMessage.warning(res.note)
+      }
     }
     envDetect.value.dialogVisible = false
+    // 重新拉取初始化状态：若环境变量已补齐全部必需配置，可直接跳到确认步骤
+    await setupStore.refresh()
+    if (!setupStore.setupRequired) {
+      step.value = 2
+      ElMessage.success('所需配置已由环境变量补齐，可直接进入「确认完成」步骤')
+    }
   } catch (e) {
     ElMessage.error('应用失败：' + (e.message || e))
   } finally {

@@ -185,11 +185,16 @@ func TestApplyEnvScalarAndProvider(t *testing.T) {
 	if len(body.Errors) != 0 {
 		t.Errorf("unexpected apply errors: %v", body.Errors)
 	}
-	if len(body.Applied) != 2 {
-		t.Errorf("expected 2 applied, got %v", body.Applied)
+	// GITEA_URL without an accompanying webhook secret triggers the C-6 guard:
+	// a secret is auto-generated and reported as an extra applied entry.
+	if len(body.Applied) != 3 {
+		t.Errorf("expected 3 applied (incl. auto webhook_secret), got %v", body.Applied)
 	}
 
 	got := h.cfgManager.Get()
+	if got.Gitea.WebhookSecret == "" {
+		t.Errorf("C-6 guard: webhook_secret must be auto-generated when Gitea is configured")
+	}
 	if got.Gitea.URL != "http://localhost:3000" {
 		t.Errorf("gitea.url not applied: %q", got.Gitea.URL)
 	}
@@ -259,12 +264,49 @@ func TestConfigExportImportRoundTrip(t *testing.T) {
 	if exp.Config["gitea.url"] != "http://original:3000" {
 		t.Errorf("export did not include gitea.url: %v", exp.Config)
 	}
-	if exp.Config["gitea.admin_token"] != "secret-token" {
-		t.Errorf("export should include real admin_token for restore")
+	// Default export masks secrets (C-20 spec: 敏感字段脱敏).
+	if exp.Config["gitea.admin_token"] != "********" {
+		t.Errorf("default export must mask admin_token, got %q", exp.Config["gitea.admin_token"])
+	}
+
+	// A masked export re-imports cleanly: placeholder = keep current value.
+	// (Re-import only the gitea keys — the zero-valued numeric entries of this
+	// artificial test config would rightly fail range validation.)
+	subset := map[string]string{
+		"gitea.url":            exp.Config["gitea.url"],
+		"gitea.admin_token":    exp.Config["gitea.admin_token"],
+		"gitea.webhook_secret": exp.Config["gitea.webhook_secret"],
+	}
+	subsetBody, _ := json.Marshal(map[string]interface{}{"format": configExportFormat, "config": subset})
+	reimpRec := httptest.NewRecorder()
+	h.handleConfigImport(reimpRec, httptest.NewRequest(http.MethodPost, "/api/config/import",
+		strings.NewReader(string(subsetBody))))
+	if reimpRec.Code != http.StatusOK {
+		t.Fatalf("re-import masked export: expected 200, got %d: %s", reimpRec.Code, reimpRec.Body.String())
+	}
+	if got := h.cfgManager.Get(); got.Gitea.AdminToken != "secret-token" {
+		t.Errorf("masked re-import clobbered admin_token: %q", got.Gitea.AdminToken)
+	}
+
+	// Explicit opt-in yields a restore-ready plaintext backup.
+	expRec2 := httptest.NewRecorder()
+	h.handleConfigExport(expRec2, httptest.NewRequest(http.MethodGet, "/api/config/export?include_secrets=1", nil))
+	var exp2 struct {
+		Config map[string]string `json:"config"`
+		Masked bool              `json:"masked"`
+	}
+	if err := json.Unmarshal(expRec2.Body.Bytes(), &exp2); err != nil {
+		t.Fatalf("decode export2: %v", err)
+	}
+	if exp2.Masked {
+		t.Errorf("include_secrets=1 must set masked=false")
+	}
+	if exp2.Config["gitea.admin_token"] != "secret-token" {
+		t.Errorf("include_secrets=1 should include real admin_token, got %q", exp2.Config["gitea.admin_token"])
 	}
 
 	// Import a changed gitea.url; admin_token stays real.
-	importBody := `{"config":{"gitea.url":"http://imported:3000","gitea.admin_token":"secret-token"}}`
+	importBody := `{"format":"matea-config-v1","config":{"gitea.url":"http://imported:3000","gitea.admin_token":"secret-token"}}`
 	impRec := httptest.NewRecorder()
 	h.handleConfigImport(impRec, httptest.NewRequest(http.MethodPost, "/api/config/import",
 		strings.NewReader(importBody)))
@@ -309,5 +351,126 @@ func TestConfigImportRejectsInvalidKey(t *testing.T) {
 		strings.NewReader(importBody)))
 	if impRec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for invalid key, got %d", impRec.Code)
+	}
+}
+
+// D3 regression: re-absorbing an env key must update the api_key but never
+// reset an existing provider's custom base_url/type to catalog defaults.
+func TestApplyEnvPreservesExistingProviderBaseURL(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-new-key")
+
+	cfg := &config.Config{}
+	cfg.LLM.Providers = map[string]config.ProviderConfig{
+		"deepseek": {Type: "openai_compatible", BaseURL: "https://my-proxy.internal/v1", APIKey: "sk-old"},
+	}
+	h := newTestHandler(cfg)
+
+	rec := httptest.NewRecorder()
+	h.handleApplyEnv(rec, httptest.NewRequest(http.MethodPost, "/api/setup/apply-env",
+		strings.NewReader(`{"keys":["DEEPSEEK_API_KEY"]}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	pc := h.cfgManager.Get().LLM.Providers["deepseek"]
+	if pc.APIKey != "sk-new-key" {
+		t.Errorf("api_key should be updated: %q", pc.APIKey)
+	}
+	if pc.BaseURL != "https://my-proxy.internal/v1" {
+		t.Errorf("custom base_url must be preserved, got %q", pc.BaseURL)
+	}
+}
+
+// applyEnvHubBackend coverage: OPENCODE_URL creates a hub-opencode backend
+// and becomes the default when none is set.
+func TestApplyEnvHubBackend(t *testing.T) {
+	t.Setenv("OPENCODE_URL", "http://opencode.local:4096")
+
+	cfg := &config.Config{}
+	h := newTestHandler(cfg)
+
+	rec := httptest.NewRecorder()
+	h.handleApplyEnv(rec, httptest.NewRequest(http.MethodPost, "/api/setup/apply-env",
+		strings.NewReader(`{"keys":["OPENCODE_URL"]}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	backends := h.cfgManager.Get().Agents.Backends
+	bc, ok := backends.Backends["opencode"]
+	if !ok {
+		t.Fatalf("opencode backend not created: %+v", backends.Backends)
+	}
+	if bc.Type != config.BackendTypeHubOpenCode || bc.BaseURL != "http://opencode.local:4096" {
+		t.Errorf("backend mismatch: %+v", bc)
+	}
+	if backends.Default != "opencode" {
+		t.Errorf("default backend not set: %q", backends.Default)
+	}
+}
+
+// C-6 parity: an env-absorbed webhook secret must NOT be replaced by the
+// auto-generation guard when Gitea coordinates are absorbed alongside it.
+func TestApplyEnvKeepsAbsorbedWebhookSecret(t *testing.T) {
+	t.Setenv("GITEA_URL", "http://localhost:3000")
+	t.Setenv("GITEA_WEBHOOK_SECRET", "env-secret-keep-me")
+
+	cfg := &config.Config{}
+	h := newTestHandler(cfg)
+
+	rec := httptest.NewRecorder()
+	h.handleApplyEnv(rec, httptest.NewRequest(http.MethodPost, "/api/setup/apply-env",
+		strings.NewReader(`{"keys":["GITEA_URL","GITEA_WEBHOOK_SECRET"]}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := h.cfgManager.Get().Gitea.WebhookSecret; got != "env-secret-keep-me" {
+		t.Errorf("env-absorbed webhook_secret must survive, got %q", got)
+	}
+}
+
+func TestConfigImportRejectsUnknownFormat(t *testing.T) {
+	cfg := &config.Config{}
+	h := newTestHandler(cfg)
+
+	importBody := `{"format":"other-system-v9","config":{"gitea.url":"http://x:3000"}}`
+	impRec := httptest.NewRecorder()
+	h.handleConfigImport(impRec, httptest.NewRequest(http.MethodPost, "/api/config/import",
+		strings.NewReader(importBody)))
+	if impRec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unknown format, got %d", impRec.Code)
+	}
+	if got := h.cfgManager.Get(); got.Gitea.URL != "" {
+		t.Errorf("rejected import must not apply anything, got gitea.url=%q", got.Gitea.URL)
+	}
+}
+
+// TestHealthSummaryUsesLiveConfig is the R1 regression test: the health panel
+// must reflect hot-updated config, not the startup snapshot. After a config
+// write, gitea must leave "unconfigured" (it becomes "error" here because the
+// pointed-at server does not exist — which proves the probe used the NEW cfg).
+func TestHealthSummaryUsesLiveConfig(t *testing.T) {
+	cfg := &config.Config{}
+	h := newTestHandler(cfg)
+
+	rec := httptest.NewRecorder()
+	h.handleHealthSummary(rec, httptest.NewRequest(http.MethodGet, "/api/health/summary", nil))
+	if got := decodeHealth(t, rec).Components["gitea"].Status; got != healthStatusUnconfigured {
+		t.Fatalf("empty config: expected gitea unconfigured, got %q", got)
+	}
+
+	if err := h.cfgManager.Update("gitea.url", "http://127.0.0.1:1"); err != nil {
+		t.Fatalf("update gitea.url: %v", err)
+	}
+	if err := h.cfgManager.Update("gitea.admin_token", "x"); err != nil {
+		t.Fatalf("update gitea.admin_token: %v", err)
+	}
+
+	rec2 := httptest.NewRecorder()
+	h.handleHealthSummary(rec2, httptest.NewRequest(http.MethodGet, "/api/health/summary", nil))
+	got := decodeHealth(t, rec2).Components["gitea"].Status
+	if got == healthStatusUnconfigured {
+		t.Fatalf("after hot config update gitea still shows unconfigured — stale startup snapshot (R1)")
+	}
+	if got != healthStatusError {
+		t.Fatalf("expected gitea error (unreachable 127.0.0.1:1), got %q", got)
 	}
 }
