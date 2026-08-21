@@ -8,7 +8,7 @@
 > 状态：**Path A 主路径已交付**（A0–A4）；A+ 为可选后续  
 > 创建日期：2026-07-14  
 > 更新：2026-07-17  
-> 设计依据：[server-runtime-design-v4.md](../server-runtime-design-v4.md)  
+> 设计依据：[server-runtime-design-v4.md](20260714-server-runtime-design-v4.md)  
 > 字段笔记：[opencode-a0-notes.md](20260715-opencode-a0-notes.md)  
 > E2E：[20260716-e2e-test-report.md](20260716-e2e-test-report.md)（E1/E6/E10 PASS）
 

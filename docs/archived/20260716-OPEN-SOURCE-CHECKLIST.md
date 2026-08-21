@@ -39,7 +39,7 @@
 
 | # | 项 | 说明 | 验收 |
 |---|-----|------|------|
-| S1 | **v2 联调 Sign-off** | E2E 已覆盖 analyze/coder/review/writeback，缺 Merge→`done` | 补 E2E 场景或手工报告；对照 [archived/20260709-v2-gitea-integration-checklist.md](archived/20260709-v2-gitea-integration-checklist.md) §2.4 |
+| S1 | **v2 联调 Sign-off** | E2E 已覆盖 analyze/coder/review/writeback，缺 Merge→`done` | 补 E2E 场景或手工报告；对照 [archived/20260709-v2-gitea-integration-checklist.md](20260709-v2-gitea-integration-checklist.md) §2.4 |
 | S2 | **Session / Sandbox `base_dir` 对齐** | P0.3 已知缺口：`workspace.base_dir` vs `sandbox.base_dir` | 统一路径约定；Session 与 task 级 workspace 行为一致 |
 | S3 | **`loop_config` 参数校验** | sandbox-roadmap 14.5.8 未做 | 启动时校验 `max_iterations`（1–100）、`timeout` 范围；非法值报错 |
 | S4 | **Dockerfile 落地或删文档** | 短期不做 compose/K8s；文档已澄清 | **文档澄清：示例暂未提供**（DEPLOYMENT 以二进制 + systemd 为主） |

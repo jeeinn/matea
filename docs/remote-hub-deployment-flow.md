@@ -2,7 +2,7 @@
 
 > 说明：本文档描述 Matea 支持「远端 / 非同机部署 Hub 大脑」的三种 transport 模式、数据流转，以及各场景需要注意的问题和解决方案。
 
-> **实现状态（2026-08-19，阶段 C 收尾）**：本文是设计空间文档。**当前代码只接受 `git_sync` 一种 workspace transport**——`shared_path` 已在阶段 A5 删除（信任模型更宽：Matea 侧凭据会落到 hub 可见文件系统），`mcp` transport 常量已在阶段 C1 删除（L2 全隔离档随 Phase 3.9 回归，需先落地 MCP Server）。下文的 shared_path / mcp 章节保留为设计背景；git_sync 章节中的实现细节（分支命名、三要素校验、deploy key 生命周期）以 [HUB-BACKENDS.md](HUB-BACKENDS.md) 和代码为准。
+> **实现状态（2026-08-19，阶段 C 收尾）**：本文是设计空间文档。**当前代码只接受 `git_sync` 一种 workspace transport**——`shared_path` 已在阶段 A5 删除（信任模型更宽：Matea 侧凭据会落到 hub 可见文件系统），`mcp` transport 常量已在阶段 C1 删除（L2 全隔离档随 Phase 3.9 回归，需先落地 MCP Server）。下文的 shared_path / mcp 章节保留为设计背景；git_sync 章节中的实现细节（分支命名、四要素校验、deploy key 生命周期）以 [HUB-BACKENDS.md](HUB-BACKENDS.md) 和代码为准。
 
 ---
 
@@ -71,34 +71,32 @@ sequenceDiagram
     G->>M: webhook (issue/PR event)
     M->>M: Router 匹配 agent → backend=hub-hermes<br/>transport=git_sync
     M->>DB: create task (pending)
-    M->>M: prepareWriteWorkspace()
-    Note over M: 本地 clone repo、创建分支<br/>ai/dev/issue-123<br/>（本地工作区只用于最终 finalize）
+    M->>M: Transport.Prepare()
+    Note over M: 生成任务级 ed25519 密钥对<br/>注册 read-write deploy key<br/>记录 base_head 锚点
 
     M->>H: Submit(TaskContext + GitSyncInfo)
-    Note over M,H: GitSyncInfo 含：<br/>clone_url（带短期 token）<br/>branch_name / base_branch<br/>commit_user / commit_email
+    Note over M,H: GitSyncInfo 含：<br/>SSH clone_url + deploy key 私钥(base64)<br/>draft_branch=matea/hub-{taskID}<br/>base_head / commit_user / 必备 footer
 
-    H->>DB: Matea 保存 HubHandle<br/>(backend, remote_id, idempotency_key)
+    H->>DB: Matea 保存 HubHandle<br/>(backend, remote_id, idempotency_key,<br/>draft_branch, base_head, deploy_key_id)
 
     loop Poll every 2s
         M->>H: Poll(handle)
         H-->>M: State=running
     end
 
-    H->>O: git clone
-    H->>O: git checkout -b ai/dev/issue-123
-    Note over H: Hub 自管 AgentLoop<br/>改代码、commit
-    H->>O: git push origin ai/dev/issue-123
+    H->>O: git clone（SSH + 任务级 deploy key）
+    H->>O: git checkout -b matea/hub-{taskID}（锚定 base_head）
+    Note over H: Hub 自管 AgentLoop<br/>改代码、commit（每提交带 footer matea-task-id）
+    H->>O: git push origin matea/hub-{taskID}
 
     M->>H: Poll(handle)
-    H-->>M: State=done + summary
+    H-->>M: State=done + summary（trailer 回传 draft head）
 
-    M->>M: SyncBack()
-    Note over M: git fetch origin ai/dev/issue-123<br/>git checkout ai/dev/issue-123<br/>此时本地 git status 干净<br/>（改动已在 commit 中）
+    M->>M: Transport.Approve()
+    Note over M: git fetch 草稿分支<br/>四要素校验：分支独占 / 起点锚定 /<br/>footer（anchor..head 每提交）/ diff 白名单<br/>base 漂移 → fail + 告警（不自动 rebase）
 
-    M->>M: finalizeWriteChanges()
-    Note over M: git.HasChanges() == false<br/>走 push(no-op) → create PR 分支
-
-    M->>O: create PR ai/dev/issue-123 → base
+    M->>O: create PR matea/hub-{taskID} → base
+    M->>M: Transport.Cleanup()：撤销 deploy key<br/>（10min sweep 兜底孤儿 key）
     M->>G: post comment / PR body
     M->>DB: update task done
 ```
@@ -110,7 +108,7 @@ sequenceDiagram
 | 1. 本地 clone / 建分支 | Matea | 远端 Hub 也需要知道分支名 | `TaskContext.GitSyncInfo.BranchName` |
 | 2. 给 Hub 传 git 凭据 | Matea | Hub 拿到 token 有泄露风险 | 短期 token / deploy key / SSH key<br/>任务结束后撤销 |
 | 3. Hub clone & push | Hub | Hub 必须能访问 Gitea | 网络白名单 / VPN / TLS |
-| 4. Matea fetch 拉回 | Matea | 分支可能被覆盖/冲突 | Hub 用 force-with-lease<br/>Matea 校验 remote head |
+| 4. Matea fetch 拉回 | Matea | 草稿分支被篡改/起点漂移 | 四要素校验：分支独占 + base_head 锚定 + footer + diff 白名单 |
 | 5. finalize 创建 PR | Matea | Hub 没 push 或 push 失败 | Poll 阶段必须确认 done 前 push 成功 |
 | 6. 任务重试 | Matea | 重复 Submit 会创建多个远程 run | `IdempotencyKey` + `HubHandle` 持久化 |
 

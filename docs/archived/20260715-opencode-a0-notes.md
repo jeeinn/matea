@@ -7,7 +7,7 @@
 ---
 > 更新：2026-07-15  
 > 状态：公开文档推导 + 代码已对齐；**本机 `opencode serve` 端到端 PoC 仍待人工跑通验收**  
-> 关联：[todo-20260714-opencode-path-a.md](20260714-todo-opencode-path-a.md) · [server-runtime-design-v4.md](../server-runtime-design-v4.md)
+> 关联：[todo-20260714-opencode-path-a.md](20260714-todo-opencode-path-a.md) · [server-runtime-design-v4.md](20260714-server-runtime-design-v4.md)
 
 ---
 

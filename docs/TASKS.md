@@ -1,13 +1,13 @@
 # 任务清单
 
-> 更新：2026-08-17（Phase 1/2 主链路已归档；**git_sync 按 v3.1 三阶段计划已归档**，配置自动化 P0+P1 已落地）  
+> 更新：2026-08-21（Phase 2.5 全部落地 + Phase 2.6 已归档；文档大盘整，完成/过时文档已归入 archived/）  
 > 产品边界：**Gitea 优先** · 内置 Agent 默认可用 · **可插拔 harness 执行内核**（builtin / OpenCode / Hermes / Phase 3 的 Pi·Codex·Claude） · Matea 是 Gitea 唯一写方 · 不自研 IM SDK · 不引入外部 harness SDK  
 > 核心决策：
 > - [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md)
-> - [20260805-Phase2-plan.md](20260805-Phase2-plan.md)
-> - git_sync 三阶段方案（v3.1）→ [20260815-git-sync-3phase-plan.md](20260815-git-sync-3phase-plan.md)
-> - 配套评估 → [20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md)
-> - 配置自动化细化方案 → [CONFIG-AUTOMATION.md](CONFIG-AUTOMATION.md)
+> - Phase 2 实施方案（已执行完毕，归档）→ [archived/20260805-Phase2-plan.md](archived/20260805-Phase2-plan.md)
+> - git_sync 三阶段方案（v3.1，已落地，归档）→ [archived/20260815-git-sync-3phase-plan.md](archived/20260815-git-sync-3phase-plan.md)
+> - 配套评估 → [archived/20260815-git-sync-evaluation.md](archived/20260815-git-sync-evaluation.md)
+> - 配置自动化细化方案（已落地，归档）→ [archived/20260814-CONFIG-AUTOMATION.md](archived/20260814-CONFIG-AUTOMATION.md)
 > 已归档交付记录：
 > - **Phase 2.5 配置自动化 + Phase 2.6 git_sync 落地** → [archived/20260820-TASKS.md](archived/20260820-TASKS.md)
 > - **Phase 1 + Phase 2 已完成部分** → [archived/20260814-TASKS.md](archived/20260814-TASKS.md)
@@ -26,8 +26,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
         │
         ├─► Phase 1：HubBackend 抽象 + Gitea 触发入口整理 + 体验简化 ✅（已归档）
         ├─► Phase 2：大脑可插拔地基 → Hub 后端接入（OpenCode / Hermes）→ deliver 出站 ✅（已归档）
-        ├─► Phase 2 收尾：MCP Server（可选）、剩余跨系统验证场景、配置自动化 ✅（P0+P1 已落地，P2 待办）
-        ├─► Phase 2.5：配置自动化与首次用户体验 ✅（P0+P1 已落地，P2 待办）
+        ├─► Phase 2 收尾：MCP Server（可选，向后延迟）、剩余跨系统验证场景 🔄（见下「剩余待办」）
+        ├─► Phase 2.5：配置自动化与首次用户体验 ✅（P0+P1+P2 全部落地，已归档）
         ├─► Phase 2.6：git_sync 落地（v3.1：A0 前置验证 + 共存窗口 + 拆细）✅（已归档）
         ├─► Phase 3：多触发形态（REST/CLI）+ 策略配置化
         └─► Phase 4：可选 matea gateway serve + 拆包评估
@@ -37,7 +37,7 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ## Phase 2：Hub 后端接入（剩余待办）
 
-> 方案：[20260805-Phase2-plan.md](20260805-Phase2-plan.md)（D1–D12 已拍板，方案冻结）  
+> 方案：[archived/20260805-Phase2-plan.md](archived/20260805-Phase2-plan.md)（D1–D12 已拍板，方案冻结，已执行归档）  
 > 已完成部分已归档至 [archived/20260814-TASKS.md](archived/20260814-TASKS.md)。
 
 ### 2.3 MCP Server + Deliver（剩余项）
@@ -83,16 +83,10 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 
 ## Phase 2.5 + Phase 2.6（已归档）
 
-- **Phase 2.5 配置自动化与首次用户体验（P0+P1+P2）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
-  - **P2 交付追踪（2026-08-21，当前分支 `phase2.5/config-automation`）**：
-    - [x] **C-18** 一键连接测试状态灯（`HealthStatus.vue` + `GET /api/health/summary`）
-    - [x] **C-19** 健康检查面板（Gitea/LLM/Hub/Deliver/DB 逐组件实探）
-    - [x] **C-20** 配置导入/导出（`GET /api/config/export` + `POST /api/config/import`，前端「备份与恢复」Tab）
-    - [x] **C-21** 环境变量自动发现与一键吸入（`GET /api/setup/env-detection` + `POST /api/setup/apply-env`，向导集成）
-    - [x] **C-22** 文件系统可用空间预警（`internal/sysinfo` + 启动日志 + 前端磁盘横幅）
-  - 后端单测：`internal/api/health_env_test.go`（健康/未配置/实探、env 检测与应用、配置导入导出往返）全部通过；`go build ./...` 通过。
+- **Phase 2.5 配置自动化与首次用户体验（P0+P1+P2，C-1~C-22 全部落地）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
+  - P2 评审与修复记录 → [`archived/20260820-phase2.5-p2-review.md`](archived/20260820-phase2.5-p2-review.md)
 - **Phase 2.6 git_sync 落地（v3.1）** → 详见 [`archived/20260820-TASKS.md`](archived/20260820-TASKS.md)
-- **Phase 2.6 审核报告** → [`20260820-phase2.6-review.md`](20260820-phase2.6-review.md)
+  - Phase 2.6 审核报告 → [`archived/20260820-phase2.6-review.md`](archived/20260820-phase2.6-review.md)
 
 ---
 
@@ -188,18 +182,8 @@ P0–P2 → P3 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 现行架构 |
 | [AGENTS.md](AGENTS.md) | Agent 配置与 role 说明 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 部署 |
-| [CONFIG-AUTOMATION.md](CONFIG-AUTOMATION.md) | **配置自动化细化方案（Phase 2.5）** |
-| [20260805-Phase2-plan.md](20260805-Phase2-plan.md) | Phase 2 实施方案（D1–D12 已拍板，方案冻结） |
-| [20260815-git-sync-3phase-plan.md](20260815-git-sync-3phase-plan.md) | **git_sync 三阶段方案（v3.1，当前重点）** |
-| [20260815-git-sync-evaluation.md](20260815-git-sync-evaluation.md) | git_sync 评估与社区解法对照 |
-| [20260817-a0-spike-results.md](20260817-a0-spike-results.md) | **A0 前置验证实测报告（OpenCode + Gitea deploy key，均通过）** |
-| [20260817-a8-acceptance.md](20260817-a8-acceptance.md) | **A8 阶段 A 验收报告（真实 OpenCode+Gitea 端到端出 PR，通过）** |
+| [HUB-BACKENDS.md](HUB-BACKENDS.md) | **Hub 后端权威文档**（git_sync 信任模型 / 接入契约 / SLO） |
+| [remote-hub-deployment-flow.md](remote-hub-deployment-flow.md) | 远端 Hub 部署流程（含实现状态横幅） |
 | [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md) | 产品定位与演进规划 |
-| [server-runtime-design-v4.md](server-runtime-design-v4.md) | OpenCode / CodingBackend（待按 HubBackend 刷新） |
 | [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选增强 |
-| [archived/20260814-TASKS.md](archived/20260814-TASKS.md) | **Phase 1 + Phase 2 已完成部分归档** |
-| [archived/20260804-Phase1.5-plan.md](archived/20260804-Phase1.5-plan.md) | Phase 1.5 计划（已收官归档） |
-| [archived/20260805-Phase2-evolution-direction.md](archived/20260805-Phase2-evolution-direction.md) | Phase 2 演进方向讨论（结论已并入 Phase2-plan） |
-| [archived/20260808-IM-channel-integration-analysis.md](archived/20260808-IM-channel-integration-analysis.md) | IM 渠道接入分析（结论已并入 D5/D6） |
-| [archived/20260803-TASKS.md](archived/20260803-TASKS.md) | v0.11.4 任务清单归档 |
-| [archived/](archived/) | 历史设计、签核、E2E |
+| [archived/](archived/) | 历史设计、计划、评审、签核、E2E（索引见 [archived/README.md](archived/README.md)） |

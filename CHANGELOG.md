@@ -19,6 +19,10 @@ Phase 2.5 配置自动化与首次用户体验（branch `phase2.5/config-automat
 - **Hub 后端配置子页面**（C-14）：`agents.backends` 纳入 `ConfigManager` CRUD；`internal/config/backends.go` 提供解析/校验/脱敏/占位符还原；SystemConfig 新增「Hub 后端」Tab（默认后端、后端列表、增删改、builtin 保护）
 - **配置变更审计**（C-16）：`config_update` / `config_delete` / `setup_complete` 落 `operation_logs`，token/secret/api_key/password 全脱敏
 - **敏感字段掩码**（C-17）：`GET /api/config` 对 `gitea.admin_token` / `gitea.webhook_secret` / `llm.providers.*.api_key` / `agents.backends.*.auth.password` 返回 `********` 占位；PUT 中占位 = 保持原值（含 providers JSON 与 backends JSON 内 credential 还原）；测试连接端点对占位自动回退已存真值；前端表单掩码提示
+- **组件健康面板**（C-18/C-19，P2）：`GET /api/health/summary` 并发实探 Gitea / LLM（`/models` 零费用）/ Hub 后端 / Deliver / DB / 磁盘六组件，四态语义（ok/degraded/unconfigured/disabled/error）；新增 `HealthStatus.vue` 状态灯面板与 Dashboard 集成
+- **配置备份与恢复**（C-20，P2）：`GET /api/config/export` + `POST /api/config/import`；导出默认脱敏（`?include_secrets=1` 显式开关才含真实密钥，导出落审计 `config_export`）；导入校验 format 标识 + 键白名单，`UpdateBatch` 单快照预校验后原子应用；SystemConfig「备份与恢复」Tab（确认框 + 预检 + 密钥开关）
+- **环境变量自动发现与一键吸入**（C-21，P2）：`GET /api/setup/env-detection`（只回名称/布尔，值不出进程）+ `POST /api/setup/apply-env`（9 个已知变量 catalog：Gitea/LLM key/Hub URL）；吸入响应附「快照固化进 DB」语义提示
+- **磁盘空间预警**（C-22，P2）：新增 `internal/sysinfo` 跨平台磁盘检测（Windows `GetDiskFreeSpaceEx` quota 感知 / Unix `Statfs`）；启动时已用 ≥85% 打印 WARN；健康面板磁盘组件 + Dashboard 顶部横幅
 
 ### Changed
 - **`gitea.webhook_secret` 不再必填**（C-6）：`CheckSetup` 移除该项；向导完成与 `PUT /api/config`（配置 Gitea 且无 secret 时）自动生成 32 字节 hex——空 secret 此前会静默关闭 webhook 签名校验
@@ -29,8 +33,16 @@ Phase 2.5 配置自动化与首次用户体验（branch `phase2.5/config-automat
 
 ### Fixed
 - **用户入口文档漂移**：更新 `README.md` 与 `docs/AGENTS.md` 中 `workspace_mode`/`matea_path` 等 shared_path 时代残留描述，统一为 `git_sync` 事实；更正 `hub-hermes` 已可用
+- **P2 评审修复批次**（2026-08-21，评审报告 `docs/archived/20260820-phase2.5-p2-review.md`）：
+  - 健康面板此前读启动快照 `h.cfg`，热更新后失真——改为读 `cfgManager.Get()` 实时配置（R1）
+  - `sysinfo.HumanBytes` 单位错位一档（5 GiB 显示为 "5 MiB"）且 <1KiB 恒为 "0 B"（R2）
+  - 健康响应 `maskURL` 此前不脱 query，IM webhook 的 `?access_token=` 会泄漏（R3）
+  - 向导 finish 此前无条件重新生成 webhook_secret，会静默覆盖 env 吸入的既有值——改为保留（R4）
+  - 配置导出此前全明文且无审计——默认脱敏 + 显式开关 + 审计（R5）；`ConfigManager.Update` 运行日志此前明文记录密钥值，已脱敏（R6）
+  - 配置导入/PUT 此前逐键非原子应用（map 随机顺序 + 中间态校验可致部分失败持久化）——`UpdateBatch` 原子化（R7）
+  - 前端：配置导入零确认（现为预检 + 确认框）；Dashboard 与健康面板重复请求 `/health/summary`（现单请求 prop 下发）；健康探测并发化（串行最坏 ~27s → 并行 ~6s）（R8）
 
-git_sync 写传输改造（branch `phase2.6/git-sync`，**已合入 master，PR #29**，三阶段计划 v3.1）——**审核报告 `docs/20260820-phase2.6-review.md`：22 项勾选 21 项完全吻合、1 项文案偏差已修正**：
+git_sync 写传输改造（branch `phase2.6/git-sync`，**已合入 master，PR #29**，三阶段计划 v3.1）——**审核报告 `docs/archived/20260820-phase2.6-review.md`：22 项勾选 21 项完全吻合、1 项文案偏差已修正**：
 
 ### Added
 - **git_sync 信任模型**：Hub 持任务级凭据自 clone/commit/push 草稿分支 `matea/hub-{taskID}`，Matea 只 fetch + 校验 + 开 PR + 回收凭据；admin/agent token 永不离开 Matea（docs/HUB-BACKENDS.md）

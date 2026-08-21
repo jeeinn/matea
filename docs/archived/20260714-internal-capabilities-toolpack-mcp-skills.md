@@ -8,7 +8,7 @@
 > 状态：决策稿（可落地）  
 > 日期：2026-07-14  
 > 范围：**仅 `backend=internal` 的 AgentLoop**；OpenCode 路径不替代托管 MCP/Skills（见 §7）  
-> 相关：[server-runtime-design-v4](../server-runtime-design-v4.md) · [todo-20260714-opencode-path-a](20260714-todo-opencode-path-a.md) · [llm-prompt-design](20260531-llm-prompt-design.md)  
+> 相关：[server-runtime-design-v4](20260714-server-runtime-design-v4.md) · [todo-20260714-opencode-path-a](20260714-todo-opencode-path-a.md) · [llm-prompt-design](20260531-llm-prompt-design.md)  
 > 标准参考：[Agent Skills Specification](https://agentskills.io/specification)
 
 ---

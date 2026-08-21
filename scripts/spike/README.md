@@ -1,6 +1,6 @@
 # scripts/spike — A0/A8 验证 rig
 
-一次性验证脚本（非业务代码）。A0 证据见 [docs/20260817-a0-spike-results.md](../../docs/20260817-a0-spike-results.md)，A8 验收证据见 [docs/20260817-a8-acceptance.md](../../docs/20260817-a8-acceptance.md)。
+一次性验证脚本（非业务代码）。A0 证据见 [docs/archived/20260817-a0-spike-results.md](../../docs/archived/20260817-a0-spike-results.md)，A8 验收证据见 [docs/archived/20260817-a8-acceptance.md](../../docs/archived/20260817-a8-acceptance.md)。
 
 - `mock_llm.py` — 脚本化 OpenAI 兼容 LLM。向**真实 OpenCode** 依次下发 bash 工具调用（或本地代执行），
   用于在无付费 LLM 的情况下端到端验证 git_sync 凭据注入与 clone/commit/push 机制。

@@ -99,9 +99,9 @@ graph TB
 
 ## 组件详解
 
-### 1. `internal/webhook` — Webhook 入口
+### 1. `internal/ingress/gitea` — Webhook 入口（Gitea 入站层）
 
-**文件**: `handler.go`, `parser.go`, `signature.go`, `dedup.go`
+**文件**: `handler.go`, `parser.go`, `signature.go`, `dedup.go`, `intent.go`
 
 ```mermaid
 flowchart LR
@@ -116,6 +116,7 @@ flowchart LR
 - 支持 `X-Gitea-Event` / `X-Gitea-Delivery` / `X-Hub-Signature-256` 头部
 - `Deduplicator` 通过 SQLite `processed_deliveries` 表去重（delivery_id 唯一）
 - `ParseEvent` 将 JSON payload 解析为 `WebhookEvent` 统一结构体，合并 Issue、PR、Comment 等类型
+- `intent.go` 将解析后的事件包装为统一 `Intent`（入站层唯一输出类型），供 Dispatcher 消费
 - 异步调用 callback（Dispatcher.HandleEvent），立即返回 `200 {"status":"accepted"}`
 
 ### 2. `internal/dispatcher` — 调度核心
@@ -484,13 +485,27 @@ API 端点概览：
 | DELETE | `/api/prompts/{id}` | Token | 删除 Prompt 版本 |
 | GET | `/api/tasks` | Token | 任务列表（分页+筛选） |
 | GET | `/api/tasks/{id}` | Token | 任务详情 |
+| GET | `/api/tasks/{id}/conversation` | Token | 任务对话记录 |
+| POST | `/api/tasks/{id}/reset` | Token | 重置单个任务 |
 | POST | `/api/sessions/reset` | Token | 重置 Issue 工作流（archive sessions + context=idle） |
+| GET | `/api/workflow-context` | Token | 工作流上下文列表 |
+| GET/PUT/DELETE | `/api/workflow-policies[/{repo...}]` | Token | 按仓库的工作流策略覆盖（`{repo...}` 匹配 owner/name） |
 | GET | `/api/logs` | Token | 操作日志 |
 | GET | `/api/stats` | Token | 统计数据 |
 | GET | `/api/templates` | Token | 内置模板列表 |
 | GET | `/api/config` | JWT | 系统配置 |
 | PUT | `/api/config` | JWT | 更新配置覆盖 |
 | DELETE | `/api/config/{key}` | JWT | 恢复配置默认值 |
+| GET | `/api/config/providers/{name}/models` | JWT | Provider 模型列表 |
+| GET | `/api/config/provider-presets` | JWT | LLM Provider 预设列表 |
+| POST | `/api/config/discover-models` | JWT | 模型发现 |
+| GET | `/api/config/export` | JWT | 导出配置（备份） |
+| POST | `/api/config/import` | JWT | 导入配置（恢复） |
+| POST | `/api/config/gitea-webhook` | JWT | 一键在 Gitea 仓库注册 Webhook |
+| POST | `/api/config/test/gitea`、`/api/config/test/llm` | JWT | 配置连通性测试 |
+| GET | `/api/health/summary` | JWT | 外部依赖逐组件健康汇总（健康面板数据源） |
+| GET | `/api/setup/status` | 无（公开） | 首启向导状态（仅暴露缺失键名，用于 Web 选择向导/登录页） |
+| * | `/api/setup/*`（verify/detect/test/complete/provider-presets/discover-models/env-detection/apply-env） | Setup Token | 首启向导：token 校验、本机服务探测、连接测试、完成；完成后自动禁用 |
 | GET | `/api/prompt-templates` | Token | Prompt 模板列表（内置+自定义） |
 | PUT | `/api/prompt-templates` | JWT | 创建/更新自定义 Prompt 模板 |
 | DELETE | `/api/prompt-templates/{name}` | JWT | 删除自定义 Prompt 模板 |
@@ -502,11 +517,12 @@ API 端点概览：
 **技术栈**: Vue 3 + Element Plus + Vue Router + Pinia
 
 页面：
-- **Dashboard** — 状态概览、统计数据、新用户引导（创建 Agent → Assign 触发）
+- **Dashboard** — 状态概览、统计数据、新用户引导（创建 Agent → Assign 触发），集成 **HealthStatus** 健康面板（消费 `/api/health/summary`，展示各外部依赖就绪状态）
 - **Agents** — Agent 列表（role 徽章）、创建/编辑（role 选择、Prompt 模板、关联 repos）
 - **AgentDetail** — Agent 详情（基本信息含 role、触发规则 Tab 已弃用提示、Prompt 版本历史）
 - **Tasks** — 任务列表（服务端分页+筛选：状态/类型/Agent）
-- **SystemConfig** — 系统配置（Gitea 连接、LLM 配置、任务调度、Agent 默认参数、Prompt 模板管理）
+- **SystemConfig** — 系统配置（Gitea 连接、LLM 配置、任务调度、Agent 默认参数、工作流策略、调试、Deliver 通知、**入站 Webhook**、**Hub 后端**、Prompt 模板、**备份与恢复**（导出/导入）等标签页；顶部同样集成 HealthStatus）
+- **SetupWizard**（`/setup`）— 首启配置向导（环境探测 → Gitea/LLM 配置 → 完成，对应 `/api/setup/*`）
 - **Users** — 管理后台用户 CRUD（客户端分页）
 - **Login** — JWT 登录
 
@@ -600,11 +616,13 @@ go build -o matea .
 ```
 main.go                              # 入口：HTTP 服务、组件组装、优雅关闭
 internal/
-├── webhook/                         # Webhook 接收
-│   ├── handler.go                   #   HTTP Handler（验签/去重/解析/回调）
-│   ├── parser.go                    #   事件类型定义 + JSON 解析
-│   ├── signature.go                 #   HMAC-SHA256 签名验证
-│   └── dedup.go                     #   delivery_id 去重
+├── ingress/                         # 入站层
+│   └── gitea/                       #   Gitea Webhook 接收
+│       ├── handler.go               #     HTTP Handler（验签/去重/解析/回调）
+│       ├── parser.go                #     事件类型定义 + JSON 解析
+│       ├── signature.go             #     HMAC-SHA256 签名验证
+│       ├── dedup.go                 #     delivery_id 去重
+│       └── intent.go                #     统一 Intent（入站层输出契约）
 ├── dispatcher/                      # 调度核心
 │   ├── dispatcher.go                #   v2 流水线（Resolver→Gate→Session→Queue）
 │   ├── queue.go                     #   持久化任务队列（chan+SQLite）
@@ -674,7 +692,9 @@ web/src/                             # Vue 3 前端
 │   ├── Agents.vue                    #   Agent 列表 + 创建/编辑（role）
 │   ├── AgentDetail.vue               #   Agent 详情 + 弃用提示 + Prompt 版本
 │   ├── Tasks.vue                     #   任务列表（服务端分页+筛选）
-│   ├── SystemConfig.vue              #   系统配置（5 个标签页）
+│   ├── SystemConfig.vue              #   系统配置（Gitea/LLM/调度/Agent 参数/工作流策略/调试/Deliver/入站 Webhook/Hub 后端/Prompt 模板/备份与恢复）
+│   ├── HealthStatus.vue              #   健康面板组件（Dashboard/SystemConfig 集成）
+│   ├── SetupWizard.vue               #   首启配置向导（/setup）
 │   ├── Users.vue                     #   用户管理
 │   └── Login.vue                     #   登录
 ├── components/                       # 共享组件
@@ -709,7 +729,7 @@ type HubBackend interface {
 
 | 后端 | 用途 | 协议 |
 |------|------|------|
-| `hub-hermes` | 分析 / 审查 / 回复三类 | Hermes Runs API：`POST /v1/runs` + `GET /v1/runs/{id}` 轮询 |
+| `hub-hermes` | 分析 / 审查 / 回复三类 + 写任务（B1 已落地，与 hub-opencode 同一 git_sync 契约） | Hermes Runs API：`POST /v1/runs` + `GET /v1/runs/{id}` 轮询 |
 | `hub-opencode` | 分析 / 审查 / 回复三类（D7 三刀）+ 写任务 | OpenCode 协议 |
 
 ### 双轨一：非写任务（analyze / review / interaction）
@@ -732,13 +752,37 @@ flowchart TD
 | 轨道 | 入口 | 执行后端 | Handle 持久化 |
 |------|------|----------|---------------|
 | `builtin`（默认） | `ResolveCodingBackend` → `CodingBackend.Run` | 内置 `AgentLoop` + 沙箱工具 | 经 `runViaHub` 兼容层落库（E-2） |
-| `hub-opencode` | `ResolveHubOpenCode` → `runViaHub` | 本机 `opencode serve` sidecar；Gateway 负责 clone/分支/PR | `SaveHubHandle(Running)` → `done`/`failed` |
+| `hub-opencode` / `hub-hermes`（git_sync） | `resolveGitSyncWriteHub` → `runViaHub` 写通道 | Hub 持任务级 deploy key 自 clone/commit/push 草稿分支 `matea/hub-{taskID}`；Matea fetch + 四要素校验（分支独占/起点锚定/footer/diff 白名单）后开 PR 并回收 key | `SaveHubHandle(Running)` → `done`/`failed` |
 
 - **幂等 / 重启重接**：DB 中已存在非终结态 Handle 时，`runWriteTask` 经 `hb.Poll` 重接仍存活的 sidecar session 恢复 summary，绝不建第二个 session（杜绝「重复入队触发重复 sidecar session」）
 - **不可恢复**：session 工作区丢失（非 session 工作区重入会重新 clone）时标 `failed`，防空 PR
-- Health 探活在 prepare **之前**；失败默认任务 `failed`，仅当配置 `allow_fallback_builtin: true` 才降级 builtin
+- Health 探活在 Prepare **之前**；git_sync 下健康探针失败即任务 `failed`——`allow_fallback_builtin` 字段已废弃且 git_sync 路径**故意不 honor** 它：静默回退 builtin 会把 hub-push 信任模型（任务级 deploy key）替换为 Matea 用 Agent 自有 token 代 push，属于权限放大，绝不允许静默发生（`runner_write.go` 明确注释）
 
-Session 工作目录通过 `?directory=` + `X-Opencode-Directory` 绑定到 Gateway workspace（[archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。运维步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#opencode-sidecar可选-path-a)。
+写任务走 git_sync 后不再有本地工作区绑定（Hub 用 deploy key 自 clone，`X-Opencode-Directory` 头被省略）；OpenCode 的 `?directory=` + `X-Opencode-Directory` Session 绑定机制（`opencode_http.go` `createSession`，仅 `WorkDir` 非空时发送）现仅剩非写只读任务使用（[archived/20260715-opencode-a0-notes.md](archived/20260715-opencode-a0-notes.md)）。运维步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#opencode-sidecar可选-path-a)。
+
+### git_sync 工作区传输信任模型（hub 写任务）
+
+hub 写任务统一走 `workspace_transport: git_sync`（唯一合法值），核心是 **WorkspaceTransport** 接口（`internal/agents/workspace_transport.go`）的三段式契约：
+
+```go
+type WorkspaceTransport interface {
+    Name() string
+    Prepare(ctx, task, owner, repo, baseBranch) (*GitSyncInfo, *IssuedDeployKey, error)
+    Approve(ctx, task, agent, owner, repo, info, result, agentResult) (*Result, error)
+    Cleanup(ctx, owner, repo, key) error
+}
+```
+
+- **信任模型**：凭据由 **Hub 持有并使用**。Matea 在 Prepare 时签发任务级读写 deploy key，随 `GitSyncInfo` 交给 Hub；Hub 自 clone/commit/push 草稿分支 `matea/hub-{taskID}`。Matea 绝不替 Hub push，admin token 也绝不交给 Hub——Approve 只负责 fetch、校验、开 PR（审批）。
+- **GitSyncInfo 契约**（Submit 时内嵌于 `TaskContext.GitSync`）：`CloneURL` / `PrivateKey`（OpenSSH PEM）/ `DraftBranch`（唯一可推分支）/ `BaseBranch` / `BaseHEAD`（Prepare 时锚点）/ `AnchorHEAD`（续作锚点，空则取 BaseHEAD）/ `CommitAuthor` / `RequiredFooter`（`matea-task-id: {taskID}`）/ `HubPush: true`。
+- **任务级 deploy key 生命周期**：Prepare 签发（`DeployKeyIssuer`，Gitea keys API）→ 任务到达任意终态即回收（`cleanupGitSyncKey`，删除幂等可重试）→ Executor 每 **10 分钟** 跑一次 `SweepOrphanedDeployKeys` 兜底，回收 Handle 已终结或崩溃窗口内遗留的孤儿 key（30 分钟 grace 保护在途任务）。
+- **四要素校验**（`validateGitSyncDraft`，Approve 时对 fetch 回来的证据执行）：
+  1. **分支独占**——Hub 上报并推送的恰是 `matea/hub-{taskID}`（所有权另由 `hub_handles` 按 task id 锚定；Gitea deploy key 无分支粒度，靠应用层校验兜底）；
+  2. **起点锚定**——锚点（续作时为 session `LastHead`，否则为 Prepare 时 `BaseHEAD`）必须是 draft head 的祖先；且 base 分支自 Prepare 以来**未漂移**——漂移即 fail + 告警，**不自动 rebase**；
+  3. **footer**——锚点..DraftHEAD 区间内每个新 commit 都必须携带 `matea-task-id: {taskID}`（续作只签署自己的 commit）；
+  4. **diff 白名单**（B3）——变更路径对内置 deny 默认值 + 后端 `allowed/denied_paths` 校验，违规返回 `DiffPolicyViolationError`。
+- **Session 续作锚定 LastHead**：写任务成功 push 后把分支 head SHA 记入 session `LastHead`；下一任务 Prepare 时以它作为 `AnchorHEAD` 让 Hub 从续作点开新草稿分支，Approve 后 LastHead 归一化为 fetch 到的权威 head。
+- 权威细节见 [HUB-BACKENDS.md](HUB-BACKENDS.md)。
 
 ### 双轨三：deliver 出站通知
 

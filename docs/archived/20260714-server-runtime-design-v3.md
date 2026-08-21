@@ -4,7 +4,7 @@
 > 目标：在 v2 长期运行时愿景之上，明确 **编排层 vs 运行时** 边界，并以 **ExternalCLIRunner 最小改动** 优先接入 OpenCode（其次 Claude Code）。  
 > 部署目标：Linux / Windows（Host 模式）。定位：个人/小团队自用，最终开源。  
 > 前身：[20260714-server-runtime-design-v2.md](./20260714-server-runtime-design-v2.md)（v2，已归档）  
-> 状态：已归档；现行决策见 [server-runtime-design-v4.md](../server-runtime-design-v4.md)。
+> 状态：已归档；现行决策见 [server-runtime-design-v4.md](20260714-server-runtime-design-v4.md)。
 
 ---
 
