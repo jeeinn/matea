@@ -149,7 +149,7 @@
     <el-row :gutter="20" class="mt-20" v-if="healthSummary">
       <el-col :span="24">
         <el-card shadow="hover">
-          <HealthStatus />
+          <HealthStatus :summary="healthSummary" />
         </el-card>
       </el-col>
     </el-row>

@@ -1,10 +1,20 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getHealthSummary } from '../api'
 
+// 父组件（如 Dashboard）已请求过 /health/summary 时可通过 prop 传入，
+// 避免重复请求；无 prop（独立使用，如 SystemConfig）时自行拉取。
+const props = defineProps({
+  summary: { type: Object, default: null }
+})
+
 const loading = ref(false)
-const summary = ref(null)
+const summary = ref(props.summary)
+
+watch(() => props.summary, (val) => {
+  if (val) summary.value = val
+})
 
 const COMPONENT_LABELS = {
   gitea: 'Gitea',
@@ -57,7 +67,9 @@ async function refresh() {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  if (!props.summary) refresh()
+})
 defineExpose({ refresh })
 </script>
 
