@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,11 +78,11 @@ func (m *ConfigManager) ApplyDBOverrides() error {
 
 	for key, value := range entries {
 		if !IsConfigKey(key) {
-			log.Printf("[WARN] Ignore non-config DB key %q (value: %s). If this is no longer needed, delete it via: DELETE /api/config/%s", key, value, key)
+			log.Printf("[WARN] Ignore non-config DB key %q (value: %s). If this is no longer needed, delete it via: DELETE /api/config/%s", key, maskValueForLog(key, value), key)
 			continue
 		}
 		if err := applyConfigEntry(m.active, key, value); err != nil {
-			log.Printf("[WARN] Skip invalid DB config %s=%s: %v. Fix via: PUT /api/config with correct value, or DELETE /api/config/%s", key, value, err, key)
+			log.Printf("[WARN] Skip invalid DB config %s=%s: %v. Fix via: PUT /api/config with correct value, or DELETE /api/config/%s", key, maskValueForLog(key, value), err, key)
 		}
 	}
 
@@ -127,8 +129,84 @@ func (m *ConfigManager) Update(key, value string) error {
 		m.InvalidateAllModelCache()
 	}
 
-	log.Printf("[INFO] Config updated: %s = %s", key, value)
+	log.Printf("[INFO] Config updated: %s = %s", key, maskValueForLog(key, value))
 	return nil
+}
+
+// UpdateBatch validates and applies multiple entries as one unit: every entry
+// is validated in deterministic (sorted-key) order against a single merged
+// snapshot FIRST — so cross-field validators (e.g. agents.loop.*) see the
+// final state and one bad entry fails the whole batch — and only then is the
+// batch persisted and swapped in. This removes the per-key partial-failure
+// window and map-iteration nondeterminism of repeated Update calls.
+//
+// Note: persistence itself is still per-key (the store has no transaction
+// API), so a mid-batch DB error can leave a persisted-but-inactive subset;
+// validation up front removes the dominant failure class (invalid values).
+func (m *ConfigManager) UpdateBatch(entries map[string]string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	m.mu.RLock()
+	testCfg := copyConfig(m.active)
+	m.mu.RUnlock()
+	for _, k := range keys {
+		if err := applyConfigEntry(testCfg, k, entries[k]); err != nil {
+			return fmt.Errorf("invalid value for %s: %w", k, err)
+		}
+	}
+
+	if m.store != nil {
+		for _, k := range keys {
+			if err := m.store.SetConfig(k, entries[k]); err != nil {
+				return fmt.Errorf("persist config %s: %w", k, err)
+			}
+		}
+	}
+
+	m.mu.Lock()
+	m.active = testCfg
+	m.mu.Unlock()
+
+	for _, k := range keys {
+		if k == "llm.providers" {
+			m.InvalidateAllModelCache()
+		}
+		log.Printf("[INFO] Config updated: %s = %s", k, maskValueForLog(k, entries[k]))
+	}
+	return nil
+}
+
+// maskValueForLog redacts sensitive config values before they reach the
+// runtime log. Audit logs already mask — the runtime log must not become the
+// leak when secrets flow through Update (import / env-absorb / Web UI PUT).
+func maskValueForLog(key, value string) string {
+	lk := strings.ToLower(key)
+	if lk == "llm.providers" || // JSON blob containing api keys
+		lk == "agents.backends" || // JSON blob containing hub passwords
+		lk == "deliver.webhook_url" || // may carry ?access_token= secrets
+		isSensitiveKeyName(lk) {
+		return "********"
+	}
+	return value
+}
+
+// isSensitiveKeyName matches secret-bearing key names precisely enough to
+// catch gitea.admin_token / *.webhook_secret / *.api_key without over-masking
+// lookalikes such as agents.defaults.max_input_tokens.
+func isSensitiveKeyName(lk string) bool {
+	if strings.Contains(lk, "secret") || strings.Contains(lk, "password") {
+		return true
+	}
+	segs := strings.Split(lk, ".")
+	last := segs[len(segs)-1]
+	return last == "token" || strings.HasSuffix(last, "_token") || last == "api_key"
 }
 
 // Delete removes a DB override, reverting to file config default.

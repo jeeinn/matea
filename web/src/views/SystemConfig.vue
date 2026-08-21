@@ -515,7 +515,15 @@ npm test'
                 <el-icon><Download /></el-icon>
                 下载配置备份 (JSON)
               </el-button>
-              <div class="form-tip">将包含已保存的密钥（用于还原），请妥善保管下载的文件。</div>
+              <el-checkbox v-model="exportWithSecrets" style="margin-left: 16px">
+                包含密钥（完整还原用）
+              </el-checkbox>
+              <div v-if="exportWithSecrets" class="form-tip" style="color: var(--el-color-danger)">
+                导出的文件将包含全部真实密钥（admin_token、api_key 等），仅用于完整还原，请务必妥善保管。
+              </div>
+              <div v-else class="form-tip">
+                默认导出已脱敏（密钥显示为 ********）：可安全分享/存档；导入本实例时占位符表示「保持当前值」。
+              </div>
             </el-form-item>
             <el-form-item label="导入配置">
               <el-upload
@@ -1686,12 +1694,13 @@ onMounted(() => {
   loadProviderPresets()
 })
 
-// C-20: 导出当前系统配置为 JSON 文件。
+// C-20: 导出当前系统配置为 JSON 文件。默认脱敏；勾选「包含密钥」才带真实密钥。
 const exporting = ref(false)
+const exportWithSecrets = ref(false)
 const exportConfigFile = async () => {
   exporting.value = true
   try {
-    const data = await exportConfig()
+    const data = await exportConfig(exportWithSecrets.value)
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -1701,7 +1710,8 @@ const exportConfigFile = async () => {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    // 延迟释放：部分浏览器在 click 后立即 revoke 会取消下载
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
     ElMessage.success('配置已导出')
   } catch (e) {
     ElMessage.error('导出失败：' + (e.message || e))
@@ -1710,21 +1720,60 @@ const exportConfigFile = async () => {
   }
 }
 
-// C-20: 导入所选 JSON 文件并合并到配置。
+// C-20: 导入所选 JSON 文件并合并到配置。先做客户端预检（大小 / JSON /
+// 格式标识），再弹确认框列出键名，用户确认后才提交，避免误触覆盖系统配置。
 const importing = ref(false)
 const onImportFile = async (file) => {
   const raw = file?.raw
   if (!raw) return
+  if (raw.size > 1024 * 1024) {
+    ElMessage.error('文件超过 1MiB，拒绝导入')
+    return
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(await raw.text())
+  } catch (e) {
+    ElMessage.error('文件不是合法的 JSON：' + (e.message || e))
+    return
+  }
+  if (parsed && parsed.format && parsed.format !== 'matea-config-v1') {
+    ElMessage.error(`配置文件格式不符（format=${parsed.format}），仅支持 matea-config-v1`)
+    return
+  }
+  const config = parsed.config || parsed
+  const keys = Object.keys(config || {})
+  if (!keys.length) {
+    ElMessage.warning('文件中没有可导入的配置键')
+    return
+  }
+  const preview = keys.slice(0, 10).join('、') + (keys.length > 10 ? ` 等共 ${keys.length} 项` : '')
+  try {
+    await ElMessageBox.confirm(
+      `即将导入 ${keys.length} 个配置键：${preview}。导入将覆盖系统配置，是否继续？`,
+      '确认导入',
+      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' }
+    )
+  } catch (e) {
+    return // 用户取消
+  }
   importing.value = true
   try {
-    const text = await raw.text()
-    const parsed = JSON.parse(text)
-    const config = parsed.config || parsed
-    await importConfig(config)
-    ElMessage.success('配置已导入，正在重新加载…')
+    const res = await importConfig(config)
+    if (res?.errors && res.errors.length) {
+      ElMessage.error((res.message ? res.message + '：' : '导入失败：') + res.errors[0])
+    } else {
+      ElMessage.success(res?.message || '配置已导入')
+    }
     await loadConfig()
   } catch (e) {
-    ElMessage.error('导入失败：' + (e.message || e))
+    // 400（全量失败 / 校验失败）：优先展示后端 message 与首条错误
+    const payload = e.payload || e.response?.data
+    if (payload?.errors?.length) {
+      ElMessage.error((payload.message ? payload.message + '：' : '导入失败：') + payload.errors[0])
+    } else {
+      ElMessage.error('导入失败：' + (e.message || e))
+    }
   } finally {
     importing.value = false
   }

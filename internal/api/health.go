@@ -7,7 +7,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jeeinn/matea/internal/config"
@@ -18,11 +20,11 @@ import (
 
 // Health component status values.
 const (
-	healthStatusOK          = "ok"          // reachable / configured and working
-	healthStatusDegraded    = "degraded"    // configured but incomplete or unreachable
+	healthStatusOK           = "ok"           // reachable / configured and working
+	healthStatusDegraded     = "degraded"     // configured but incomplete or unreachable
 	healthStatusUnconfigured = "unconfigured" // required input missing
-	healthStatusDisabled    = "disabled"    // feature not in use (no-op, not an error)
-	healthStatusError       = "error"       // configured but failed to reach
+	healthStatusDisabled     = "disabled"     // feature not in use (no-op, not an error)
+	healthStatusError        = "error"        // configured but failed to reach
 )
 
 // diskWarnPct is the used-space threshold (percent) at or above which the
@@ -58,30 +60,57 @@ type healthSummary struct {
 	Warnings    []string                   `json:"warnings,omitempty"`
 }
 
+// liveConfig returns the hot-updated active config (the Handler's h.cfg field
+// is only the startup snapshot and goes stale after any config write).
+func (h *Handler) liveConfig() *config.Config {
+	if h.cfgManager != nil {
+		return h.cfgManager.Get()
+	}
+	return h.cfg
+}
+
 // handleHealthSummary reports the readiness of every external dependency.
 // GET /api/health/summary (JWT required).
 func (h *Handler) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout*2)
+	cfg := h.liveConfig()
+
+	// Probes run concurrently; the outer context is only a last-resort cap —
+	// each probe carries its own probeTimeout.
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout+2*time.Second)
 	defer cancel()
 
-	summary := healthSummary{
-		GeneratedAt: time.Now(),
-		Components:  map[string]healthComponent{},
-	}
+	var giteaComp, llmComp, hubComp, deliverComp, dbComp, diskComp healthComponent
+	var llmWarn, diskWarn string
+	var hubs []hubBackendHealth
 
-	summary.Components["gitea"] = h.checkGitea(ctx)
-	llmComp, llmWarn := h.checkLLM(ctx)
-	summary.Components["llm"] = llmComp
+	// Each goroutine writes only its own result slots; the shared map is
+	// assembled after Wait, so there is no concurrent map access.
+	var wg sync.WaitGroup
+	wg.Add(6)
+	go func() { defer wg.Done(); giteaComp = h.checkGitea(ctx, cfg) }()
+	go func() { defer wg.Done(); llmComp, llmWarn = h.checkLLM(ctx, cfg) }()
+	go func() { defer wg.Done(); hubComp, hubs = h.checkHubBackends(ctx, cfg) }()
+	go func() { defer wg.Done(); deliverComp = h.checkDeliver(cfg) }()
+	go func() { defer wg.Done(); dbComp = h.checkDatabase(ctx) }()
+	go func() { defer wg.Done(); diskComp, diskWarn = h.checkDisk(cfg) }()
+	wg.Wait()
+
+	summary := healthSummary{
+		Healthy:     true,
+		GeneratedAt: time.Now(),
+		Components: map[string]healthComponent{
+			"gitea":        giteaComp,
+			"llm":          llmComp,
+			"hub_backends": hubComp,
+			"deliver":      deliverComp,
+			"database":     dbComp,
+			"disk":         diskComp,
+		},
+		HubBackends: hubs,
+	}
 	if llmWarn != "" {
 		summary.Warnings = append(summary.Warnings, llmWarn)
 	}
-	hubComp, hubs := h.checkHubBackends(ctx)
-	summary.Components["hub_backends"] = hubComp
-	summary.HubBackends = hubs
-	summary.Components["deliver"] = h.checkDeliver()
-	summary.Components["database"] = h.checkDatabase(ctx)
-	diskComp, diskWarn := h.checkDisk()
-	summary.Components["disk"] = diskComp
 	if diskWarn != "" {
 		summary.Warnings = append(summary.Warnings, diskWarn)
 	}
@@ -90,7 +119,6 @@ func (h *Handler) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
 	// (error OR degraded) fails the whole system. An unconfigured component is
 	// acceptable (server is up, just not wired up yet). Hub/deliver "degraded"
 	// or "disabled" and disk "warning" do not fail overall health.
-	summary.Healthy = true
 	critical := map[string]bool{"gitea": true, "llm": true, "database": true}
 	for name, c := range summary.Components {
 		if name == "disk" {
@@ -108,8 +136,8 @@ func (h *Handler) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkGitea verifies Gitea URL + token by calling the real API.
-func (h *Handler) checkGitea(ctx context.Context) healthComponent {
-	g := h.cfg.Gitea
+func (h *Handler) checkGitea(ctx context.Context, cfg *config.Config) healthComponent {
+	g := cfg.Gitea
 	if g.URL == "" || g.AdminToken == "" {
 		return healthComponent{
 			Status:  healthStatusUnconfigured,
@@ -118,7 +146,7 @@ func (h *Handler) checkGitea(ctx context.Context) healthComponent {
 	}
 	client := gitea.NewClient(g.URL, g.AdminToken)
 	var res *gitea.ConnectionTestResult
-	probeErr := withTimeout(probeTimeout, func() error {
+	probeErr := withTimeout(ctx, probeTimeout, func() error {
 		var err error
 		res, err = client.TestConnection()
 		return err
@@ -130,9 +158,13 @@ func (h *Handler) checkGitea(ctx context.Context) healthComponent {
 		}
 	}
 	if res == nil || !res.OK {
+		msg := "Gitea 连接测试未通过"
+		if res != nil && res.Message != "" {
+			msg = res.Message
+		}
 		return healthComponent{
 			Status:  healthStatusError,
-			Message: res.Message,
+			Message: msg,
 		}
 	}
 	return healthComponent{
@@ -148,15 +180,15 @@ func (h *Handler) checkGitea(ctx context.Context) healthComponent {
 
 // checkLLM reports whether the default LLM provider is configured and, for
 // OpenAI-compatible providers, whether it is actually reachable.
-func (h *Handler) checkLLM(ctx context.Context) (healthComponent, string) {
-	def := h.cfg.LLM.Defaults.Provider
+func (h *Handler) checkLLM(ctx context.Context, cfg *config.Config) (healthComponent, string) {
+	def := cfg.LLM.Defaults.Provider
 	if def == "" {
 		return healthComponent{
 			Status:  healthStatusUnconfigured,
 			Message: "未配置默认 LLM provider（llm.defaults.provider）",
 		}, ""
 	}
-	prov, ok := h.cfg.LLM.Providers[def]
+	prov, ok := cfg.LLM.Providers[def]
 	if !ok {
 		return healthComponent{
 			Status:  healthStatusDegraded,
@@ -180,7 +212,7 @@ func (h *Handler) checkLLM(ctx context.Context) (healthComponent, string) {
 	// (no token cost). Anthropic has no list endpoint, so "configured" is the
 	// best we can assert without a chat round-trip.
 	if prov.Type == "openai_compatible" {
-		probeErr := withTimeout(probeTimeout, func() error {
+		probeErr := withTimeout(ctx, probeTimeout, func() error {
 			p := llm.NewOpenAICompatibleProvider(prov.BaseURL, prov.APIKey)
 			p.HTTPClient.Timeout = probeTimeout
 			c, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -212,20 +244,28 @@ func (h *Handler) checkLLM(ctx context.Context) (healthComponent, string) {
 
 // checkHubBackends probes each hub (non-builtin) coding backend's health
 // endpoint and reports aggregate status.
-func (h *Handler) checkHubBackends(ctx context.Context) (healthComponent, []hubBackendHealth) {
-	cfg := h.cfg.Agents.Backends
-	var hubs []hubBackendHealth
-	for name, bc := range cfg.Backends {
+func (h *Handler) checkHubBackends(ctx context.Context, cfg *config.Config) (healthComponent, []hubBackendHealth) {
+	// Sort names for a stable response — map iteration order would otherwise
+	// jitter the hub_backends list between requests.
+	names := make([]string, 0, len(cfg.Agents.Backends.Backends))
+	for name, bc := range cfg.Agents.Backends.Backends {
 		if bc.Type == config.BackendTypeBuiltin {
 			continue
 		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var hubs []hubBackendHealth
+	for _, name := range names {
+		bc := cfg.Agents.Backends.Backends[name]
 		hb := hubBackendHealth{Name: name, Type: bc.Type}
 		path := bc.HealthCheck.Path
 		if path == "" {
 			path = "/health"
 		}
-		u := strings.TrimRight(bc.BaseURL, "/") + path
-		probeErr := withTimeout(probeTimeout, func() error {
+		u := strings.TrimRight(bc.BaseURL, "/") + "/" + strings.TrimLeft(path, "/")
+		probeErr := withTimeout(ctx, probeTimeout, func() error {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 			if err != nil {
 				return err
@@ -277,8 +317,8 @@ func (h *Handler) checkHubBackends(ctx context.Context) (healthComponent, []hubB
 }
 
 // checkDeliver reports whether outbound delivery is configured.
-func (h *Handler) checkDeliver() healthComponent {
-	if h.cfg.Deliver.WebhookURL == "" {
+func (h *Handler) checkDeliver(cfg *config.Config) healthComponent {
+	if cfg.Deliver.WebhookURL == "" {
 		return healthComponent{
 			Status:  healthStatusDisabled,
 			Message: "未配置出站投递 Webhook（deliver.webhook_url 为空）",
@@ -286,7 +326,7 @@ func (h *Handler) checkDeliver() healthComponent {
 	}
 	return healthComponent{
 		Status:  healthStatusOK,
-		Message: fmt.Sprintf("出站投递已配置: %s", maskURL(h.cfg.Deliver.WebhookURL)),
+		Message: fmt.Sprintf("出站投递已配置: %s", maskURL(cfg.Deliver.WebhookURL)),
 	}
 }
 
@@ -313,8 +353,8 @@ func (h *Handler) checkDatabase(ctx context.Context) healthComponent {
 }
 
 // checkDisk reports free-space on the volume holding the data directory.
-func (h *Handler) checkDisk() (healthComponent, string) {
-	dir := healthDataDir(h.cfg)
+func (h *Handler) checkDisk(cfg *config.Config) (healthComponent, string) {
+	dir := healthDataDir(cfg)
 	info, err := sysinfo.CheckDisk(dir, diskWarnPct)
 	if err != nil {
 		return healthComponent{
@@ -332,22 +372,23 @@ func (h *Handler) checkDisk() (healthComponent, string) {
 			"free_pct":    100 - info.UsedPercent,
 		},
 	}
+	usage := fmt.Sprintf("剩余 %s / 共 %s", sysinfo.HumanBytes(info.FreeBytes), sysinfo.HumanBytes(info.TotalBytes))
 	if info.Warning {
 		comp.Status = healthStatusDegraded
-		comp.Message = fmt.Sprintf("%s 磁盘使用率已达 %.1f%%（剩余 %.1f GB / 共 %.1f GB）",
-			info.Path, info.UsedPercent, float64(info.FreeBytes)/1e9, float64(info.TotalBytes)/1e9)
+		comp.Message = fmt.Sprintf("%s 磁盘使用率已达 %.1f%%（%s）", info.Path, info.UsedPercent, usage)
 		return comp, comp.Message
 	}
 	comp.Status = healthStatusOK
-	comp.Message = fmt.Sprintf("%s 剩余 %.1f GB / 共 %.1f GB", info.Path, float64(info.FreeBytes)/1e9, float64(info.TotalBytes)/1e9)
+	comp.Message = fmt.Sprintf("%s %s", info.Path, usage)
 	return comp, ""
 }
 
 // healthDataDir resolves the directory whose filesystem should be checked:
-// the directory containing the SQLite file, or cwd when no path is set.
+// the directory containing the SQLite file, or cwd when no path is set or the
+// database is in-memory.
 func healthDataDir(cfg *config.Config) string {
 	p := cfg.Database.Path
-	if p == "" {
+	if p == "" || p == ":memory:" {
 		return "."
 	}
 	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
@@ -356,7 +397,9 @@ func healthDataDir(cfg *config.Config) string {
 	return p
 }
 
-// maskURL redacts the userinfo / query of a webhook URL for safe display.
+// maskURL redacts the userinfo and query of a webhook URL for safe display.
+// IM webhooks (DingTalk/Feishu/WeCom) commonly carry the secret in the query
+// (?access_token=...), so the whole query is dropped.
 func maskURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -365,18 +408,23 @@ func maskURL(raw string) string {
 	if u.User != nil {
 		u.User = url.UserPassword("***", "***")
 	}
+	if u.RawQuery != "" {
+		u.RawQuery = "***"
+	}
 	return u.String()
 }
 
-// withTimeout runs fn in a goroutine and returns its error, or a timeout error
-// if fn does not finish within d. Used for probes whose underlying client does
-// not honour a context (e.g. gitea.TestConnection).
-func withTimeout(d time.Duration, fn func() error) error {
+// withTimeout runs fn in a goroutine and returns its error, a ctx error, or a
+// timeout error if fn does not finish within d. Used for probes whose
+// underlying client does not honour a context (e.g. gitea.TestConnection).
+func withTimeout(ctx context.Context, d time.Duration, fn func() error) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- fn() }()
 	select {
 	case err := <-errCh:
 		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-time.After(d):
 		return fmt.Errorf("timeout after %s", d)
 	}

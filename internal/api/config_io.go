@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -14,11 +15,16 @@ import (
 //
 // A faithful backup of the admin-managed flat config. Export emits a
 // string-keyed map that round-trips through applyConfigEntry on import, so a
-// downloaded file can be re-uploaded verbatim. Secrets are included in the
-// export (needed for a restore to actually work) — the endpoint is JWT
-// protected and the file is the operator's responsibility.
+// downloaded file can be re-uploaded verbatim. Secrets are MASKED by default
+// (the original C-20 spec: 敏感字段脱敏); an operator who needs a true
+// restore-ready backup must explicitly pass ?include_secrets=1, which is
+// audit-logged. Masked exports re-import cleanly: the ******** placeholder
+// means "keep current value" (see resolveMaskedEntries).
 
 const configExportFormat = "matea-config-v1"
+
+// configImportMaxBody bounds the upload size of a config import document.
+const configImportMaxBody = 1 << 20 // 1 MiB
 
 // configToFlatMap renders the active config as a flat string map suitable for
 // export/import. Every value is stringified to match what applyConfigEntry
@@ -71,20 +77,79 @@ func configToFlatMap(cfg *config.Config) map[string]string {
 }
 
 // handleConfigExport handles GET /api/config/export (JWT required).
+// Secrets are masked unless ?include_secrets=1 is passed explicitly; every
+// export is audit-logged because this endpoint can read out every credential
+// in the system at once.
 func (h *Handler) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	if h.cfgManager == nil {
 		writeError(w, http.StatusInternalServerError, "config manager not initialized")
 		return
 	}
+	includeSecrets := r.URL.Query().Get("include_secrets") == "1" ||
+		r.URL.Query().Get("include_secrets") == "true"
 	flat := configToFlatMap(h.cfgManager.Get())
+	if !includeSecrets {
+		flat = maskFlatSecrets(flat)
+	}
+	if h.db != nil {
+		h.db.LogOperation(0, 0, "config_export", fmt.Sprintf("keys=%d include_secrets=%v", len(flat), includeSecrets))
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"format": configExportFormat,
 		"config": flat,
+		"masked": !includeSecrets,
 	})
+}
+
+// maskFlatSecrets redacts sensitive values in an export map: scalar
+// token/secret/api_key/password keys and deliver.webhook_url collapse to the
+// placeholder; llm.providers and agents.backends keep their structure with
+// only the credential fields masked.
+func maskFlatSecrets(flat map[string]string) map[string]string {
+	masked := make(map[string]string, len(flat))
+	for key, value := range flat {
+		switch {
+		case value == "":
+			masked[key] = value
+		// The export key set is a hardcoded whitelist (configToFlatMap), so
+		// exact matching is precise: the only scalar secrets are the two
+		// gitea credentials. (Substring matching would over-mask e.g.
+		// agents.defaults.max_input_tokens and break round-trip re-import.)
+		case sensitiveConfigKeys[key] || strings.ToLower(key) == "deliver.webhook_url":
+			masked[key] = configMaskedPlaceholder
+		case key == "llm.providers":
+			masked[key] = maskProvidersJSON(value)
+		case key == "agents.backends":
+			masked[key] = config.MaskSensitiveInBackendsJSON(value)
+		default:
+			masked[key] = value
+		}
+	}
+	return masked
+}
+
+// maskProvidersJSON masks every api_key inside a llm.providers JSON document.
+func maskProvidersJSON(payload string) string {
+	providers, err := config.ParseProvidersJSON(payload)
+	if err != nil {
+		return configMaskedPlaceholder // unparseable — don't risk leaking
+	}
+	for name, pc := range providers {
+		if pc.APIKey != "" {
+			pc.APIKey = configMaskedPlaceholder
+			providers[name] = pc
+		}
+	}
+	data, err := json.Marshal(providers)
+	if err != nil {
+		return configMaskedPlaceholder
+	}
+	return string(data)
 }
 
 // configImportRequest carries the uploaded flat config.
 type configImportRequest struct {
+	Format string                 `json:"format"`
 	Config map[string]interface{} `json:"config"`
 }
 
@@ -97,9 +162,14 @@ func (h *Handler) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "config manager not initialized")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, configImportMaxBody)
 	var req configImportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Format != "" && req.Format != configExportFormat {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported config format: %q (expect %s)", req.Format, configExportFormat))
 		return
 	}
 	if len(req.Config) == 0 {
@@ -126,35 +196,60 @@ func (h *Handler) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var applied, applyErrs []string
+	// C-6 parity with PUT /api/config: importing Gitea coordinates without a
+	// webhook_secret must not silently leave signature verification off.
+	h.ensureWebhookSecret(entries)
+
+	// Atomic batch: validated as one merged snapshot, applied all-or-nothing
+	// (no partial-failure window, deterministic key order).
+	if err := h.cfgManager.UpdateBatch(entries); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"applied": []string{}, "errors": []string{err.Error()},
+			"message": "导入校验失败，未应用任何变更",
+		})
+		return
+	}
+
+	applied := make([]string, 0, len(entries))
+	masked := make([]string, 0, len(entries))
 	for key, value := range entries {
-		if err := h.cfgManager.Update(key, value); err != nil {
-			applyErrs = append(applyErrs, fmt.Sprintf("%s: %s", key, err.Error()))
-			continue
-		}
 		applied = append(applied, key)
+		masked = append(masked, maskConfigValue(key, value))
+	}
+	sort.Strings(applied)
+
+	h.notifyConfigChange()
+	if h.db != nil {
+		h.db.LogOperation(0, 0, "config_import", strings.Join(masked, "; "))
 	}
 
-	if len(applied) > 0 {
-		h.notifyConfigChange()
-		if h.db != nil {
-			masked := make([]string, 0, len(applied))
-			for _, k := range applied {
-				masked = append(masked, maskConfigValue(k, entries[k]))
-			}
-			h.db.LogOperation(0, 0, "config_import", strings.Join(masked, "; "))
-		}
-	}
-
-	status := http.StatusOK
-	if len(applied) == 0 && len(applyErrs) > 0 {
-		status = http.StatusBadRequest
-	}
-	writeJSON(w, status, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"applied": applied,
-		"errors":  applyErrs,
-		"message": fmt.Sprintf("已导入 %d 项，%d 项失败", len(applied), len(applyErrs)),
+		"errors":  []string{},
+		"message": fmt.Sprintf("已导入 %d 项", len(applied)),
 	})
+}
+
+// ensureWebhookSecret adds a generated gitea.webhook_secret to the batch when
+// Gitea coordinates are being written and no secret exists anywhere — an
+// empty secret silently disables webhook signature verification (C-6).
+func (h *Handler) ensureWebhookSecret(entries map[string]string) {
+	_, touchesURL := entries["gitea.url"]
+	_, touchesToken := entries["gitea.admin_token"]
+	if !touchesURL && !touchesToken {
+		return
+	}
+	if _, has := entries["gitea.webhook_secret"]; has {
+		return
+	}
+	if h.cfgManager.Get().Gitea.WebhookSecret != "" {
+		return
+	}
+	secret, err := config.GenerateWebhookSecret()
+	if err != nil {
+		return // best-effort; UpdateBatch validation still applies
+	}
+	entries["gitea.webhook_secret"] = secret
 }
 
 // stringifyEntry turns a decoded JSON value into the string form that

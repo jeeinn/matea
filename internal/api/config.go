@@ -218,13 +218,13 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Apply all entries
+	// Apply all entries atomically (validated as one merged batch first).
+	if err := h.cfgManager.UpdateBatch(entries); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
 	var applied []string
 	for key, value := range entries {
-		if err := h.cfgManager.Update(key, value); err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
 		applied = append(applied, fmt.Sprintf("%s=%s", key, maskConfigValue(key, value)))
 	}
 
@@ -623,6 +623,10 @@ func maskConfigValue(key, value string) string {
 	lower := strings.ToLower(key)
 	if strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
 		strings.Contains(lower, "api_key") || strings.Contains(lower, "password") {
+		return "****"
+	}
+	// deliver.webhook_url may carry IM secrets in the query (?access_token=).
+	if lower == "deliver.webhook_url" {
 		return "****"
 	}
 	if key == "llm.providers" {

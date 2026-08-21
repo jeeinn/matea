@@ -44,6 +44,15 @@ api.interceptors.response.use(
       authStore.logout()
       router.push('/login')
     }
+    // 错误归一化（参照 api/setup.js）：把后端返回的 error/message 字段提升为
+    // 易读的 error.message，并附带 status/payload；保留原 axios error 结构
+    // （response/config 等）以免破坏现有调用方。
+    const data = error.response?.data
+    if (data && (data.error || data.message)) {
+      error.message = data.error || data.message
+    }
+    error.status = status
+    error.payload = data
     return Promise.reject(error)
   }
 )
@@ -65,9 +74,10 @@ export function getHealthSummary() {
   return api.get('/health/summary')
 }
 
-// C-20: export the admin-managed flat config (returns { format, config }).
-export function exportConfig() {
-  return api.get('/config/export')
+// C-20: export the admin-managed flat config (returns { format, config,
+// masked }). Secrets are masked unless includeSecrets is explicitly true.
+export function exportConfig(includeSecrets = false) {
+  return api.get(includeSecrets ? '/config/export?include_secrets=1' : '/config/export')
 }
 
 // C-20: import a previously exported (or hand-edited) flat config map.
