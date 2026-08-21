@@ -276,6 +276,33 @@ func TestSetupCompleteExplicitWebhookSecret(t *testing.T) {
 	assert.Equal(t, "", mgr.Get().LLM.Providers["ollama"].APIKey)
 }
 
+// R4 regression: a webhook_secret absorbed earlier (e.g. from
+// GITEA_WEBHOOK_SECRET via apply-env) must survive the wizard finish instead
+// of being silently replaced by a fresh random value (the old one would be
+// unrecoverable and every webhook registration would break).
+func TestSetupCompletePreservesAbsorbedWebhookSecret(t *testing.T) {
+	giteaSrv := fakeSetupGitea(t, "root", true)
+	h, _, mgr, tokens := newSetupTestHandler(t, incompleteConfig())
+	mux := setupMux(h)
+
+	// Simulate a prior env absorb.
+	require.NoError(t, mgr.Update("gitea.webhook_secret", "env-absorbed-secret"))
+
+	body := map[string]interface{}{
+		"gitea": map[string]string{"url": giteaSrv.URL, "token": "tok"},
+		"llm":   map[string]string{"provider": "ollama", "model": "qwen3", "base_url": "http://localhost:11434/v1"},
+		// no webhook_secret in the request — the wizard has no field for it
+	}
+	w := doSetupReq(t, mux, "POST", "/api/setup/complete", tokens.Token(), body)
+	require.Equal(t, 200, w.Code, w.Body.String())
+
+	var resp map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	_, generated := resp["webhook_secret_generated"]
+	assert.False(t, generated, "absorbed secret must be preserved, not regenerated")
+	assert.Equal(t, "env-absorbed-secret", mgr.Get().Gitea.WebhookSecret)
+}
+
 func TestSetupCompleteGiteaRejected(t *testing.T) {
 	// Gitea that 401s everything.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

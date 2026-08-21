@@ -143,6 +143,26 @@ func (h *Handler) handleApplyEnv(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(applied) > 0 {
+		// C-6 parity: absorbing Gitea coordinates without a webhook secret
+		// must not leave signature verification silently disabled. The helper
+		// inspects key presence, so stage the applied gitea keys as stubs.
+		secretEntries := map[string]string{}
+		for _, env := range applied {
+			switch env {
+			case "GITEA_URL":
+				secretEntries["gitea.url"] = "applied"
+			case "GITEA_ADMIN_TOKEN":
+				secretEntries["gitea.admin_token"] = "applied"
+			}
+		}
+		if len(secretEntries) > 0 {
+			h.ensureWebhookSecret(secretEntries)
+			if secret, ok := secretEntries["gitea.webhook_secret"]; ok {
+				if err := h.cfgManager.Update("gitea.webhook_secret", secret); err == nil {
+					applied = append(applied, "gitea.webhook_secret (自动生成)")
+				}
+			}
+		}
 		h.notifyConfigChange()
 		if h.db != nil {
 			h.db.LogOperation(0, 0, "config_apply_env", strings.Join(applied, "; "))
@@ -154,10 +174,14 @@ func (h *Handler) handleApplyEnv(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusBadRequest
 	}
 	writeJSON(w, status, map[string]interface{}{
-		"applied":  applied,
-		"skipped":  skipped,
-		"errors":   applyErrs,
-		"message":  buildApplyMessage(len(applied), len(skipped), len(applyErrs)),
+		"applied": applied,
+		"skipped": skipped,
+		"errors":  applyErrs,
+		"message": buildApplyMessage(len(applied), len(skipped), len(applyErrs)),
+		// Absorb semantics the UI must surface: the env value is snapshotted
+		// into the DB, which then takes precedence over ${VAR} expansion in
+		// config.yaml — later env changes require a config edit, not a restart.
+		"note": "吸入的是环境变量当前值的快照（已写入数据库）；此后修改环境变量不会自动生效，需在系统配置中更新。",
 	})
 }
 
@@ -184,8 +208,13 @@ func (h *Handler) applyEnvLLMProvider(d envVarDescriptor, apiKey string) error {
 		providers = map[string]config.ProviderConfig{}
 	}
 	pc := providers[d.ProviderName]
-	pc.Type = d.ProviderType
-	if d.ProviderURL != "" {
+	// Never clobber an existing provider's custom base_url/type with the
+	// catalog defaults — absorbing an env key must not silently reroute a
+	// working provider (e.g. a self-hosted proxy).
+	if pc.Type == "" {
+		pc.Type = d.ProviderType
+	}
+	if d.ProviderURL != "" && pc.BaseURL == "" {
 		pc.BaseURL = d.ProviderURL
 	}
 	pc.APIKey = apiKey
