@@ -34,6 +34,38 @@
 
       <!-- Wizard -->
       <template v-else-if="!finished">
+        <!-- C-21: import secrets already present in the environment -->
+        <div class="env-import-bar">
+          <el-button :loading="envDetect.loading" @click="openEnvImport">
+            从环境变量导入配置
+          </el-button>
+          <span class="env-import-hint">若服务器已用环境变量配置 Gitea / LLM / Hub 密钥，可一键吸入（值不会显示）</span>
+        </div>
+
+        <el-dialog v-model="envDetect.dialogVisible" title="从环境变量导入" width="640px" :close-on-click-modal="false">
+          <el-alert type="info" :closable="false" class="mb-16">
+            勾选要吸入的环境变量，点击「应用」写入系统配置。变量值不会回显，仅写入对应配置项。
+          </el-alert>
+          <div v-loading="envDetect.loading">
+            <el-empty v-if="!envDetect.loading && envDetect.items.length === 0" description="未检测到已知环境变量" />
+            <el-checkbox-group v-model="envDetect.selected">
+              <div v-for="item in envDetect.items" :key="item.env" class="env-item">
+                <el-checkbox :label="item.env" :disabled="!item.present">
+                  <span class="env-name">{{ item.env }}</span>
+                  <el-tag size="small" :type="item.present ? 'success' : 'info'">{{ item.present ? '已检测' : '未设置' }}</el-tag>
+                  <span class="env-title">{{ item.title }}</span>
+                </el-checkbox>
+              </div>
+            </el-checkbox-group>
+          </div>
+          <template #footer>
+            <el-button @click="envDetect.dialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="envDetect.applying" :disabled="envDetect.selected.length === 0" @click="applyEnvSelected">
+              应用所选 ({{ envDetect.selected.length }})
+            </el-button>
+          </template>
+        </el-dialog>
+
         <el-steps :active="step" align-center class="setup-steps">
           <el-step title="Gitea 连接" />
           <el-step title="LLM 模型" />
@@ -204,7 +236,9 @@ import {
   testSetupLLM,
   completeSetup,
   getProviderPresets,
-  discoverSetupModels
+  discoverSetupModels,
+  detectEnv,
+  applyEnv
 } from '../api/setup'
 
 const router = useRouter()
@@ -263,6 +297,47 @@ const detect = ref({ loading: false, ollama: null, opencode: null })
 const modelOptions = ref([])
 const discovering = ref(false)
 let detectStarted = false
+
+// C-21: absorb environment variables into config.
+const envDetect = ref({
+  loading: false,
+  applying: false,
+  dialogVisible: false,
+  items: [],
+  selected: []
+})
+
+async function openEnvImport() {
+  envDetect.value.dialogVisible = true
+  envDetect.value.loading = true
+  envDetect.value.selected = []
+  try {
+    const res = await detectEnv(token.value.trim())
+    envDetect.value.items = res.detected || []
+  } catch (e) {
+    ElMessage.error('环境变量检测失败：' + (e.message || e))
+  } finally {
+    envDetect.value.loading = false
+  }
+}
+
+async function applyEnvSelected() {
+  if (envDetect.value.selected.length === 0) return
+  envDetect.value.applying = true
+  try {
+    const res = await applyEnv(token.value.trim(), envDetect.value.selected)
+    if (res.errors && res.errors.length) {
+      ElMessage.warning('部分应用失败：' + res.errors.join('；'))
+    } else {
+      ElMessage.success(res.message || '已应用')
+    }
+    envDetect.value.dialogVisible = false
+  } catch (e) {
+    ElMessage.error('应用失败：' + (e.message || e))
+  } finally {
+    envDetect.value.applying = false
+  }
+}
 
 const isLocalBaseURL = computed(() => {
   const u = (llm.value.base_url || '').toLowerCase()
@@ -504,5 +579,30 @@ function goLogin() {
 .secret-hint {
   margin: 4px 0 0 0;
   color: #606266;
+}
+
+.env-import-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.env-import-hint {
+  color: #909399;
+  font-size: 13px;
+}
+.env-item {
+  padding: 6px 0;
+}
+.env-name {
+  font-family: monospace;
+  font-weight: 600;
+  margin-right: 8px;
+}
+.env-title {
+  color: #909399;
+  font-size: 13px;
+  margin-left: 8px;
 }
 </style>

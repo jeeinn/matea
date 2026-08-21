@@ -20,6 +20,8 @@
         style="margin-bottom: 16px"
       />
 
+      <HealthStatus style="margin-bottom: 16px" />
+
       <el-tabs v-model="activeTab">
         <!-- Tab 1: Gitea 连接 -->
         <el-tab-pane label="Gitea 连接" name="gitea">
@@ -497,6 +499,41 @@ npm test'
             </el-table-column>
           </el-table>
         </el-tab-pane>
+
+        <!-- Tab: 备份与恢复 (C-20) -->
+        <el-tab-pane label="备份与恢复" name="backup">
+          <el-alert
+            title="导出当前系统配置为 JSON 文件用于备份；导入可将之前导出（或手工编辑）的配置恢复。导入会以占位符 ******** 视为「保持当前值」，不会覆盖现有密钥。"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 16px"
+          />
+          <el-form label-width="120px" class="config-form">
+            <el-form-item label="导出配置">
+              <el-button :loading="exporting" type="primary" @click="exportConfigFile">
+                <el-icon><Download /></el-icon>
+                下载配置备份 (JSON)
+              </el-button>
+              <div class="form-tip">将包含已保存的密钥（用于还原），请妥善保管下载的文件。</div>
+            </el-form-item>
+            <el-form-item label="导入配置">
+              <el-upload
+                accept=".json,application/json"
+                :auto-upload="false"
+                :show-file-list="true"
+                :limit="1"
+                :on-change="onImportFile"
+              >
+                <el-button :loading="importing" type="warning">
+                  <el-icon><Upload /></el-icon>
+                  选择并导入 JSON
+                </el-button>
+              </el-upload>
+              <div class="form-tip">仅支持从本系统导出的扁平配置格式；非法键会被拒绝。</div>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -787,11 +824,12 @@ npm test'
 
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
-import api, { getProviderPresets, discoverModels } from '../api'
-import { Check, Plus, Document, Edit } from '@element-plus/icons-vue'
+import api, { getProviderPresets, discoverModels, exportConfig, importConfig } from '../api'
+import { Check, Plus, Document, Edit, Download, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import TemplateHelp from '../components/TemplateHelp.vue'
 import ProviderConfigHelp from '../components/ProviderConfigHelp.vue'
+import HealthStatus from './HealthStatus.vue'
 
 const activeTab = ref('gitea')
 const form = ref({})
@@ -1647,6 +1685,50 @@ onMounted(() => {
   loadTemplates()
   loadProviderPresets()
 })
+
+// C-20: 导出当前系统配置为 JSON 文件。
+const exporting = ref(false)
+const exportConfigFile = async () => {
+  exporting.value = true
+  try {
+    const data = await exportConfig()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    a.download = `matea-config-${ts}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('配置已导出')
+  } catch (e) {
+    ElMessage.error('导出失败：' + (e.message || e))
+  } finally {
+    exporting.value = false
+  }
+}
+
+// C-20: 导入所选 JSON 文件并合并到配置。
+const importing = ref(false)
+const onImportFile = async (file) => {
+  const raw = file?.raw
+  if (!raw) return
+  importing.value = true
+  try {
+    const text = await raw.text()
+    const parsed = JSON.parse(text)
+    const config = parsed.config || parsed
+    await importConfig(config)
+    ElMessage.success('配置已导入，正在重新加载…')
+    await loadConfig()
+  } catch (e) {
+    ElMessage.error('导入失败：' + (e.message || e))
+  } finally {
+    importing.value = false
+  }
+}
 </script>
 
 <style scoped>

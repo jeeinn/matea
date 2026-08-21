@@ -59,3 +59,18 @@ export function getProviderPresets() {
 export function discoverModels(payload) {
   return api.post('/config/discover-models', payload)
 }
+
+// C-18/C-19/C-22: aggregate health summary of every external dependency.
+export function getHealthSummary() {
+  return api.get('/health/summary')
+}
+
+// C-20: export the admin-managed flat config (returns { format, config }).
+export function exportConfig() {
+  return api.get('/config/export')
+}
+
+// C-20: import a previously exported (or hand-edited) flat config map.
+export function importConfig(config) {
+  return api.post('/config/import', { config })
+}

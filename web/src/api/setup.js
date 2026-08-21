@@ -60,4 +60,14 @@ export function discoverSetupModels(token, payload) {
   return setupApi.post('/setup/discover-models', payload, withToken(token))
 }
 
+// C-21: detect which known environment variables are present in the process.
+export function detectEnv(token) {
+  return setupApi.get('/setup/env-detection', withToken(token))
+}
+
+// C-21: absorb the selected (or all detected) environment variables into config.
+export function applyEnv(token, keys) {
+  return setupApi.post('/setup/apply-env', { keys: keys || [] }, withToken(token))
+}
+
 export default setupApi

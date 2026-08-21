@@ -75,9 +75,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config/providers/{name}/models", h.jwtWrap(h.getProviderModels))
 	mux.HandleFunc("GET /api/config/provider-presets", h.jwtWrap(h.listProviderPresets))
 	mux.HandleFunc("POST /api/config/discover-models", h.jwtWrap(h.discoverModelsHandler))
+	mux.HandleFunc("GET /api/config/export", h.jwtWrap(h.handleConfigExport))
+	mux.HandleFunc("POST /api/config/import", h.jwtWrap(h.handleConfigImport))
 	mux.HandleFunc("POST /api/config/gitea-webhook", h.jwtWrap(h.giteaWebhookHandler))
 	mux.HandleFunc("POST /api/config/test/gitea", h.jwtWrap(h.testGiteaConfig))
 	mux.HandleFunc("POST /api/config/test/llm", h.jwtWrap(h.testLLMConfig))
+
+	// Health summary (Phase 2.5 C-18/C-19/C-22). Per-component readiness of
+	// every external dependency; JWT required.
+	mux.HandleFunc("GET /api/health/summary", h.jwtWrap(h.handleHealthSummary))
 
 	// First-run setup (Phase 2.5). Status is PUBLIC: the unauthenticated Web
 	// UI needs it to choose between the wizard and the login page (it exposes
@@ -92,6 +98,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/complete", h.requireSetupToken(h.completeSetup))
 	mux.HandleFunc("GET /api/setup/provider-presets", h.requireSetupToken(h.listProviderPresets))
 	mux.HandleFunc("POST /api/setup/discover-models", h.requireSetupToken(h.discoverModelsHandler))
+	mux.HandleFunc("GET /api/setup/env-detection", h.requireSetupToken(h.handleEnvDetection))
+	mux.HandleFunc("POST /api/setup/apply-env", h.requireSetupToken(h.handleApplyEnv))
 
 	// Prompt template endpoints
 	mux.HandleFunc("GET /api/prompt-templates", h.authorizeWrap(h.listPromptTemplates))

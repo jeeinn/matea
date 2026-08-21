@@ -1,5 +1,15 @@
 <template>
   <div class="dashboard">
+    <!-- C-22: disk space warning banner -->
+    <el-alert
+      v-if="diskWarning"
+      :title="diskWarning"
+      type="error"
+      :closable="false"
+      show-icon
+      class="disk-warning"
+    />
+
     <!-- 新用户引导 (C-10): shown until the first Agent exists, or whenever
          Gitea/LLM 配置仍不完整 -->
     <el-card v-if="agents.length === 0 || setupStore.setupRequired" class="welcome-card" shadow="hover">
@@ -134,15 +144,25 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- C-18/C-19/C-22: aggregate dependency health -->
+    <el-row :gutter="20" class="mt-20" v-if="healthSummary">
+      <el-col :span="24">
+        <el-card shadow="hover">
+          <HealthStatus />
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import api from '../api'
+import api, { getHealthSummary } from '../api'
 import { useSetupStore } from '../stores/setup'
 import { User, List, Clock, CircleCheck, Setting, Promotion } from '@element-plus/icons-vue'
+import HealthStatus from './HealthStatus.vue'
 
 const router = useRouter()
 const setupStore = useSetupStore()
@@ -177,6 +197,22 @@ const getStatusType = (status) => {
   return types[status] || 'info'
 }
 
+// C-22: fetch health summary to drive the disk warning banner (best-effort).
+const healthSummary = ref(null)
+const diskWarning = computed(() => {
+  const d = healthSummary.value?.components?.disk
+  if (d && d.status === 'degraded') return d.message
+  return ''
+})
+
+const loadHealth = async () => {
+  try {
+    healthSummary.value = await getHealthSummary()
+  } catch (e) {
+    // Non-fatal: dashboard still works without the health panel.
+  }
+}
+
 onMounted(async () => {
   try {
     const [statsData, agentsData, tasksData] = await Promise.all([
@@ -190,6 +226,7 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to load dashboard data:', error)
   }
+  loadHealth()
 })
 </script>
 
@@ -244,5 +281,8 @@ onMounted(async () => {
 
 .mt-20 {
   margin-top: 20px;
+}
+.disk-warning {
+  margin-bottom: 20px;
 }
 </style>
