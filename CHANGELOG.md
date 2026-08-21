@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-21
+
+任务清单复盘：砍掉 Phase 3/4 远期与不相关项（MCP Server、CLI、harness 写 Gitea、新 harness 接入、拆包、企业网关），仅保留贴近现状的 2.4.4 真实 Hub E2E 验收与 3.1/3.3/3.4/3.5 轻量可选增量；原「未发布」变更一并归入本版本。
 
 Phase 2.5 配置自动化与首次用户体验（branch `phase2.5/config-automation`，P0 + 提前落地的 P1 项）：
 
@@ -467,7 +469,8 @@ Matea 品牌首发：项目更名、Bootstrap 自配置、Release 恢复单二�
 - SQLite 存储 (WAL 模式)
 - YAML 配置 (环境变量展开)
 
-[Unreleased]: https://github.com/jeeinn/matea/compare/v0.11.4...HEAD
+[Unreleased]: https://github.com/jeeinn/matea/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/jeeinn/matea/compare/v0.11.4...v0.12.0
 [0.11.4]: https://github.com/jeeinn/matea/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/jeeinn/matea/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/jeeinn/matea/compare/v0.11.1...v0.11.2
