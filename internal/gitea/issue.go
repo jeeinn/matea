@@ -36,6 +36,18 @@ func (c *Client) IssueRemoveLabel(owner, repo string, issueID int, label string)
 	return nil
 }
 
+// CheckIssueRead performs a side-effect-free read probe of the repo issue
+// API. TestConnection uses it to verify the token carries the issue scope
+// (runtime needs write:issue to post comments; a read probe is the only
+// check that does not mutate anything).
+func (c *Client) CheckIssueRead(owner, repo string) error {
+	_, err := c.do("GET", fmt.Sprintf("/repos/%s/%s/issues?limit=1", owner, repo), nil)
+	if err != nil {
+		return fmt.Errorf("issue read probe: %w", err)
+	}
+	return nil
+}
+
 // IssueGet returns the issue details.
 func (c *Client) IssueGet(owner, repo string, issueID int) (map[string]interface{}, error) {
 	body, err := c.do("GET", fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, issueID), nil)

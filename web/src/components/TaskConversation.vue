@@ -87,7 +87,7 @@
                         link
                         aria-label="复制内容"
                         title="复制内容"
-                        @click="copyToClipboard(msg.content)"
+                        @click="copyToClipboardImpl(msg.content)"
                       >
                         <el-icon><CopyDocument /></el-icon>
                       </el-button>
@@ -102,7 +102,7 @@
                         link
                         aria-label="复制工具调用"
                         title="复制工具调用"
-                        @click="copyToClipboard(getFormattedToolCalls(msg.tool_calls, msg.id))"
+                        @click="copyToClipboardImpl(getFormattedToolCalls(msg.tool_calls, msg.id))"
                       >
                         <el-icon><CopyDocument /></el-icon>
                       </el-button>
@@ -155,6 +155,7 @@ import { ref, computed, watch } from 'vue'
 import { Operation, CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
+import { copyToClipboard } from '../utils/clipboard'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -230,13 +231,8 @@ const timelineType = (role) => {
   return types[role] || 'info'
 }
 
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制到剪贴板')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+const copyToClipboardImpl = async (text) => {
+  await copyToClipboard(text, '已复制到剪贴板')
 }
 
 const loadConversation = async (taskId) => {
