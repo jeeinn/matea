@@ -250,7 +250,14 @@
             <code>{{ generatedSecret }}</code>
             <el-button size="small" @click="copySecret">复制</el-button>
           </div>
-          <p class="secret-hint">请在 Gitea 仓库/站点 Webhook 设置中填写此 Secret，用于签名验证。</p>
+          <p class="secret-hint">
+            Matea 接收地址：<code>{{ webhookUrl }}</code>（若在公网/反代后，请把 <code>localhost:8080</code> 替换为实际域名+端口）
+          </p>
+          <p class="secret-hint">
+            在 Gitea 中配置：<strong>站点管理 → Webhooks → 添加 Webhook → Gitea</strong>，
+            填写上方 URL 和 Secret，触发事件勾选 Issues / Issue Comment / Pull Request / PR Comment。
+            也可只给单个仓库/组织配置。
+          </p>
         </el-alert>
         <el-alert type="info" :closable="false" class="mb-16">
           <p>接下来：使用默认账号 <code>admin / admin123</code> 登录，系统会强制你修改密码。</p>
@@ -266,6 +273,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useSetupStore } from '../stores/setup'
+import { copyToClipboard } from '../utils/clipboard'
 import {
   verifySetupToken,
   detectLocalServices,
@@ -312,6 +320,11 @@ const completeError = ref('')
 const finishMessage = ref('')
 const finishWarnings = ref([])
 const generatedSecret = ref('')
+
+const webhookUrl = computed(() => {
+  const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8080'
+  return `${window.location.protocol}//${host}/webhook/gitea`
+})
 
 const gitea = ref({ url: 'http://localhost:3000', token: '' })
 const giteaTest = ref({ testing: false, ok: false, message: '', checks: [] })
@@ -553,12 +566,7 @@ async function finish() {
 }
 
 async function copySecret() {
-  try {
-    await navigator.clipboard.writeText(generatedSecret.value)
-    ElMessage.success('已复制')
-  } catch (e) {
-    ElMessage.warning('复制失败，请手动选择复制')
-  }
+  await copyToClipboard(generatedSecret.value, 'Webhook Secret 已复制')
 }
 
 function goLogin() {

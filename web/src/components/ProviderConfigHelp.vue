@@ -27,7 +27,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { copyToClipboard } from '../utils/clipboard'
 
 const visible = ref(false)
 
@@ -65,12 +65,7 @@ const providerTips = [
 const show = () => { visible.value = true }
 
 const copyExample = async () => {
-  try {
-    await navigator.clipboard.writeText(exampleJson)
-    ElMessage.success('示例已复制到剪贴板')
-  } catch {
-    ElMessage.error('复制失败，请手动选择文本复制')
-  }
+  await copyToClipboard(exampleJson, '示例已复制到剪贴板')
 }
 
 defineExpose({ show })
