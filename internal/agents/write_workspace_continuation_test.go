@@ -145,6 +145,42 @@ func TestPrepareWriteWorkspaceLegacySessionFallsBackToRemoteBranch(t *testing.T)
 	assert.Equal(t, draftHead, wwc.Git.HeadSHA(), "legacy session must anchor on the remote branch head")
 }
 
+// TestPrepareWriteWorkspaceSessionBranchLostStartsFresh reproduces the
+// failed-first-task scenario: task 1 recorded the session branch at workspace
+// prep but died (e.g. LLM rate limit) before any push, so the branch exists
+// neither locally nor on the remote. Task 2 must start the branch fresh from
+// the default-branch tip instead of failing with "not found locally or on
+// remote".
+func TestPrepareWriteWorkspaceSessionBranchLostStartsFresh(t *testing.T) {
+	remote, _ := continuationRemote(t) // remote carries main + ai/dev/issue-5 only
+	db := newHubRunTestDB(t)
+	// Session branch recorded by a task that failed before its first push.
+	continuationSession(t, db, "sess-lost", "ai/dev/issue-9", "")
+	f := newContinuationFactory(t, db, remote)
+
+	task := &store.Task{ID: 7006, Repo: "o/r", IssueID: 9, TaskType: "solve_issue", Event: "x", SessionID: "sess-lost"}
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	require.NoError(t, err)
+	defer wwc.Sandbox.Cleanup()
+
+	assert.Equal(t, "ai/dev/issue-9", wwc.BranchName)
+	branch, err := wwc.Git.GetCurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "ai/dev/issue-9", branch)
+
+	// Fresh branch starts at main's tip: MAIN.txt present, FIX.txt (draft work
+	// on the unrelated ai/dev/issue-5 branch) absent.
+	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "MAIN.txt"))
+	assert.NoError(t, err)
+	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "FIX.txt"))
+	assert.True(t, os.IsNotExist(err))
+
+	// Session keeps the same branch name for future continuation.
+	sess, err := db.GetSession("sess-lost")
+	require.NoError(t, err)
+	assert.Equal(t, "ai/dev/issue-9", sess.Branch)
+}
+
 func TestPrepareWriteWorkspaceNewSessionCreatesFreshBranch(t *testing.T) {
 	remote, _ := continuationRemote(t)
 	db := newHubRunTestDB(t)
