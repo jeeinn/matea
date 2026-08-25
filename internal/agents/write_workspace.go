@@ -40,7 +40,7 @@ type WriteWorkspaceContext struct {
 // On error the sandbox is cleaned up here (mirroring the original defer). On
 // success the caller owns the sandbox lifecycle and must
 // `defer wwc.Sandbox.Cleanup()` — all write workspaces are task-level now.
-func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.Agent, factory *RunnerFactory, taskSubType string) (*WriteWorkspaceContext, error) {
+func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.Agent, factory *RunnerFactory) (*WriteWorkspaceContext, error) {
 	_ = ctx // reserved for future use (e.g. cancellable clone)
 
 	// Parse repo owner/name
@@ -133,7 +133,7 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	// the first try. Convention: name = Gitea username, email = {user}@matea.local.
 	setupAgentGitIdentity(git, agent.GiteaUsername)
 
-	branchName, isExistingBranch := resolveBranchPlan(task, sessionBranch, taskSubType, git)
+	branchName, isExistingBranch := resolveBranchPlan(task, sessionBranch, git)
 	wwc.BranchName = branchName
 
 	// A session branch recorded by a previous task that failed before its first

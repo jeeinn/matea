@@ -34,14 +34,14 @@ func TestFindOpenPRByHead(t *testing.T) {
 				"title":    "Target PR",
 				"state":    "open",
 				"html_url": "http://localhost/owner/repo/pulls/5",
-				"head":     map[string]string{"ref": "ai/dev/issue-2"},
+				"head":     map[string]string{"ref": "matea/solve-issue-2"},
 			},
 		})
 	}))
 	defer server.Close()
 
 	client := NewClient(server.URL, "test-token")
-	pr, err := client.FindOpenPRByHead("owner", "repo", "ai/dev/issue-2")
+	pr, err := client.FindOpenPRByHead("owner", "repo", "matea/solve-issue-2")
 	if err != nil {
 		t.Fatalf("FindOpenPRByHead failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestFindOpenPRByHeadNotFound(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "test-token")
-	pr, err := client.FindOpenPRByHead("owner", "repo", "ai/dev/issue-2")
+	pr, err := client.FindOpenPRByHead("owner", "repo", "matea/solve-issue-2")
 	if err != nil {
 		t.Fatalf("FindOpenPRByHead failed: %v", err)
 	}

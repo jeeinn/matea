@@ -100,7 +100,7 @@ func TestFinalizeWriteChangesCleanTreePushesBeforePRFailClosed(t *testing.T) {
 		Sandbox:    s,
 		Git:        git,
 		Audit:      audit,
-		BranchName: "ai/dev/issue-9",
+		BranchName: "matea/solve-issue-9",
 		RepoInfo:   &gitea.RepoInfo{DefaultBranch: "main"},
 	}
 	task := &store.Task{ID: 9009, Repo: "owner/repo"}

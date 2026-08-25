@@ -110,7 +110,7 @@ func runWriteTask(ctx context.Context, task *store.Task, agentCfg *store.Agent,
 	log.Printf("[INFO] Task %d using coding backend: %s", task.ID, backend.Name())
 
 	// Phase 1: prepare workspace (sandbox / clone / branch)
-	wwc, err := prepareWriteWorkspace(ctx, task, agentCfg, factory, taskSubType)
+	wwc, err := prepareWriteWorkspace(ctx, task, agentCfg, factory)
 	if err != nil {
 		return nil, err
 	}

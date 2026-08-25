@@ -14,12 +14,12 @@ import (
 )
 
 func TestResolveWorkBranch(t *testing.T) {
-	task := &store.Task{BaseBranch: "ai/dev/issue-2"}
-	assert.Equal(t, "ai/dev/issue-2", resolveWorkBranch(task, ""))
-	assert.Equal(t, "ai/dev/issue-2", resolveWorkBranch(task, "ai/dev/issue-3"))
-	assert.Equal(t, "ai/dev/issue-3", resolveWorkBranch(&store.Task{}, "ai/dev/issue-3"))
+	task := &store.Task{BaseBranch: "matea/solve-issue-2"}
+	assert.Equal(t, "matea/solve-issue-2", resolveWorkBranch(task, ""))
+	assert.Equal(t, "matea/solve-issue-2", resolveWorkBranch(task, "matea/solve-issue-3"))
+	assert.Equal(t, "matea/solve-issue-3", resolveWorkBranch(&store.Task{}, "matea/solve-issue-3"))
 	assert.Equal(t, "", resolveWorkBranch(&store.Task{}, ""))
-	assert.Equal(t, "ai/dev/issue-2", resolveWorkBranch(&store.Task{BaseBranch: " ai/dev/issue-2 "}, ""))
+	assert.Equal(t, "matea/solve-issue-2", resolveWorkBranch(&store.Task{BaseBranch: " matea/solve-issue-2 "}, ""))
 }
 
 func testAuditLogger(t *testing.T) *sandbox.AuditLogger {
@@ -63,11 +63,11 @@ func setupSessionGitRepo(t *testing.T) (*sandbox.Sandbox, *sandbox.Git, string) 
 	require.NoError(t, s.Execute("git", "remote", "add", "origin", bareDir).Error)
 	require.NoError(t, s.Execute("git", "push", "-u", "origin", "HEAD:refs/heads/master").Error)
 
-	require.NoError(t, git.CreateBranch("ai/dev/issue-2").Error)
+	require.NoError(t, git.CreateBranch("matea/solve-issue-2").Error)
 	require.NoError(t, s.WriteFile("internal/config/schema.go", []byte("package config\n")))
 	git.Add()
 	require.NoError(t, git.Commit("feature").Error)
-	require.NoError(t, git.Push("origin", "ai/dev/issue-2").Error)
+	require.NoError(t, git.Push("origin", "matea/solve-issue-2").Error)
 
 	return s, git, bareDir
 }
@@ -75,15 +75,15 @@ func setupSessionGitRepo(t *testing.T) (*sandbox.Sandbox, *sandbox.Git, string) 
 func TestCheckoutWorkBranchSkipsWhenAlreadyOnBranch(t *testing.T) {
 	s, git, _ := setupSessionGitRepo(t)
 
-	require.NoError(t, git.Checkout("ai/dev/issue-2").Error)
+	require.NoError(t, git.Checkout("matea/solve-issue-2").Error)
 	require.NoError(t, s.WriteFile("internal/config/schema.go", []byte("dirty")))
 
 	audit := testAuditLogger(t)
-	err := checkoutWorkBranch(s, git, audit, "ai/dev/issue-2")
+	err := checkoutWorkBranch(s, git, audit, "matea/solve-issue-2")
 	require.NoError(t, err)
 
 	branch, err := git.GetCurrentBranch()
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", branch)
+	assert.Equal(t, "matea/solve-issue-2", branch)
 	assert.True(t, git.HasChanges())
 }

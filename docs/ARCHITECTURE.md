@@ -333,7 +333,7 @@ flowchart TD
 #### Git 操作封装
 
 `Git` 结构体封装了沙箱内的 Git 操作：`Clone`、`CreateBranch`、`Add`、`Commit`、`Push`。
-分支名强制以 `ai/` 开头（`ValidateBranchName`），防止注入。
+分支名强制以 `matea/` 开头（`ValidateBranchName`），防止注入。
 
 #### Audit Logger
 

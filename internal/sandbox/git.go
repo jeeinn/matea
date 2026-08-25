@@ -207,10 +207,14 @@ func (g *Git) HasChanges() bool {
 	return strings.TrimSpace(status.Stdout) != ""
 }
 
-// ValidateBranchName checks if a branch name is safe (must start with "ai/").
+// BranchPrefix is the required prefix for Matea-managed working branches
+// ("matea/", matching the hub-side DraftBranchPrefix "matea/hub-").
+const BranchPrefix = "matea/"
+
+// ValidateBranchName checks if a branch name is safe (must start with "matea/").
 func ValidateBranchName(branch string) error {
-	if !strings.HasPrefix(branch, "ai/") {
-		return fmt.Errorf("branch must start with 'ai/', got: %s", branch)
+	if !strings.HasPrefix(branch, BranchPrefix) {
+		return fmt.Errorf("branch must start with '%s', got: %s", BranchPrefix, branch)
 	}
 	// Check for dangerous characters
 	if strings.ContainsAny(branch, " ;&|`$") {
@@ -219,8 +223,9 @@ func ValidateBranchName(branch string) error {
 	return nil
 }
 
-// GenerateBranchName generates a safe branch name using issue number.
+// GenerateBranchName generates the working branch name for a task from its type
+// and issue number, e.g. "matea/solve-issue-5" for solve_issue on issue #5.
 func GenerateBranchName(taskType string, issueID int) string {
 	cleanType := strings.ReplaceAll(taskType, "_", "-")
-	return fmt.Sprintf("ai/%s/issue-%d", cleanType, issueID)
+	return fmt.Sprintf("%s%s-%d", BranchPrefix, cleanType, issueID)
 }
