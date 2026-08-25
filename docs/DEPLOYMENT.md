@@ -75,7 +75,7 @@ chmod +x matea-linux-amd64
 3. 向导之外，也可随时在 **系统配置** 调整 Gitea URL / Token / Webhook Secret 与 LLM Provider  
 4. 顶栏「未完成初始化」提示消失后即可配置 Agent 并接收 Webhook  
 
-> **可选：自动注册入站 Webhook**。配置 `server.public_url`（Matea 对外地址，如反代 HTTPS 域名）后，向导完成时会**最佳努力**自动向 Gitea 注册站点级入站 Webhook（回调固定 `{public_url}/webhook/gitea`；失败仅记日志、不阻塞完成）。也可稍后在「系统配置 → 入站 Webhook」Tab 手动检查/注册。
+> **可选：自动注册入站 Webhook**。配置 `server.public_url`（Matea 对外地址，如反代 HTTPS 域名）后，向导完成时会**最佳努力**自动向 Gitea 注册系统级（System）入站 Webhook（回调固定 `{public_url}/webhook/gitea`；失败仅记日志、不阻塞完成）。也可稍后在「系统配置 → 入站 Webhook」Tab 手动检查/注册。
 
 Windows 下载 `matea-windows-amd64.exe` 后双击或在终端运行即可。
 
@@ -374,7 +374,7 @@ gateway.example.com {
    - `read:user` — 验证 Token 身份、查询用户
    - `write:repository` — 仓库 / 分支 / PR / 部署密钥读写
    - `write:issue` — Issue 读取、评论与标签
-   - `write:admin` — 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理）
+   - `write:admin` — 自动创建 Agent 账号、系统级 Webhook（System Webhook，需站点管理员账号；缺失则降级手动管理）
 4. 将 Token 填入 Matea「系统配置 → 管理员 Token」或 `config.yaml` 的 `gitea.admin_token`
 
 ### 配置 Webhook
@@ -382,12 +382,12 @@ gateway.example.com {
 Matea 接收地址固定为：`http://<matea-host>:8080/webhook/gitea`（经反向代理时用对外 HTTPS URL）。  
 **Webhook 密钥**：自拟任意字符串，同时填入 Matea「系统配置 → Webhook 密钥」与 Gitea Webhook 的「密钥」字段（两边一致即可）。
 
-#### 全站 System Webhook（推荐：覆盖实例上所有仓库）
+#### 系统级全局 Webhook（推荐：覆盖实例上所有仓库，需站点管理员）
 
 若希望任意仓库的 Assign / 评论等事件都能推到 Matea（Agent 为系统用户场景）：
 
 1. 使用**站点管理员**登录 Gitea
-2. 进入 **站点管理 → Webhooks → 添加 Webhook → Gitea**
+2. 进入 **管理后台 → 集成 → Web 钩子 → 系统 Web 钩子 → 添加 Web 钩子 → Gitea**（即 Gitea 系统 Web 钩子 System Webhook）
 3. 配置：
    - **目标 URL**: `https://gateway.example.com/webhook/gitea`
    - **密钥**: 与 Matea 中的 `webhook_secret` 一致
@@ -396,15 +396,16 @@ Matea 接收地址固定为：`http://<matea-host>:8080/webhook/gitea`（经反�
 4. 保存并测试投递
 
 **说明**：
-- System Webhook 会接收**整个 Gitea 实例**上符合条件的事件，不限于某一个仓库
-- 不要与「默认 Webhook」（仅在**新建**仓库时拷贝一份到仓库）混淆；全站投递应选 **System Webhook**
+- 系统 Web 钩子（System Webhook）会接收**整个 Gitea 实例**上符合条件的事件，不限于某一个仓库
+- 若只需覆盖自己名下仓库，可用**用户级**：**设置 → Web 钩子 → 添加 Web 钩子 → Gitea**（个人用户设置页，无需管理员权限）
+- 不要与「默认 Webhook」（仅在**新建**仓库时拷贝一份到仓库）混淆；全站投递应选 **系统 Web 钩子（System Webhook）**
 - Agent 能被调用仍取决于业务规则（如 Assign 给 Agent、评论 @Agent）；Webhook 只负责把事件送到 Matea
 
 #### 组织级 Webhook（按组织批量）
 
 若只想覆盖某一组织下的仓库：
 
-1. 进入 **组织设置 → Webhooks → 添加 Webhook → Gitea**
+1. 进入 **组织设置 → Web 钩子 → 添加 Web 钩子 → Gitea**
 2. 配置：
    - **目标 URL**: `https://gateway.example.com/webhook/gitea`
    - **密钥**: 与 `config.yaml` / 系统配置中的 `webhook_secret` 一致
@@ -420,7 +421,7 @@ Matea 接收地址固定为：`http://<matea-host>:8080/webhook/gitea`（经反�
 
 在需要 AI Agent 的仓库中：
 
-1. 进入 **仓库设置 → Webhooks → 添加 Webhook → Gitea**
+1. 进入 **仓库设置 → Web 钩子 → 添加 Web 钩子 → Gitea**
 2. 配置：
    - **目标 URL**: `https://gateway.example.com/webhook/gitea`
    - **密钥**: 与 Matea 中的 `webhook_secret` 一致

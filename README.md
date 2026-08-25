@@ -101,17 +101,18 @@ chmod +x matea-linux-amd64   # Linux / macOS
 | `read:user` | ✅ | 验证 Token 身份、查询用户 |
 | `write:repository` | ✅ | 仓库 / 分支 / PR / 部署密钥读写 |
 | `write:issue` | ✅ | Issue 读取、评论与标签 |
-| `write:admin` | 建议 | 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理） |
+| `write:admin` | 建议 | 自动创建 Agent 账号、系统级 Webhook（System Webhook，需站点管理员账号；缺失则降级手动管理） |
 
 ### 3. 配置 Gitea Webhook
 
 密钥：**自拟一串**，填入 Matea「Webhook 密钥」与 Gitea Webhook「密钥」（两边一致）。
 
-| 范围 | 配置入口 | 适用场景 |
+| 范围 | 配置入口（Gitea 1.27.2 中文 UI） | 适用场景 |
 |------|----------|----------|
-| **全站（推荐）** | **站点管理 → Webhooks** | 任意仓库事件都推到 Matea |
-| 组织 | 组织设置 → Webhooks | 仅某组织下仓库 |
-| 仓库 | 仓库设置 → Webhooks | 单仓细粒度 |
+| **系统级全局（推荐）** | **管理后台 → 集成 → Web 钩子 → 系统 Web 钩子 → 添加 Web 钩子 → Gitea** | 覆盖整个 Gitea 实例所有仓库 |
+| **用户级** | **设置 → Web 钩子 → 添加 Web 钩子 → Gitea** | 覆盖你名下所有仓库 |
+| 组织级 | 组织设置 → Web 钩子 → 添加 Web 钩子 → Gitea | 仅某组织下仓库 |
+| 仓库级 | 仓库设置 → Web 钩子 → 添加 Web 钩子 → Gitea | 单仓细粒度 |
 
 | 项 | 值 |
 |----|-----|

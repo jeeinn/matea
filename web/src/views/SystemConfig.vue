@@ -51,9 +51,10 @@
               <el-input v-model="form['gitea.webhook_secret']" type="password" show-password placeholder="留空则保存时自动生成" />
               <div class="form-tip">
                 自拟一串密钥填到此处，并在 Gitea Webhook 的「密钥」里填<strong>相同值</strong>（两边一致即可，不是从 Gitea 导出的）；<strong>留空保存时系统会自动生成随机密钥</strong>。<br>
-                全站（推荐）：站点管理 → Webhooks → 添加 Webhook（Gitea），目标 URL
+                系统级全局（推荐，覆盖整个 Gitea 实例）：<strong>管理后台 → 集成 → Web 钩子 → 系统 Web 钩子 → 添加 Web 钩子 → Gitea</strong>；<br>
+                用户级（覆盖你名下所有仓库）：<strong>设置 → Web 钩子 → 添加 Web 钩子 → Gitea</strong>；目标 URL 填
                 <code>http://&lt;matea-host&gt;:8080/webhook/gitea</code>，勾选 Issues / Issue 评论 / Pull Request / PR 评论。<br>
-                也可只配组织级（组织设置 → Webhooks）或单个仓库（仓库设置 → Webhooks）。掩码规则同上方 Token。
+                也可只配组织级（组织设置 → Web 钩子 → 添加 Web 钩子 → Gitea）或单个仓库（仓库设置 → Web 钩子 → 添加 Web 钩子 → Gitea）。掩码规则同上方 Token。
                 <el-tag v-if="sourceTag('gitea.webhook_secret')" size="small" :type="sourceTag('gitea.webhook_secret') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('gitea.webhook_secret') }}
                 </el-tag>
@@ -401,7 +402,7 @@ npm test'
         <el-tab-pane label="入站 Webhook" name="inbound">
           <el-alert type="info" :closable="false" style="margin-bottom: 16px">
             <template #title>入站 Webhook（Gitea → Matea）</template>
-            填写 Matea 对外可访问地址后，可检查 / 自动注册 Gitea 站点级 Webhook，让 Gitea 的 Issue / PR 事件推送到 Matea。
+            填写 Matea 对外可访问地址后，可检查 / 自动注册 Gitea 系统级（System）Webhook，让 Gitea 的 Issue / PR 事件推送到 Matea。
             <b>留空 = 关闭自动注册（默认）</b>。回调路径固定为 <code>{{ callbackURL || '{public_url}/webhook/gitea' }}</code>。
           </el-alert>
           <el-form label-width="160px" class="config-form">
@@ -411,7 +412,7 @@ npm test'
                 placeholder="https://matea.example.com"
               />
               <div class="form-tip">
-                其他服务（如 Gitea）访问 Matea 的公网 / 内网地址，不含尾部斜杠。留空则不注册站点级 Webhook。
+                其他服务（如 Gitea）访问 Matea 的公网 / 内网地址，不含尾部斜杠。留空则不注册系统级 Webhook。
                 <el-tag v-if="sourceTag('server.public_url')" size="small" :type="sourceTag('server.public_url') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('server.public_url') }}
                 </el-tag>
@@ -428,8 +429,10 @@ npm test'
             </el-form-item>
             <el-form-item label=" ">
               <div class="form-tip">
-                手动配置替代方案：Gitea 站点管理 → Webhooks → 添加 Webhook（Gitea），目标 URL 填上面的回调地址，
-                密钥填「Gitea 连接」页的 Webhook 密钥（两边一致），勾选 Issues / Issue 评论 / Pull Request / PR 评论。
+                手动配置替代方案（任选其一）：<br>
+                &nbsp;&nbsp;• 系统级全局：<strong>管理后台 → 集成 → Web 钩子 → 系统 Web 钩子 → 添加 Web 钩子 → Gitea</strong><br>
+                &nbsp;&nbsp;• 用户级：<strong>设置 → Web 钩子 → 添加 Web 钩子 → Gitea</strong><br>
+                目标 URL 填上面的回调地址，密钥填「Gitea 连接」页的 Webhook 密钥（两边一致），勾选 Issues / Issue 评论 / Pull Request / PR 评论。
               </div>
             </el-form-item>
           </el-form>

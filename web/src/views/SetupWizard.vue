@@ -94,7 +94,7 @@
                   <div><code>read:user</code> — 验证 Token 身份、查询用户</div>
                   <div><code>write:repository</code> — 仓库 / 分支 / PR / 部署密钥（含读权限）</div>
                   <div><code>write:issue</code> — Issue 读取、评论与标签（含读权限）</div>
-                  <div><code>write:admin</code> — 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理）</div>
+                  <div><code>write:admin</code> — 自动创建 Agent 账号、系统级 Webhook（System Webhook，需站点管理员账号；缺失则降级手动管理）</div>
                 </div>
               </div>
             </el-form-item>
@@ -254,9 +254,10 @@
             Matea 接收地址：<code>{{ webhookUrl }}</code>（若在公网/反代后，请把 <code>localhost:8080</code> 替换为实际域名+端口）
           </p>
           <p class="secret-hint">
-            在 Gitea 中配置：<strong>站点管理 → Webhooks → 添加 Webhook → Gitea</strong>，
-            填写上方 URL 和 Secret，触发事件勾选 Issues / Issue Comment / Pull Request / PR Comment。
-            也可只给单个仓库/组织配置。
+            在 Gitea 中配置入站 Webhook（任选其一）：<br>
+            &nbsp;&nbsp;• <strong>用户级（覆盖你名下所有仓库）</strong>：<strong>设置 → Web 钩子 → 添加 Web 钩子 → Gitea</strong><br>
+            &nbsp;&nbsp;• <strong>系统级全局（覆盖整个 Gitea 实例，需管理员）</strong>：<strong>管理后台 → 集成 → Web 钩子 → 系统 Web 钩子 → 添加 Web 钩子 → Gitea</strong><br>
+            目标 URL 填上方地址，密钥填上方 Webhook Secret（两边一致），触发事件勾选 Issues / Issue Comment / Pull Request / PR Comment。
           </p>
         </el-alert>
         <el-alert type="info" :closable="false" class="mb-16">
