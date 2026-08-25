@@ -54,10 +54,10 @@ func TestEnsureGiteaAccountCreatesMissingUser(t *testing.T) {
 		}
 	})
 
-	token, userCreated, err := mgr.EnsureGiteaAccount("agent-bot", "")
+	token, managed, err := mgr.EnsureGiteaAccount("agent-bot", "", false)
 	require.NoError(t, err)
 	assert.True(t, created)
-	assert.True(t, userCreated)
+	assert.True(t, managed)
 	assert.Equal(t, "new-token-sha1", token)
 }
 
@@ -77,9 +77,9 @@ func TestEnsureGiteaAccountKeepsValidToken(t *testing.T) {
 		}
 	})
 
-	token, userCreated, err := mgr.EnsureGiteaAccount("agent-bot", "valid-token")
+	token, managed, err := mgr.EnsureGiteaAccount("agent-bot", "valid-token", false)
 	require.NoError(t, err)
-	assert.False(t, userCreated)
+	assert.True(t, managed)
 	assert.Equal(t, "valid-token", token)
 }
 
@@ -116,10 +116,10 @@ func TestEnsureGiteaAccountRefreshesInvalidToken(t *testing.T) {
 	}
 	require.NoError(t, mgr.db.CreateAgent(agent))
 
-	token, userCreated, err := mgr.EnsureGiteaAccount("agent-bot", "stale-localhost-token")
+	token, managed, err := mgr.EnsureGiteaAccount("agent-bot", "stale-localhost-token", false)
 	require.NoError(t, err)
 	assert.True(t, passwordReset)
-	assert.False(t, userCreated)
+	assert.True(t, managed)
 	assert.Equal(t, "refreshed-token", token)
 }
 
@@ -152,7 +152,7 @@ func TestUpdateAgentProvisionsGiteaUser(t *testing.T) {
 	}
 	require.NoError(t, mgr.db.CreateAgent(agent))
 
-	require.NoError(t, mgr.UpdateAgent(agent))
+	require.NoError(t, mgr.UpdateAgent(agent, false))
 
 	got, err := mgr.db.GetAgent(agent.ID)
 	require.NoError(t, err)
@@ -175,12 +175,75 @@ func TestEnsureGiteaAccount_PreventAccountTakeover(t *testing.T) {
 	})
 
 	// Attempt to create account for existing non-managed user
-	_, _, err := mgr.EnsureGiteaAccount("real-person", "")
+	_, _, err := mgr.EnsureGiteaAccount("real-person", "", false)
 
 	// Should fail with clear error message
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists and is not managed by Matea")
 	assert.Contains(t, err.Error(), "choose a different username")
+}
+
+// TestEnsureGiteaAccount_ExplicitTakeover tests that takeOver=true hands an
+// existing non-Matea-managed account to Matea (password reset + fresh token).
+func TestEnsureGiteaAccount_ExplicitTakeover(t *testing.T) {
+	var passwordReset bool
+	mgr := newTestManager(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/users/ai-coder":
+			json.NewEncoder(w).Encode(gitea.UserResponse{ID: 42, Login: "ai-coder"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/user":
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/admin/users/ai-coder":
+			passwordReset = true
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(gitea.UserResponse{ID: 42, Login: "ai-coder"})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/tokens"):
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(gitea.TokenResponse{SHA1: "taken-over-token"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	// No managed agent record for "ai-coder" — takeover requires the explicit flag.
+	token, managed, err := mgr.EnsureGiteaAccount("ai-coder", "", true)
+	require.NoError(t, err)
+	assert.True(t, passwordReset, "takeover must reset the password via Admin API")
+	assert.True(t, managed)
+	assert.Equal(t, "taken-over-token", token)
+}
+
+// TestCreateAgent_TakeOverMarksManaged tests that creating an agent with
+// take_over_gitea_user for an existing unmanaged account marks it managed.
+func TestCreateAgent_TakeOverMarksManaged(t *testing.T) {
+	mgr := newTestManager(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/users/ai-coder":
+			json.NewEncoder(w).Encode(gitea.UserResponse{ID: 43, Login: "ai-coder"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/user":
+			w.WriteHeader(http.StatusUnauthorized)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/admin/users/ai-coder":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(gitea.UserResponse{ID: 43, Login: "ai-coder"})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/tokens"):
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(gitea.TokenResponse{SHA1: "agent-token"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	agent, err := mgr.CreateAgent(CreateAgentRequest{
+		Name:              "coder",
+		GiteaUsername:     "ai-coder",
+		Role:              store.RoleCoder,
+		Provider:          "deepseek",
+		Model:             "deepseek-v4-flash",
+		TakeOverGiteaUser: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, agent.ManagedByMatea, "taken-over account must be marked managed")
+	assert.Equal(t, "agent-token", agent.GiteaToken)
 }
 
 // TestEnsureGiteaAccount_AllowManagedAccountRefresh tests that Matea-managed accounts can be refreshed
@@ -219,11 +282,11 @@ func TestEnsureGiteaAccount_AllowManagedAccountRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Attempt to refresh the account (token invalid)
-	newToken, userCreated, err := mgr.EnsureGiteaAccount("matea-test", "invalid-token")
+	newToken, managed, err := mgr.EnsureGiteaAccount("matea-test", "invalid-token", false)
 
 	// Should succeed because it's managed by Matea
 	require.NoError(t, err)
-	assert.False(t, userCreated)
+	assert.True(t, managed)
 	assert.NotEmpty(t, newToken)
 	assert.True(t, passwordReset, "Password should be reset for managed account")
 }
@@ -312,7 +375,7 @@ func TestUpdateAgent_SkipsProvisionWhenDisabled(t *testing.T) {
 	}
 	require.NoError(t, mgr.db.CreateAgent(agent))
 
-	require.NoError(t, mgr.UpdateAgent(agent))
+	require.NoError(t, mgr.UpdateAgent(agent, false))
 
 	got, err := mgr.db.GetAgent(agent.ID)
 	require.NoError(t, err)

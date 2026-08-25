@@ -73,6 +73,10 @@
           <el-input v-model="form.gitea_username" :disabled="!!editingAgent" placeholder="自动创建 Gitea 账号" />
           <div v-if="editingAgent" class="form-tip">创建后不可修改</div>
         </el-form-item>
+        <el-form-item label=" ">
+          <el-checkbox v-model="form.take_over_gitea_user">接管已存在的 Gitea 账号</el-checkbox>
+          <div class="form-tip">仅当确认该账号可交由 Matea 管理时勾选：将通过管理员 API 重置其密码并生成新 Token；不勾选时遇到同名非托管账号会报错（防劫持保护）</div>
+        </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role" placeholder="选择角色" style="width: 100%" @change="onRoleChange">
             <el-option label="分析 (analyze)" value="analyze" />

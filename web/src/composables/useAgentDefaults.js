@@ -121,6 +121,7 @@ export function useAgentDefaults() {
     return {
       name: '',
       gitea_username: '',
+      take_over_gitea_user: false,
       role: 'analyze',
       provider: agentDefaults.value.provider,
       model: agentDefaults.value.model,
