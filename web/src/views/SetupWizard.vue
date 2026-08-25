@@ -269,7 +269,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useSetupStore } from '../stores/setup'
@@ -521,9 +521,16 @@ async function discoverModels() {
       type: llm.value.type
     })
     if (res.success && Array.isArray(res.models) && res.models.length) {
+      const currentModel = llm.value.model
       modelOptions.value = res.models
       const ids = res.models.map((m) => m.id)
-      if (!ids.includes(llm.value.model)) llm.value.model = res.models[0].id
+      // Force el-select to drop its cached label and re-render against the new
+      // option list before selecting a value. Without nextTick, Element Plus can
+      // display the old label (e.g. the preset default) even though the dropdown
+      // already contains the freshly fetched models.
+      llm.value.model = ''
+      await nextTick()
+      llm.value.model = ids.includes(currentModel) ? currentModel : res.models[0].id
       ElMessage.success(`已拉取 ${res.models.length} 个模型`)
     } else if (res.error) {
       ElMessage.warning(`拉取失败：${res.error}`)
