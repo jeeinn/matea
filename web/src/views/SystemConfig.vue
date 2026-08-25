@@ -188,12 +188,12 @@
               <div class="form-tip">整任务失败后自动重试次数（clone/runner 整次；默认 1）</div>
             </el-form-item>
             <el-form-item label="429 退避时间">
-              <el-input-number v-model.number="form['dispatcher.rate_limit_backoff']" :min="0" :max="300" :step="5" />
-              <div class="form-tip">LLM 返回 429 时等待秒数后再重试；0 表示关闭（默认 0）</div>
+              <el-input-number v-model.number="form['dispatcher.rate_limit_backoff']" :min="-1" :max="300" :step="5" />
+              <div class="form-tip">LLM 返回 429 时等待秒数后再重试；0 使用默认 60，-1 表示关闭</div>
             </el-form-item>
             <el-form-item label="429 重试次数">
-              <el-input-number v-model.number="form['llm.rate_limit_retries']" :min="0" :max="10" />
-              <div class="form-tip">单次 ChatCompletion 遇 429 后的重试次数（需退避 &gt; 0；默认 1）</div>
+              <el-input-number v-model.number="form['llm.rate_limit_retries']" :min="-1" :max="20" />
+              <div class="form-tip">单次 ChatCompletion 遇 429 后的重试次数（需退避 &gt; 0；0 使用默认 10，-1 表示不重试）</div>
             </el-form-item>
           </el-form>
         </el-tab-pane>

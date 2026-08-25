@@ -250,6 +250,9 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 		if err != nil {
 			return fmt.Errorf("not a number: %s", value)
 		}
+		if n == 0 {
+			n = DefaultRateLimitBackoffSec // 0 = system default; negative disables
+		}
 		cfg.Dispatcher.RateLimitBackoff = n
 	case "dispatcher.agent_concurrency":
 		switch value {
@@ -262,6 +265,9 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 		n, err := strconv.Atoi(value)
 		if err != nil {
 			return fmt.Errorf("not a number: %s", value)
+		}
+		if n == 0 {
+			n = DefaultRateLimitRetries // 0 = system default; negative disables
 		}
 		cfg.LLM.RateLimitRetries = n
 	case "agents.defaults.provider":

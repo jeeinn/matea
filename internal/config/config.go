@@ -162,8 +162,11 @@ func applyDefaults(cfg *Config) {
 	default:
 		cfg.Dispatcher.AgentConcurrency = AgentConcurrencyParallel
 	}
+	if cfg.Dispatcher.RateLimitBackoff == 0 {
+		cfg.Dispatcher.RateLimitBackoff = DefaultRateLimitBackoffSec
+	}
 	if cfg.LLM.RateLimitRetries == 0 {
-		cfg.LLM.RateLimitRetries = 1
+		cfg.LLM.RateLimitRetries = DefaultRateLimitRetries
 	}
 	if cfg.Dispatcher.QueueSize == 0 {
 		cfg.Dispatcher.QueueSize = 100
