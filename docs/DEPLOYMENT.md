@@ -370,7 +370,11 @@ gateway.example.com {
 
 1. 登录 Gitea 管理员账号
 2. 点击头像 → **设置 → 应用 → 生成新令牌**（或「管理访问令牌」）
-3. 创建 Token，勾选 **admin** 与 **repository** 相关写权限（至少 `write:admin`，用于创建 Agent 账号）
+3. 创建 Token，逐项勾选以下 scope（Gitea ≥1.22 细粒度权限，各类别相互独立，`write:X` 含 `read:X`）：
+   - `read:user` — 验证 Token 身份、查询用户
+   - `write:repository` — 仓库 / 分支 / PR / 部署密钥读写
+   - `write:issue` — Issue 读取、评论与标签
+   - `write:admin` — 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理）
 4. 将 Token 填入 Matea「系统配置 → 管理员 Token」或 `config.yaml` 的 `gitea.admin_token`
 
 ### 配置 Webhook
@@ -536,8 +540,12 @@ journalctl -u matea --since "2024-01-01" --until "2024-01-02"
 - 检查 LLM API 响应速度
 
 **Q: 创建 Agent 失败**
-- 检查 `gitea.admin_token` 是否有管理员权限
+- 检查 `gitea.admin_token` 是否含 `write:admin` scope 且属站点管理员账号
 - 检查 Gitea API 是否可访问
+
+**Q: 测试 Gitea 连接报 403「token does not have ... required scope(s)」**
+- Gitea ≥1.22 细粒度 scope 各类别相互独立，`write:admin` / `write:repository` 均不含 `read:user`
+- 按上文「创建管理员 Token」清单逐项重新勾选（常见缺失：`read:user`、`write:issue`）
 
 **Q: 前端页面空白**
 - 确认构建时前端已打包（`go:embed` 需要 `web/dist` 目录）

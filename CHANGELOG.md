@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Gitea Token 权限指引错误导致初始化被拦截**：向导/文档此前只提示 `write:admin` + repo，但 Gitea ≥1.22 细粒度 scope 各类别相互独立，`GET /user` 需要 `read:user`——按旧文案生成的 Token 在「完成初始化」时 403。`gitea.TestConnection()` 重写为分项权限探查（identity/repo/issue/admin），返回结构化 `checks` 与 `required_scopes`；解析 Gitea scope 拒绝报文给出精确缺失提示（如「Token 缺少 read:user（当前仅含：write:admin, write:repository）」）
+- **向导第 1 步权限预检**：Token 输入框下方列出精确 scope 清单（`read:user` / `write:repository` / `write:issue` / `write:admin`）；「测试连接」逐项展示权限检查结果，未通过前「下一步」禁用（修改地址/Token 后需重测）；第 3 步失败可一键返回第 1 步；完成页展示降级警告（如非站点管理员）
+- **文案同步修正**：SystemConfig Gitea Token 提示、README 权限清单（补 `read:user`/`write:issue`）、`docs/DEPLOYMENT.md`（含 403 scope 报错 FAQ）、`config.full-example.yaml` 注释
+
 ## [0.12.0] - 2026-08-21
 
 任务清单复盘：砍掉 Phase 3/4 远期与不相关项（MCP Server、CLI、harness 写 Gitea、新 harness 接入、拆包、企业网关），仅保留贴近现状的 2.4.4 真实 Hub E2E 验收与 3.1/3.3/3.4/3.5 轻量可选增量；原「未发布」变更一并归入本版本。

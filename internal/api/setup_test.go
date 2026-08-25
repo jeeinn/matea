@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,7 +62,7 @@ func setupMux(h *Handler) *http.ServeMux {
 }
 
 // fakeSetupGitea serves the API surface gitea.TestConnection touches:
-// GET /user and GET /repos/search.
+// GET /user, GET /repos/search, GET /repos/{o}/{r}/issues, GET /admin/hooks.
 func fakeSetupGitea(t *testing.T, user string, isAdmin bool) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -70,6 +71,12 @@ func fakeSetupGitea(t *testing.T, user string, isAdmin bool) *httptest.Server {
 	})
 	mux.HandleFunc("/api/v1/repos/search", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]string{{"full_name": "o/r"}}})
+	})
+	mux.HandleFunc("/api/v1/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]interface{}{})
+	})
+	mux.HandleFunc("/api/v1/admin/hooks", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]interface{}{})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -319,6 +326,31 @@ func TestSetupCompleteGiteaRejected(t *testing.T) {
 	}
 	w := doSetupReq(t, mux, "POST", "/api/setup/complete", tokens.Token(), body)
 	assert.Equal(t, 400, w.Code)
+	assert.Equal(t, "", mgr.Get().Gitea.URL, "nothing may be persisted when the Gitea test fails")
+}
+
+// Regression for the field failure: a token granted only write:admin +
+// write:repository gets a 403 on GET /user (Gitea ≥1.22 scopes are
+// per-category independent). The wizard must surface a precise read:user
+// message instead of the raw API error.
+func TestSetupCompleteScopeDeniedGuidance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		fmt.Fprintf(w, `{"message":"token does not have at least one of required scope(s), required=[read:user], token scope=write:admin,write:repository","url":"http://gitea/api/swagger"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	h, _, mgr, tokens := newSetupTestHandler(t, incompleteConfig())
+	mux := setupMux(h)
+
+	body := map[string]interface{}{
+		"gitea": map[string]string{"url": srv.URL, "token": "scoped-tok"},
+		"llm":   map[string]string{"provider": "deepseek", "model": "m", "base_url": "https://api.deepseek.com/v1", "api_key": "sk"},
+	}
+	w := doSetupReq(t, mux, "POST", "/api/setup/complete", tokens.Token(), body)
+	require.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "read:user")
+	assert.Contains(t, w.Body.String(), "write:admin, write:repository")
 	assert.Equal(t, "", mgr.Get().Gitea.URL, "nothing may be persisted when the Gitea test fails")
 }
 

@@ -89,12 +89,19 @@ chmod +x matea-linux-amd64   # Linux / macOS
 | 步骤 | 页面 | 操作 |
 |------|------|------|
 | ① | 登录 | `admin` / `admin123` → **立即改密** |
-| ② | **系统配置 → Gitea 连接** | 填写 Gitea 地址、管理员 Token（需 `write:admin`）、Webhook 密钥 → **测试 Gitea 连接** → **保存全部** |
+| ② | **系统配置 → Gitea 连接** | 填写 Gitea 地址、管理员 Token（权限见下方清单）、Webhook 密钥 → **测试 Gitea 连接** → **保存全部** |
 | ③ | **系统配置 → LLM 配置** | 填写 Provider JSON 与默认模型 → **测试 LLM 连接** → **保存全部** |
 | ④ | **Agent 管理** | 点击「从模板创建」，依次生成 `matea-analyst` / `matea-coder` / `matea-review`；勾选目标仓库 |
 | ⑤ | Gitea 仓库 |  Matea 默认自动为 Agent 创建 Gitea 账号（`gitea.auto_provision: true`）；如关闭则需手动将 Agent 用户加为协作者，并配置 Webhook（见下文） |
 
-**Gitea 管理员 Token 所需权限**：`write:admin`（创建 Agent 用户）、`write:repository`、`read:repository`。
+**Gitea 管理员 Token 所需权限**（Gitea ≥1.22 细粒度 scope，各类别相互独立，`write:X` 含 `read:X`）：
+
+| Scope | 必需 | 用途 |
+|-------|------|------|
+| `read:user` | ✅ | 验证 Token 身份、查询用户 |
+| `write:repository` | ✅ | 仓库 / 分支 / PR / 部署密钥读写 |
+| `write:issue` | ✅ | Issue 读取、评论与标签 |
+| `write:admin` | 建议 | 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理） |
 
 ### 3. 配置 Gitea Webhook
 

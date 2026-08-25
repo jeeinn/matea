@@ -280,12 +280,21 @@ func (h *Handler) completeSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg := "初始化完成，配置已生效"
-	if !testRes.IsAdmin {
-		msg += "；警告：Gitea 用户非管理员，自动创建 Agent 账号需要 write:admin 权限"
-	}
 	resp := map[string]interface{}{
 		"ok":      true,
 		"message": msg,
+	}
+	// Surface non-fatal capability gaps (e.g. no write:admin) so the wizard's
+	// success page can show them as warnings instead of burying them in a
+	// single message string.
+	var giteaWarnings []string
+	for _, chk := range testRes.Checks {
+		if !chk.Required && !chk.OK && !chk.Skipped && chk.Detail != "" {
+			giteaWarnings = append(giteaWarnings, chk.Detail)
+		}
+	}
+	if len(giteaWarnings) > 0 {
+		resp["gitea_warnings"] = giteaWarnings
 	}
 	if secretGenerated {
 		// Returned once so the operator can paste it into Gitea webhook

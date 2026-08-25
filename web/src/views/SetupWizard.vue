@@ -84,9 +84,19 @@
                 v-model="gitea.token"
                 type="password"
                 show-password
-                placeholder="在 Gitea → 设置 → 应用中生成（需要 write:admin 与 repo 权限）"
+                placeholder="在 Gitea → 设置 → 应用 中生成"
                 size="large"
               />
+              <!-- 与后端 gitea.RequiredTokenScopes 保持一致（internal/gitea/user.go） -->
+              <div class="form-tip">
+                Gitea ≥1.22 细粒度权限，各 scope 相互独立，需逐项勾选：
+                <div class="scope-list">
+                  <div><code>read:user</code> — 验证 Token 身份、查询用户</div>
+                  <div><code>write:repository</code> — 仓库 / 分支 / PR / 部署密钥（含读权限）</div>
+                  <div><code>write:issue</code> — Issue 读取、评论与标签（含读权限）</div>
+                  <div><code>write:admin</code> — 自动创建 Agent 账号、站点级 Webhook（需站点管理员账号；缺失则降级手动管理）</div>
+                </div>
+              </div>
             </el-form-item>
             <el-alert
               v-if="giteaTest.message"
@@ -95,11 +105,29 @@
               :closable="false"
               class="mb-16"
             />
+            <ul v-if="giteaTest.checks.length" class="perm-checks mb-16">
+              <li v-for="c in giteaTest.checks" :key="c.key">
+                <span :class="['perm-icon', checkClass(c)]">{{ checkIcon(c) }}</span>
+                <span>{{ c.label }}</span>
+                <code class="perm-scope">{{ c.scope }}</code>
+                <span v-if="c.detail" class="perm-detail">{{ c.detail }}</span>
+              </li>
+            </ul>
             <div class="btn-row">
-              <el-button :loading="giteaTest.testing" @click="testGitea">测试连接</el-button>
-              <el-button type="primary" :disabled="!gitea.url || !gitea.token" @click="step = 1; enterLLMStep()">
+              <el-button
+                type="primary"
+                :loading="giteaTest.testing"
+                :disabled="!gitea.url || !gitea.token"
+                @click="testGitea"
+              >
+                测试连接（含权限检查）
+              </el-button>
+              <el-button type="success" :disabled="!giteaPassed" @click="step = 1; enterLLMStep()">
                 下一步
               </el-button>
+            </div>
+            <div v-if="!giteaPassed" class="form-tip next-tip">
+              需先通过「测试连接」才能进入下一步——权限问题会在此处逐项列出，不必等到最后一步才发现。
             </div>
           </el-form>
         </el-card>
@@ -193,6 +221,7 @@
           <el-alert v-if="completeError" :title="completeError" type="error" :closable="false" class="mb-16" />
           <div class="btn-row">
             <el-button @click="step = 1">上一步</el-button>
+            <el-button v-if="completeError" @click="step = 0">返回第 1 步修改 Gitea 配置</el-button>
             <el-button type="primary" size="large" :loading="completing" @click="finish">
               完成初始化
             </el-button>
@@ -207,6 +236,14 @@
             <p>{{ finishMessage }}</p>
           </template>
         </el-result>
+        <el-alert
+          v-for="(w, i) in finishWarnings"
+          :key="i"
+          :title="'Gitea 权限警告：' + w"
+          type="warning"
+          :closable="false"
+          class="mb-16"
+        />
         <el-alert v-if="generatedSecret" type="warning" :closable="false" class="mb-16">
           <p><strong>Webhook Secret（仅显示一次，请保存）：</strong></p>
           <div class="secret-row">
@@ -273,10 +310,30 @@ const finished = ref(false)
 const completing = ref(false)
 const completeError = ref('')
 const finishMessage = ref('')
+const finishWarnings = ref([])
 const generatedSecret = ref('')
 
 const gitea = ref({ url: 'http://localhost:3000', token: '' })
-const giteaTest = ref({ testing: false, ok: false, message: '' })
+const giteaTest = ref({ testing: false, ok: false, message: '', checks: [] })
+// Snapshot of the url/token pair that last passed the connection test;
+// editing either field afterwards invalidates the pass.
+const giteaTestedOK = ref(null)
+const giteaPassed = computed(() =>
+  !!giteaTestedOK.value &&
+  giteaTestedOK.value.url === gitea.value.url.trim() &&
+  giteaTestedOK.value.token === gitea.value.token.trim()
+)
+
+function checkIcon(c) {
+  if (c.skipped) return '−'
+  if (c.ok) return '✓'
+  return c.required ? '✗' : '⚠'
+}
+function checkClass(c) {
+  if (c.skipped) return 'perm-skip'
+  if (c.ok) return 'perm-ok'
+  return c.required ? 'perm-bad' : 'perm-warn'
+}
 
 // Presets are fetched from the backend (single source of truth, C-11); the
 // static list below is only a fallback so the UI still renders if the endpoint
@@ -397,12 +454,27 @@ async function enterLLMStep() {
 }
 
 async function testGitea() {
-  giteaTest.value = { testing: true, ok: false, message: '' }
+  giteaTest.value = { testing: true, ok: false, message: '', checks: [] }
+  giteaTestedOK.value = null
+  const url = gitea.value.url.trim()
+  const tok = gitea.value.token.trim()
   try {
-    const res = await testSetupGitea(token.value.trim(), gitea.value.url.trim(), gitea.value.token.trim())
-    giteaTest.value = { testing: false, ok: !!res.ok, message: res.message || (res.ok ? '连接成功' : '连接失败') }
+    const res = await testSetupGitea(token.value.trim(), url, tok)
+    giteaTest.value = {
+      testing: false,
+      ok: !!res.ok,
+      message: res.message || (res.ok ? '连接成功' : '连接失败'),
+      checks: res.checks || []
+    }
+    if (res.ok) giteaTestedOK.value = { url, token: tok }
   } catch (e) {
-    giteaTest.value = { testing: false, ok: false, message: e.payload?.message || e.message }
+    // 400 responses carry the same structured body (message + checks).
+    giteaTest.value = {
+      testing: false,
+      ok: false,
+      message: e.payload?.message || e.message,
+      checks: e.payload?.checks || []
+    }
   }
 }
 
@@ -467,6 +539,7 @@ async function finish() {
       }
     })
     finishMessage.value = res.message || '配置已生效'
+    finishWarnings.value = res.gitea_warnings || []
     if (res.webhook_secret_generated) {
       generatedSecret.value = res.webhook_secret
     }
@@ -552,6 +625,62 @@ function goLogin() {
   color: #909399;
   margin-top: 6px;
   line-height: 1.5;
+}
+
+.next-tip {
+  margin-top: 10px;
+  text-align: right;
+}
+
+.scope-list {
+  margin-top: 4px;
+}
+
+.scope-list code,
+.perm-scope {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.perm-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.perm-checks li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+}
+
+.perm-icon {
+  font-weight: 700;
+}
+
+.perm-ok {
+  color: #67c23a;
+}
+
+.perm-bad {
+  color: #f56c6c;
+}
+
+.perm-warn {
+  color: #e6a23c;
+}
+
+.perm-skip {
+  color: #909399;
+}
+
+.perm-detail {
+  color: #909399;
+  flex-basis: 100%;
 }
 
 .btn-row {

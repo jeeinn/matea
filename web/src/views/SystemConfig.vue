@@ -38,8 +38,9 @@
             <el-form-item label="管理员 Token">
               <el-input v-model="form['gitea.admin_token']" type="password" show-password placeholder="Gitea 管理员 Token" />
               <div class="form-tip">
-                用于自动创建 Agent 账号，需包含 <code>write:admin</code> 权限。<br>
-                获取路径：登录管理员 → 头像 → 设置 → 应用 → 生成新令牌（勾选 admin / repository 相关写权限）<br>
+                所需 scope（Gitea ≥1.22 细粒度权限，各 scope 相互独立，需逐项勾选）：
+                <code>read:user</code>（验证身份）、<code>write:repository</code>（仓库/PR/部署密钥）、<code>write:issue</code>（评论/标签）、<code>write:admin</code>（自动创建 Agent 账号，需站点管理员）。<br>
+                获取路径：登录管理员 → 头像 → 设置 → 应用 → 生成新令牌<br>
                 <strong>安全提示：已保存的 Token 以 <code>********</code> 掩码显示——保持掩码不变则沿用原值，输入新值即替换。</strong>
                 <el-tag v-if="sourceTag('gitea.admin_token')" size="small" :type="sourceTag('gitea.admin_token') === '数据库' ? 'success' : 'info'" style="margin-left: 8px">
                   {{ sourceTag('gitea.admin_token') }}
@@ -61,6 +62,14 @@
             <el-form-item label=" ">
               <el-button :loading="testingGitea" @click="testGitea">测试 Gitea 连接</el-button>
               <span v-if="giteaTestMessage" :class="['test-result', giteaTestOk ? 'ok' : 'error']">{{ giteaTestMessage }}</span>
+              <ul v-if="giteaTestChecks.length" class="perm-checks">
+                <li v-for="c in giteaTestChecks" :key="c.key">
+                  <span :class="['perm-icon', checkClass(c)]">{{ checkIcon(c) }}</span>
+                  <span>{{ c.label }}</span>
+                  <code class="perm-scope">{{ c.scope }}</code>
+                  <span v-if="c.detail" class="perm-detail">{{ c.detail }}</span>
+                </li>
+              </ul>
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -847,6 +856,18 @@ const testingGitea = ref(false)
 const testingLLM = ref(false)
 const giteaTestMessage = ref('')
 const giteaTestOk = ref(false)
+const giteaTestChecks = ref([])
+
+function checkIcon(c) {
+  if (c.skipped) return '−'
+  if (c.ok) return '✓'
+  return c.required ? '✗' : '⚠'
+}
+function checkClass(c) {
+  if (c.skipped) return 'perm-skip'
+  if (c.ok) return 'perm-ok'
+  return c.required ? 'perm-bad' : 'perm-warn'
+}
 const llmTestMessage = ref('')
 const llmTestOk = ref(false)
 const providersJson = ref('')
@@ -1594,6 +1615,7 @@ const saveAll = async () => {
 const testGitea = async () => {
   testingGitea.value = true
   giteaTestMessage.value = ''
+  giteaTestChecks.value = []
   try {
     const result = await api.post('/config/test/gitea', {
       'gitea.url': form.value['gitea.url'] || '',
@@ -1601,9 +1623,11 @@ const testGitea = async () => {
     })
     giteaTestOk.value = !!result.ok
     giteaTestMessage.value = result.message
+    giteaTestChecks.value = result.checks || []
   } catch (error) {
     giteaTestOk.value = false
     giteaTestMessage.value = error.response?.data?.message || error.response?.data?.error || '测试失败'
+    giteaTestChecks.value = error.response?.data?.checks || []
   } finally {
     testingGitea.value = false
   }
@@ -1824,6 +1848,53 @@ const onImportFile = async (file) => {
 
 .test-result.error {
   color: #f56c6c;
+}
+
+.perm-checks {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13px;
+  width: 100%;
+}
+
+.perm-checks li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+}
+
+.perm-icon {
+  font-weight: 700;
+}
+
+.perm-ok {
+  color: #67c23a;
+}
+
+.perm-bad {
+  color: #f56c6c;
+}
+
+.perm-warn {
+  color: #e6a23c;
+}
+
+.perm-skip {
+  color: #909399;
+}
+
+.perm-scope {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.perm-detail {
+  color: #909399;
+  flex-basis: 100%;
 }
 
 .form-tip code {
