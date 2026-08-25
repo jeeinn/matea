@@ -81,13 +81,13 @@ func TestGitCreateBranch(t *testing.T) {
 	git.Commit("initial")
 
 	// Create branch
-	result := git.CreateBranch("ai/test/task-1002")
+	result := git.CreateBranch("matea/test/task-1002")
 	require.NoError(t, result.Error)
 
 	// Get current branch
 	branch, err := git.GetCurrentBranch()
 	require.NoError(t, err)
-	assert.Equal(t, "ai/test/task-1002", branch)
+	assert.Equal(t, "matea/test/task-1002", branch)
 }
 
 func TestGitHasChanges(t *testing.T) {
@@ -132,12 +132,13 @@ func TestValidateBranchName(t *testing.T) {
 		branch  string
 		wantErr bool
 	}{
-		{"valid dev", "ai/dev/task-1", false},
-		{"valid bugfix", "ai/bugfix/task-123", false},
-		{"valid review", "ai/review/pr-456", false},
+		{"valid solve-issue", "matea/solve-issue-1", false},
+		{"valid fix-bug", "matea/fix-bug-123", false},
+		{"valid review", "matea/review-pr-456", false},
 		{"invalid no prefix", "main", true},
+		{"invalid legacy ai prefix", "ai/dev/issue-1", true},
 		{"invalid feature", "feature/test", true},
-		{"invalid with semicolon", "ai/test;rm -rf /", true},
+		{"invalid with semicolon", "matea/test;rm -rf /", true},
 	}
 
 	for _, tt := range tests {
@@ -158,9 +159,9 @@ func TestGenerateBranchName(t *testing.T) {
 		issueID  int
 		expected string
 	}{
-		{"dev", 14, "ai/dev/issue-14"},
-		{"bugfix", 5, "ai/bugfix/issue-5"},
-		{"solve_issue", 123, "ai/solve-issue/issue-123"},
+		{"solve_issue", 14, "matea/solve-issue-14"},
+		{"fix_bug", 5, "matea/fix-bug-5"},
+		{"solve_comment", 123, "matea/solve-comment-123"},
 	}
 
 	for _, tt := range tests {
@@ -206,83 +207,83 @@ func TestLocalBranchExists(t *testing.T) {
 	_, git, _ := setupGitRepoWithRemote(t)
 
 	assert.True(t, git.LocalBranchExists("main"))
-	assert.False(t, git.LocalBranchExists("ai/dev/issue-1"))
+	assert.False(t, git.LocalBranchExists("matea/dev/issue-1"))
 
-	require.NoError(t, git.CreateBranch("ai/dev/issue-1").Error)
-	assert.True(t, git.LocalBranchExists("ai/dev/issue-1"))
+	require.NoError(t, git.CreateBranch("matea/dev/issue-1").Error)
+	assert.True(t, git.LocalBranchExists("matea/dev/issue-1"))
 }
 
 func TestRemoteBranchExists(t *testing.T) {
 	s, git, _ := setupGitRepoWithRemote(t)
 
 	assert.True(t, git.RemoteBranchExists("origin", "main"))
-	assert.False(t, git.RemoteBranchExists("origin", "ai/dev/issue-2"))
+	assert.False(t, git.RemoteBranchExists("origin", "matea/dev/issue-2"))
 
-	require.NoError(t, git.CreateBranch("ai/dev/issue-2").Error)
+	require.NoError(t, git.CreateBranch("matea/dev/issue-2").Error)
 	require.NoError(t, s.WriteFile("feature.txt", []byte("x")))
 	git.Add()
 	require.NoError(t, git.Commit("feature").Error)
-	require.NoError(t, git.Push("origin", "ai/dev/issue-2").Error)
+	require.NoError(t, git.Push("origin", "matea/dev/issue-2").Error)
 
-	assert.True(t, git.RemoteBranchExists("origin", "ai/dev/issue-2"))
+	assert.True(t, git.RemoteBranchExists("origin", "matea/dev/issue-2"))
 }
 
 func TestFetchBranchDoesNotRequireSetBranches(t *testing.T) {
 	s, git, _ := setupGitRepoWithRemote(t)
 
-	require.NoError(t, git.CreateBranch("ai/dev/issue-3").Error)
+	require.NoError(t, git.CreateBranch("matea/dev/issue-3").Error)
 	require.NoError(t, s.WriteFile("b.txt", []byte("b")))
 	git.Add()
 	require.NoError(t, git.Commit("on feature").Error)
-	require.NoError(t, git.Push("origin", "ai/dev/issue-3").Error)
+	require.NoError(t, git.Push("origin", "matea/dev/issue-3").Error)
 
 	require.NoError(t, git.Checkout("main").Error)
 
-	fetchResult := git.FetchBranch("origin", "ai/dev/issue-3")
+	fetchResult := git.FetchBranch("origin", "matea/dev/issue-3")
 	require.NoError(t, fetchResult.Error, fetchResult.Stderr)
 
-	checkoutResult := git.Checkout("ai/dev/issue-3")
+	checkoutResult := git.Checkout("matea/dev/issue-3")
 	if checkoutResult.Error != nil {
-		checkoutResult = s.Execute("git", "checkout", "-b", "ai/dev/issue-3", "origin/ai/dev/issue-3")
+		checkoutResult = s.Execute("git", "checkout", "-b", "matea/dev/issue-3", "origin/matea/dev/issue-3")
 	}
 	require.NoError(t, checkoutResult.Error, checkoutResult.Stderr)
 
 	branch, err := git.GetCurrentBranch()
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-3", branch)
+	assert.Equal(t, "matea/dev/issue-3", branch)
 }
 
 func TestResetFetchRefspecsRemovesBranchSpecificRefs(t *testing.T) {
 	s, git, _ := setupGitRepoWithRemote(t)
 
-	require.NoError(t, s.Execute("git", "remote", "set-branches", "--add", "origin", "ai/dev/issue-4").Error)
+	require.NoError(t, s.Execute("git", "remote", "set-branches", "--add", "origin", "matea/dev/issue-4").Error)
 
 	before := s.Execute("git", "config", "--get-all", "remote.origin.fetch")
 	require.NoError(t, before.Error)
-	assert.Contains(t, before.Stdout, "ai/dev/issue-4")
+	assert.Contains(t, before.Stdout, "matea/dev/issue-4")
 
 	resetResult := git.ResetFetchRefspecs("origin")
 	require.NoError(t, resetResult.Error, resetResult.Stderr)
 
 	after := s.Execute("git", "config", "--get-all", "remote.origin.fetch")
 	require.NoError(t, after.Error)
-	assert.NotContains(t, after.Stdout, "ai/dev/issue-4")
+	assert.NotContains(t, after.Stdout, "matea/dev/issue-4")
 	assert.Contains(t, after.Stdout, "refs/heads/*")
 }
 
 func TestLocalOnlyBranchSkipsRemoteFetch(t *testing.T) {
 	s, git, _ := setupGitRepoWithRemote(t)
 
-	require.NoError(t, git.CreateBranch("ai/dev/issue-5").Error)
-	assert.True(t, git.LocalBranchExists("ai/dev/issue-5"))
-	assert.False(t, git.RemoteBranchExists("origin", "ai/dev/issue-5"))
+	require.NoError(t, git.CreateBranch("matea/dev/issue-5").Error)
+	assert.True(t, git.LocalBranchExists("matea/dev/issue-5"))
+	assert.False(t, git.RemoteBranchExists("origin", "matea/dev/issue-5"))
 
 	// Poison config like the old set-branches path did.
-	require.NoError(t, s.Execute("git", "remote", "set-branches", "--add", "origin", "ai/dev/issue-5").Error)
+	require.NoError(t, s.Execute("git", "remote", "set-branches", "--add", "origin", "matea/dev/issue-5").Error)
 	git.ResetFetchRefspecs("origin")
 
-	require.NoError(t, git.Checkout("ai/dev/issue-5").Error)
+	require.NoError(t, git.Checkout("matea/dev/issue-5").Error)
 	branch, err := git.GetCurrentBranch()
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-5", branch)
+	assert.Equal(t, "matea/dev/issue-5", branch)
 }

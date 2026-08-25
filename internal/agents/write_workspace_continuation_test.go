@@ -23,7 +23,7 @@ import (
 
 // continuationRemote builds a bare remote where main has advanced PAST the
 // session's draft branch tip: main carries MAIN.txt (added after the draft
-// branched off), the draft branch ai/dev/issue-5 carries FIX.txt. Returns
+// branched off), the draft branch matea/solve-issue-5 carries FIX.txt. Returns
 // (cloneURL, draftHeadSHA).
 func continuationRemote(t *testing.T) (string, string) {
 	t.Helper()
@@ -53,11 +53,11 @@ func continuationRemote(t *testing.T) (string, string) {
 	run(work, "remote", "add", "origin", remote)
 
 	// The session's draft branch: one commit on top of the original main.
-	run(work, "checkout", "-q", "-b", "ai/dev/issue-5")
+	run(work, "checkout", "-q", "-b", "matea/solve-issue-5")
 	require.NoError(t, os.WriteFile(filepath.Join(work, "FIX.txt"), []byte("session work\n"), 0o644))
 	run(work, "add", "-A")
 	run(work, "commit", "-q", "-m", "session task 1")
-	run(work, "push", "-q", "origin", "ai/dev/issue-5")
+	run(work, "push", "-q", "origin", "matea/solve-issue-5")
 	draftHead := strings.TrimSpace(run(work, "rev-parse", "HEAD"))
 
 	// Main advances afterwards (the divergence a LastHead anchor must ignore).
@@ -97,16 +97,16 @@ func continuationSession(t *testing.T, db *store.DB, id, branch, lastHead string
 func TestPrepareWriteWorkspaceContinuationAnchorsOnLastHead(t *testing.T) {
 	remote, draftHead := continuationRemote(t)
 	db := newHubRunTestDB(t)
-	continuationSession(t, db, "sess-cont", "ai/dev/issue-5", draftHead)
+	continuationSession(t, db, "sess-cont", "matea/solve-issue-5", draftHead)
 	f := newContinuationFactory(t, db, remote)
 
 	task := &store.Task{ID: 7001, Repo: "o/r", IssueID: 5, TaskType: "solve_issue", Event: "continue", SessionID: "sess-cont"}
-	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
 	require.NoError(t, err)
 	defer wwc.Sandbox.Cleanup()
 
 	assert.True(t, wwc.UseSession)
-	assert.Equal(t, "ai/dev/issue-5", wwc.BranchName)
+	assert.Equal(t, "matea/solve-issue-5", wwc.BranchName)
 	assert.Equal(t, draftHead, wwc.Git.HeadSHA(), "workspace must be anchored on the session LastHead, not main")
 
 	// Content proof: the draft branch's file is present, main's later commit is not.
@@ -120,11 +120,11 @@ func TestPrepareWriteWorkspaceContinuationMissingAnchorFails(t *testing.T) {
 	remote, _ := continuationRemote(t)
 	db := newHubRunTestDB(t)
 	// LastHead that does not exist on the remote (branch deleted/rewound).
-	continuationSession(t, db, "sess-gone", "ai/dev/issue-5", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	continuationSession(t, db, "sess-gone", "matea/solve-issue-5", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	f := newContinuationFactory(t, db, remote)
 
 	task := &store.Task{ID: 7002, Repo: "o/r", IssueID: 5, TaskType: "solve_issue", Event: "x", SessionID: "sess-gone"}
-	_, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	_, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session continuation anchor")
 }
@@ -133,15 +133,15 @@ func TestPrepareWriteWorkspaceLegacySessionFallsBackToRemoteBranch(t *testing.T)
 	remote, draftHead := continuationRemote(t)
 	db := newHubRunTestDB(t)
 	// Pre-B2.2 row: branch recorded, no LastHead.
-	continuationSession(t, db, "sess-legacy", "ai/dev/issue-5", "")
+	continuationSession(t, db, "sess-legacy", "matea/solve-issue-5", "")
 	f := newContinuationFactory(t, db, remote)
 
 	task := &store.Task{ID: 7003, Repo: "o/r", IssueID: 5, TaskType: "solve_issue", Event: "x", SessionID: "sess-legacy"}
-	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
 	require.NoError(t, err)
 	defer wwc.Sandbox.Cleanup()
 
-	assert.Equal(t, "ai/dev/issue-5", wwc.BranchName)
+	assert.Equal(t, "matea/solve-issue-5", wwc.BranchName)
 	assert.Equal(t, draftHead, wwc.Git.HeadSHA(), "legacy session must anchor on the remote branch head")
 }
 
@@ -152,24 +152,24 @@ func TestPrepareWriteWorkspaceLegacySessionFallsBackToRemoteBranch(t *testing.T)
 // the default-branch tip instead of failing with "not found locally or on
 // remote".
 func TestPrepareWriteWorkspaceSessionBranchLostStartsFresh(t *testing.T) {
-	remote, _ := continuationRemote(t) // remote carries main + ai/dev/issue-5 only
+	remote, _ := continuationRemote(t) // remote carries main + matea/solve-issue-5 only
 	db := newHubRunTestDB(t)
 	// Session branch recorded by a task that failed before its first push.
-	continuationSession(t, db, "sess-lost", "ai/dev/issue-9", "")
+	continuationSession(t, db, "sess-lost", "matea/solve-issue-9", "")
 	f := newContinuationFactory(t, db, remote)
 
 	task := &store.Task{ID: 7006, Repo: "o/r", IssueID: 9, TaskType: "solve_issue", Event: "x", SessionID: "sess-lost"}
-	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
 	require.NoError(t, err)
 	defer wwc.Sandbox.Cleanup()
 
-	assert.Equal(t, "ai/dev/issue-9", wwc.BranchName)
+	assert.Equal(t, "matea/solve-issue-9", wwc.BranchName)
 	branch, err := wwc.Git.GetCurrentBranch()
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-9", branch)
+	assert.Equal(t, "matea/solve-issue-9", branch)
 
 	// Fresh branch starts at main's tip: MAIN.txt present, FIX.txt (draft work
-	// on the unrelated ai/dev/issue-5 branch) absent.
+	// on the unrelated matea/solve-issue-5 branch) absent.
 	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "MAIN.txt"))
 	assert.NoError(t, err)
 	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "FIX.txt"))
@@ -178,7 +178,7 @@ func TestPrepareWriteWorkspaceSessionBranchLostStartsFresh(t *testing.T) {
 	// Session keeps the same branch name for future continuation.
 	sess, err := db.GetSession("sess-lost")
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-9", sess.Branch)
+	assert.Equal(t, "matea/solve-issue-9", sess.Branch)
 }
 
 func TestPrepareWriteWorkspaceNewSessionCreatesFreshBranch(t *testing.T) {
@@ -189,11 +189,11 @@ func TestPrepareWriteWorkspaceNewSessionCreatesFreshBranch(t *testing.T) {
 	f := newContinuationFactory(t, db, remote)
 
 	task := &store.Task{ID: 7004, Repo: "o/r", IssueID: 9, TaskType: "solve_issue", Event: "x", SessionID: "sess-new"}
-	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f, "dev")
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
 	require.NoError(t, err)
 	defer wwc.Sandbox.Cleanup()
 
-	assert.Equal(t, "ai/dev/issue-9", wwc.BranchName)
+	assert.Equal(t, "matea/solve-issue-9", wwc.BranchName)
 	// Fresh branch starts at main's tip: MAIN.txt present, no FIX.txt.
 	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "MAIN.txt"))
 	assert.NoError(t, err)
@@ -201,7 +201,7 @@ func TestPrepareWriteWorkspaceNewSessionCreatesFreshBranch(t *testing.T) {
 	// The generated branch name is recorded on the session for continuation.
 	sess, err := db.GetSession("sess-new")
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-9", sess.Branch)
+	assert.Equal(t, "matea/solve-issue-9", sess.Branch)
 }
 
 func TestSaveSessionProgressRecordsBranchAndHead(t *testing.T) {
@@ -210,11 +210,11 @@ func TestSaveSessionProgressRecordsBranchAndHead(t *testing.T) {
 	f := &RunnerFactory{db: db}
 	task := &store.Task{ID: 7005, SessionID: "sess-prog"}
 
-	saveSessionProgress(f, task, "ai/dev/issue-9", "0123456789abcdef0123456789abcdef01234567")
+	saveSessionProgress(f, task, "matea/solve-issue-9", "0123456789abcdef0123456789abcdef01234567")
 
 	sess, err := db.GetSession("sess-prog")
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-9", sess.Branch)
+	assert.Equal(t, "matea/solve-issue-9", sess.Branch)
 	assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", sess.LastHead)
 
 	// Nil-DB / no-session callers are no-ops (never panic).

@@ -151,17 +151,17 @@ func TestSaveSessionBranch(t *testing.T) {
 	factory := NewRunnerFactory(nil, nil, db, config.DefaultAgentDefaults(), config.DefaultAgentLoopConfig(), nil, nil, nil, sandbox.DefaultConfig(), nil, "")
 	task := &store.Task{SessionID: session.ID}
 
-	saveSessionBranch(factory, task, "ai/dev/issue-2")
+	saveSessionBranch(factory, task, "matea/solve-issue-2")
 
 	got, err := db.GetSession(session.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", got.Branch)
+	assert.Equal(t, "matea/solve-issue-2", got.Branch)
 
 	// Idempotent when branch unchanged
-	saveSessionBranch(factory, task, "ai/dev/issue-2")
+	saveSessionBranch(factory, task, "matea/solve-issue-2")
 	got, err = db.GetSession(session.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "ai/dev/issue-2", got.Branch)
+	assert.Equal(t, "matea/solve-issue-2", got.Branch)
 }
 
 func TestFinalizeWriteTaskPRCreatesWhenNoOpenPR(t *testing.T) {
@@ -186,7 +186,7 @@ func TestFinalizeWriteTaskPRCreatesWhenNoOpenPR(t *testing.T) {
 
 	client := gitea.NewClient(server.URL, "test-token")
 	task := &store.Task{ID: 35, Event: "Issue 2", IssueID: 2}
-	result, err := FinalizeWriteTaskPR(client, "owner", "repo", "ai/dev/issue-2", "main", task, "dev", "done")
+	result, err := FinalizeWriteTaskPR(client, "owner", "repo", "matea/solve-issue-2", "main", task, "dev", "done")
 	require.NoError(t, err)
 	assert.True(t, createCalled)
 	assert.Equal(t, "pr", result.Action)
@@ -203,7 +203,7 @@ func TestFinalizeWriteTaskPRCommentsWhenOpenPRExists(t *testing.T) {
 				"number":   3,
 				"state":    "open",
 				"html_url": "http://localhost/owner/repo/pulls/3",
-				"head":     map[string]string{"ref": "ai/dev/issue-2"},
+				"head":     map[string]string{"ref": "matea/solve-issue-2"},
 			},
 		})
 	}))
@@ -211,7 +211,7 @@ func TestFinalizeWriteTaskPRCommentsWhenOpenPRExists(t *testing.T) {
 
 	client := gitea.NewClient(server.URL, "test-token")
 	task := &store.Task{ID: 35, Event: "Issue 2", IssueID: 2}
-	result, err := FinalizeWriteTaskPR(client, "owner", "repo", "ai/dev/issue-2", "main", task, "dev", "done")
+	result, err := FinalizeWriteTaskPR(client, "owner", "repo", "matea/solve-issue-2", "main", task, "dev", "done")
 	require.NoError(t, err)
 	assert.Equal(t, "comment", result.Action)
 	assert.Equal(t, 3, result.PRID)

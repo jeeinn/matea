@@ -22,11 +22,11 @@ func resolveWorkBranch(task *store.Task, sessionBranch string) string {
 }
 
 // resolveBranchPlan decides the working branch and whether it already exists.
-func resolveBranchPlan(task *store.Task, sessionBranch, taskSubType string, git *sandbox.Git) (branchName string, isExisting bool) {
+func resolveBranchPlan(task *store.Task, sessionBranch string, git *sandbox.Git) (branchName string, isExisting bool) {
 	if branch := resolveWorkBranch(task, sessionBranch); branch != "" {
 		return branch, true
 	}
-	branchName = sandbox.GenerateBranchName(taskSubType, task.IssueID)
+	branchName = sandbox.GenerateBranchName(task.TaskType, task.IssueID)
 	if git.LocalBranchExists(branchName) {
 		return branchName, true
 	}
