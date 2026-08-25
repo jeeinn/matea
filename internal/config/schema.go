@@ -119,7 +119,7 @@ type DispatcherConfig struct {
 	MaxConcurrent    int `yaml:"max_concurrent"`
 	TaskRetryCount   int `yaml:"task_retry_count"` // whole-task retries after runner failure; 0 = no retry
 	QueueSize        int `yaml:"queue_size"`
-	RateLimitBackoff int `yaml:"rate_limit_backoff"` // seconds to wait on HTTP 429; 0 = disabled
+	RateLimitBackoff int `yaml:"rate_limit_backoff"` // seconds to wait on HTTP 429; 0 = default (60s); negative = disabled
 
 	// AgentConcurrency controls whether one agent may run multiple issues at once.
 	// "parallel" (default): only issue-level in-flight lock.
@@ -150,7 +150,7 @@ type LLMConfig struct {
 	// hub-* 后端（如 hub-opencode）由 Hub 自身管理 LLM，不读取此处配置。
 	Providers        map[string]ProviderConfig `yaml:"providers"`
 	Defaults         LLMDefaultsConfig         `yaml:"defaults"`
-	RateLimitRetries int                       `yaml:"rate_limit_retries"` // retries after HTTP 429; 0 = no retry (still needs rate_limit_backoff > 0)
+	RateLimitRetries int                       `yaml:"rate_limit_retries"` // retries after HTTP 429; 0 = default (10); negative = no retry (still needs rate_limit_backoff > 0)
 }
 
 type ProviderConfig struct {
@@ -197,7 +197,7 @@ type AgentDefaultsConfig struct {
 	MaxOutputTokens int     `yaml:"max_output_tokens"`
 	MaxInputTokens  int     `yaml:"max_input_tokens"`
 	Temperature     float64 `yaml:"temperature"`
-	Timeout         string  `yaml:"timeout"` // Go duration, e.g. "5m" — single-shot tasks
+	Timeout         string  `yaml:"timeout"` // Go duration, e.g. "20m" — single-shot tasks
 }
 
 // APIConfig contains API server configuration.
@@ -439,6 +439,13 @@ func DefaultMCPConfig() MCPConfig {
 const (
 	DefaultMaxOutputTokens = 8192
 	DefaultMaxInputTokens  = 115200 // 128000 * 0.9
+
+	// DefaultRateLimitBackoffSec is the default wait between 429 retries.
+	// Rate-limited models need a generous backoff; see llm.RateLimitRetries.
+	DefaultRateLimitBackoffSec = 60
+	// DefaultRateLimitRetries is the default retry count after an HTTP 429.
+	// 10 × 60s worst-case backoff fits inside the 20m single-shot task timeout.
+	DefaultRateLimitRetries = 10
 )
 
 // DefaultAgentDefaults returns default agent budget/timeout settings.
@@ -450,6 +457,6 @@ func DefaultAgentDefaults() AgentDefaultsConfig {
 		MaxOutputTokens: DefaultMaxOutputTokens,
 		MaxInputTokens:  DefaultMaxInputTokens,
 		Temperature:     0.3,
-		Timeout:         "5m",
+		Timeout:         "20m",
 	}
 }

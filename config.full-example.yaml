@@ -38,8 +38,8 @@ dispatcher:
   max_concurrent: 2
   # 整任务失败后的重试次数（clone/runner 整次失败；不含 loop 内轮次）
   task_retry_count: 1
-  # LLM 返回 429 时的退避等待（秒）；0 表示关闭 429 重试
-  rate_limit_backoff: 30
+  # LLM 返回 429 时的退避等待（秒）；0 使用默认 60，负数表示关闭 429 重试
+  rate_limit_backoff: 60
   # 同一 agent 跨 Issue 并发：parallel（默认）| serial_queue（同 agent 同时最多 1 个 running，其余入队等待）
   agent_concurrency: parallel
   # 任务队列大小
@@ -90,8 +90,8 @@ llm:
     provider: "deepseek"
     model: "deepseek-v4-flash"
 
-  # 单次 ChatCompletion 遇 HTTP 429 后的重试次数（需 rate_limit_backoff > 0）
-  rate_limit_retries: 1
+  # 单次 ChatCompletion 遇 HTTP 429 后的重试次数（需 rate_limit_backoff > 0；0 使用默认 10，负数表示不重试）
+  rate_limit_retries: 10
 
 # 调试选项（默认关闭）
 debug:
@@ -121,7 +121,7 @@ agents:
     max_output_tokens: 8192
     max_input_tokens: 115200  # ~128K 上下文的 90%，主流模型安全兜底
     temperature: 0.3
-    timeout: "5m"           # 单次任务（analyze/review/reply）总超时
+    timeout: "20m"          # 单次任务（analyze/review/reply）总超时；需覆盖 429 退避等待（退避秒数 × 重试次数）
 
   loop:
     max_iterations: 10

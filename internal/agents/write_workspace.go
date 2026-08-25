@@ -135,9 +135,22 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 
 	branchName, isExistingBranch := resolveBranchPlan(task, sessionBranch, taskSubType, git)
 	wwc.BranchName = branchName
+
+	// A session branch recorded by a previous task that failed before its first
+	// push exists neither locally (fresh clone) nor on the remote — there is no
+	// work to preserve, so start the branch fresh instead of failing the
+	// checkout. The PR-head case (task.BaseBranch, solve_comment) must exist and
+	// keeps failing loud; the LastHead anchor case below does the same.
+	if isExistingBranch && sessionLastHead == "" && strings.TrimSpace(task.BaseBranch) == "" &&
+		!git.LocalBranchExists(branchName) && !git.RemoteBranchExists("origin", branchName) {
+		log.Printf("[WARN] Task %d session branch %s not found locally or on remote (previous task failed before first push?); starting it fresh", task.ID, branchName)
+		isExistingBranch = false
+	}
 	// Surface local-only session branches early (before coding), so operators
 	// see stranded work in logs even when the task later fails to push.
-	warnLocalOnlyBranch(git, branchName, task.ID)
+	if isExistingBranch {
+		warnLocalOnlyBranch(git, branchName, task.ID)
+	}
 
 	switch {
 	case isExistingBranch && sessionLastHead != "" && task.BaseBranch == "":

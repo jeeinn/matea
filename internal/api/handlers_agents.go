@@ -133,6 +133,9 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		store.Agent
 		Repos []string `json:"repos"`
+		// TakeOverGiteaUser explicitly hands an existing non-Matea-managed
+		// Gitea account to Matea (password reset via Admin API).
+		TakeOverGiteaUser bool `json:"take_over_gitea_user"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, 400, "invalid request body")
@@ -171,7 +174,7 @@ func (h *Handler) updateAgent(w http.ResponseWriter, r *http.Request) {
 		agent.McpServers = req.McpServers
 	}
 	agent.ID = id
-	if err := h.manager.UpdateAgent(agent); err != nil {
+	if err := h.manager.UpdateAgent(agent, req.TakeOverGiteaUser); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}

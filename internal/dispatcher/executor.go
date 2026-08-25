@@ -602,7 +602,7 @@ func (e *Executor) resolveTaskTimeout(taskType string, agent *store.Agent) time.
 	if d, err := time.ParseDuration(timeoutStr); err == nil && d > 0 {
 		return d
 	}
-	return 5 * time.Minute
+	return 20 * time.Minute
 }
 
 func isLoopTask(taskType string) bool {

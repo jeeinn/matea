@@ -3,7 +3,7 @@ import api from '../api'
 
 export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 8192
 export const DEFAULT_AGENT_MAX_INPUT_TOKENS = 115200 // 128K * 0.9
-export const DEFAULT_AGENT_TIMEOUT = '5m'
+export const DEFAULT_AGENT_TIMEOUT = '20m'
 
 export const DEFAULT_LOOP_CONFIG = {
   max_iterations: 20,
@@ -121,6 +121,7 @@ export function useAgentDefaults() {
     return {
       name: '',
       gitea_username: '',
+      take_over_gitea_user: false,
       role: 'analyze',
       provider: agentDefaults.value.provider,
       model: agentDefaults.value.model,
