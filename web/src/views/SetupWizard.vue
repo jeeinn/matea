@@ -355,7 +355,7 @@ const fallbackPresets = [
   { key: 'deepseek', label: 'DeepSeek（云端）', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', type: 'openai_compatible' },
   { key: 'openai', label: 'OpenAI（云端）', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', type: 'openai_compatible' },
   { key: 'anthropic', label: 'Anthropic Claude（云端）', provider: 'claude', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-5', type: 'anthropic' },
-  { key: 'sensenova', label: 'SenseNova 商汤（云端）', provider: 'sensenova', base_url: 'https://api.sensenova.cn/compatible-mode/v1', model: 'deepseek-v4-flash', type: 'openai_compatible' },
+  { key: 'sensenova', label: 'SenseNova 商汤（云端）', provider: 'sensenova', base_url: 'https://token.sensenova.cn/v1', model: 'deepseek-v4-flash', type: 'openai_compatible' },
   { key: 'ollama', label: 'Ollama（本地）', provider: 'ollama', base_url: 'http://localhost:11434/v1', model: '', type: 'openai_compatible' },
   { key: 'custom', label: '自定义…', provider: '', base_url: '', model: '', type: 'openai_compatible' }
 ]
