@@ -224,8 +224,8 @@
               <el-slider v-model.number="form['agents.defaults.temperature']" :min="0" :max="2" :step="0.1" show-input style="width: 100%" />
             </el-form-item>
             <el-form-item label="单次任务超时">
-              <el-input v-model="form['agents.defaults.timeout']" placeholder="5m" style="width: 200px" />
-              <div class="form-tip">analyze / review / reply 等单次任务总超时（Go duration，如 5m）</div>
+              <el-input v-model="form['agents.defaults.timeout']" placeholder="20m" style="width: 200px" />
+              <div class="form-tip">analyze / review / reply 等单次任务总超时（Go duration，默认 20m；需覆盖 429 退避等待）</div>
             </el-form-item>
 
             <el-divider content-position="left">Agent Loop 默认参数</el-divider>

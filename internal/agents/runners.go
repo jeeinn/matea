@@ -17,7 +17,7 @@ const (
 	fallbackMaxOutput = config.DefaultMaxOutputTokens
 	fallbackMaxInput  = config.DefaultMaxInputTokens
 	fallbackTemp      = 0.3
-	fallbackTimeout   = "5m"
+	fallbackTimeout   = "20m"
 )
 
 // Runner is the interface for task execution strategies.

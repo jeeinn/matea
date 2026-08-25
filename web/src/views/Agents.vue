@@ -281,7 +281,7 @@
               </div>
             </el-form-item>
             <el-form-item label="单次任务超时">
-              <el-input v-model="form.timeout" placeholder="5m" style="width: 200px" />
+              <el-input v-model="form.timeout" placeholder="20m" style="width: 200px" />
             </el-form-item>
             <el-form-item label="User Template">
               <el-input v-model="form.user_template" type="textarea" :rows="3" placeholder="用户消息模板（可选）" />

@@ -197,7 +197,7 @@ type AgentDefaultsConfig struct {
 	MaxOutputTokens int     `yaml:"max_output_tokens"`
 	MaxInputTokens  int     `yaml:"max_input_tokens"`
 	Temperature     float64 `yaml:"temperature"`
-	Timeout         string  `yaml:"timeout"` // Go duration, e.g. "5m" — single-shot tasks
+	Timeout         string  `yaml:"timeout"` // Go duration, e.g. "20m" — single-shot tasks
 }
 
 // APIConfig contains API server configuration.
@@ -457,6 +457,6 @@ func DefaultAgentDefaults() AgentDefaultsConfig {
 		MaxOutputTokens: DefaultMaxOutputTokens,
 		MaxInputTokens:  DefaultMaxInputTokens,
 		Temperature:     0.3,
-		Timeout:         "5m",
+		Timeout:         "20m",
 	}
 }

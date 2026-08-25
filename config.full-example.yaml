@@ -121,7 +121,7 @@ agents:
     max_output_tokens: 8192
     max_input_tokens: 115200  # ~128K 上下文的 90%，主流模型安全兜底
     temperature: 0.3
-    timeout: "5m"           # 单次任务（analyze/review/reply）总超时
+    timeout: "20m"          # 单次任务（analyze/review/reply）总超时；需覆盖 429 退避等待（退避秒数 × 重试次数）
 
   loop:
     max_iterations: 10

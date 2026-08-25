@@ -113,7 +113,7 @@
               <el-slider v-model="form.temperature" :min="0" :max="2" :step="0.1" show-input style="width: 100%" />
             </el-form-item>
             <el-form-item label="单次任务超时">
-              <el-input v-model="form.timeout" placeholder="5m" style="width: 200px" />
+              <el-input v-model="form.timeout" placeholder="20m" style="width: 200px" />
             </el-form-item>
 
             <template v-if="form.role === 'coder'">
