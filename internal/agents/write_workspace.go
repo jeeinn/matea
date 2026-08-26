@@ -139,9 +139,17 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 	// A session branch recorded by a previous task that failed before its first
 	// push exists neither locally (fresh clone) nor on the remote — there is no
 	// work to preserve, so start the branch fresh instead of failing the
-	// checkout. The PR-head case (task.BaseBranch, solve_comment) must exist and
-	// keeps failing loud; the LastHead anchor case below does the same.
-	if isExistingBranch && sessionLastHead == "" && strings.TrimSpace(task.BaseBranch) == "" &&
+	// checkout.
+	//
+	// Note the dispatcher copies the session branch into task.BaseBranch for
+	// coder continuation when the webhook omits pull_request (pipeline.go), so
+	// "BaseBranch set" does NOT imply a genuine PR head here. Treat BaseBranch
+	// as session-derived when it is empty or equals the session branch; only a
+	// BaseBranch differing from the session branch (a real PR head from the
+	// webhook, solve_comment) must exist and keeps failing loud — as does the
+	// LastHead anchor case below.
+	sessionDerived := strings.TrimSpace(task.BaseBranch) == "" || task.BaseBranch == sessionBranch
+	if isExistingBranch && sessionLastHead == "" && sessionDerived &&
 		!git.LocalBranchExists(branchName) && !git.RemoteBranchExists("origin", branchName) {
 		log.Printf("[WARN] Task %d session branch %s not found locally or on remote (previous task failed before first push?); starting it fresh", task.ID, branchName)
 		isExistingBranch = false

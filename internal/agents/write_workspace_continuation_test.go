@@ -221,3 +221,48 @@ func TestSaveSessionProgressRecordsBranchAndHead(t *testing.T) {
 	saveSessionProgress(&RunnerFactory{}, &store.Task{ID: 1}, "b", "h")
 	saveSessionProgress(f, &store.Task{ID: 2}, "b", "h") // no SessionID
 }
+
+// TestPrepareWriteWorkspaceSessionBranchViaBaseBranchStartsFresh covers the
+// exact production failure seen on issue #5: the dispatcher copies the session
+// branch into task.BaseBranch for solve_comment continuation when the webhook
+// omits pull_request (pipeline.go). The fresh-start fallback must still apply —
+// a session-derived BaseBranch is not a genuine PR head.
+//
+// The ai/dev/* names are deliberate: the session predates the matea/ branch
+// rename, proving old-format session branches still continue correctly.
+func TestPrepareWriteWorkspaceSessionBranchViaBaseBranchStartsFresh(t *testing.T) {
+	remote, _ := continuationRemote(t) // remote carries main + matea/solve-issue-5 only
+	db := newHubRunTestDB(t)
+	continuationSession(t, db, "sess-base", "ai/dev/issue-9", "")
+	f := newContinuationFactory(t, db, remote)
+
+	task := &store.Task{ID: 7007, Repo: "o/r", IssueID: 9, TaskType: "solve_comment", Event: "x",
+		SessionID: "sess-base", BaseBranch: "ai/dev/issue-9"}
+	wwc, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
+	require.NoError(t, err)
+	defer wwc.Sandbox.Cleanup()
+
+	branch, err := wwc.Git.GetCurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "ai/dev/issue-9", branch)
+	// Fresh branch starts at main's tip.
+	_, err = os.Stat(filepath.Join(wwc.Sandbox.WorkDir, "MAIN.txt"))
+	assert.NoError(t, err)
+}
+
+// TestPrepareWriteWorkspaceMissingPRHeadFails pins the fail-loud contract for a
+// genuine PR head: a BaseBranch differing from the session branch comes from
+// the webhook's pull_request payload and must exist — a missing one means the
+// PR's head branch was deleted and continuing would resurrect confusing work.
+func TestPrepareWriteWorkspaceMissingPRHeadFails(t *testing.T) {
+	remote, _ := continuationRemote(t)
+	db := newHubRunTestDB(t)
+	continuationSession(t, db, "sess-pr", "matea/solve-issue-5", "")
+	f := newContinuationFactory(t, db, remote)
+
+	task := &store.Task{ID: 7008, Repo: "o/r", IssueID: 5, TaskType: "solve_comment", Event: "x",
+		SessionID: "sess-pr", BaseBranch: "contributor/deleted-head"}
+	_, err := prepareWriteWorkspace(context.Background(), task, &store.Agent{}, f)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found locally or on remote")
+}

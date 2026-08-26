@@ -217,6 +217,10 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 	}
 
 	// PR head branch, or session branch for coder continuation when webhook omits pull_request.
+	// Note: a session-derived BaseBranch may not exist anywhere yet (the session
+	// records the branch at workspace-prep time, before any push), so it is NOT
+	// a "must exist" PR head — prepareWriteWorkspace treats BaseBranch equal to
+	// the session branch as session-derived and falls back to creating it fresh.
 	if evt.PR != nil && evt.PR.Head.Ref != "" {
 		task.BaseBranch = strings.TrimSpace(evt.PR.Head.Ref)
 	}
