@@ -63,7 +63,7 @@
               <template #title>
                 <div class="iteration-header">
                   <el-icon class="iteration-icon"><Operation /></el-icon>
-                  <span class="iteration-title">第 {{ group.iteration }} 轮</span>
+                  <span class="iteration-title">{{ iterationTitle(group.iteration) }}</span>
                   <el-tag size="small" type="info" effect="plain">{{ group.messages.length }} 条消息</el-tag>
                 </div>
               </template>
@@ -122,7 +122,7 @@
               v-for="msg in conversationMessages"
               :key="msg.id"
               :type="timelineType(msg.role)"
-              :timestamp="`#${msg.seq} · 第${msg.iteration}轮`"
+              :timestamp="`#${msg.seq} · ${iterationTitle(msg.iteration)}`"
               placement="top"
             >
               <div class="timeline-msg">
@@ -193,7 +193,14 @@ const conversationByIteration = computed(() => {
     .map(([iteration, messages]) => ({ iteration, messages }))
 })
 
-const iterationCount = computed(() => conversationByIteration.value.length)
+// 初始输入（system prompt + user context）持久化为 iteration 0，不计入轮次
+const iterationCount = computed(
+  () => conversationByIteration.value.filter((g) => g.iteration > 0).length
+)
+
+const iterationTitle = (iteration) => {
+  return iteration === 0 ? '初始输入（System / User）' : `第 ${iteration} 轮`
+}
 
 // 缓存 formatToolCalls 结果，避免重复解析
 const toolCallsCache = new Map()
@@ -249,9 +256,12 @@ const loadConversation = async (taskId) => {
     if (requestId !== currentRequestId) return
     conversationMessages.value = res?.messages || []
     conversationCount.value = res?.count || conversationMessages.value.length
-    // 默认只展开最后一轮
+    // 默认展开初始输入（iteration 0）与最后一轮
     const iterations = conversationByIteration.value
-    openIterations.value = iterations.length > 0 ? [String(iterations[iterations.length - 1].iteration)] : []
+    const open = new Set()
+    if (iterations.length > 0 && iterations[0].iteration === 0) open.add('0')
+    if (iterations.length > 0) open.add(String(iterations[iterations.length - 1].iteration))
+    openIterations.value = [...open]
   } catch (error) {
     // 检查是否为最新请求
     if (requestId !== currentRequestId) return
