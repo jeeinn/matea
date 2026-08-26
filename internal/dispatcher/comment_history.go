@@ -9,8 +9,6 @@ import (
 )
 
 const (
-	// commentHistoryLimit matches InteractionRunner's recent-comment window.
-	commentHistoryLimit = 10
 	// maxCommentBodyChars caps a single comment so one long review cannot dominate context.
 	maxCommentBodyChars = 8000
 )

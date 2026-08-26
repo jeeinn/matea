@@ -41,6 +41,7 @@ func configToFlatMap(cfg *config.Config) map[string]string {
 		"dispatcher.max_concurrent":     strconv.Itoa(cfg.Dispatcher.MaxConcurrent),
 		"dispatcher.task_retry_count":   strconv.Itoa(cfg.Dispatcher.TaskRetryCount),
 		"dispatcher.rate_limit_backoff": strconv.Itoa(cfg.Dispatcher.RateLimitBackoff),
+		"dispatcher.comment_history_limit": strconv.Itoa(cfg.Dispatcher.CommentHistoryLimit),
 		"dispatcher.agent_concurrency":  cfg.Dispatcher.AgentConcurrency,
 		"llm.rate_limit_retries":        strconv.Itoa(cfg.LLM.RateLimitRetries),
 		"agents.defaults.provider":      cfg.Agents.Defaults.Provider,

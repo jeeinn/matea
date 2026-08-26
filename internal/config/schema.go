@@ -121,6 +121,10 @@ type DispatcherConfig struct {
 	QueueSize        int `yaml:"queue_size"`
 	RateLimitBackoff int `yaml:"rate_limit_backoff"` // seconds to wait on HTTP 429; 0 = default (60s); negative = disabled
 
+	// CommentHistoryLimit caps how many recent issue/PR comments are injected into
+	// solve_comment task context; 0 = default (10); negative = injection disabled.
+	CommentHistoryLimit int `yaml:"comment_history_limit"`
+
 	// AgentConcurrency controls whether one agent may run multiple issues at once.
 	// "parallel" (default): only issue-level in-flight lock.
 	// "serial_queue": at most one running task per agent_id; others stay pending and wait.
@@ -446,6 +450,9 @@ const (
 	// DefaultRateLimitRetries is the default retry count after an HTTP 429.
 	// 10 × 60s worst-case backoff fits inside the 20m single-shot task timeout.
 	DefaultRateLimitRetries = 10
+	// DefaultCommentHistoryLimit is the default cap on recent comments injected
+	// into solve_comment task context.
+	DefaultCommentHistoryLimit = 10
 )
 
 // DefaultAgentDefaults returns default agent budget/timeout settings.

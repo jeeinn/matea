@@ -27,6 +27,10 @@ type Dispatcher struct {
 	giteaCfg  atomic.Pointer[config.GiteaConfig]
 	agentsCfg *config.AgentsConfig
 
+	// dispatcherCfg is kept live (hot reload) for per-event settings like
+	// comment_history_limit that are read on the dispatch path.
+	dispatcherCfg atomic.Pointer[config.DispatcherConfig]
+
 	// v2 components
 	registry   *agents.Registry
 	resolver   *workflow.Resolver
@@ -96,6 +100,9 @@ func NewDispatcher(
 		agentsCfg: agentsCfg,
 	}
 	d.giteaCfg.Store(giteaCfg)
+	if dispatcherCfg != nil {
+		d.dispatcherCfg.Store(dispatcherCfg)
+	}
 
 	// Wire up Gitea client factory for result writeback
 	var backends *config.AgentBackendsConfig
@@ -143,6 +150,15 @@ func (d *Dispatcher) SetGiteaConfig(cfg *config.GiteaConfig) {
 		return
 	}
 	d.giteaCfg.Store(cfg)
+}
+
+// SetDispatcherConfig updates dispatcher settings read on the dispatch path
+// (e.g. comment_history_limit) without a restart (hot reload).
+func (d *Dispatcher) SetDispatcherConfig(cfg *config.DispatcherConfig) {
+	if cfg == nil {
+		return
+	}
+	d.dispatcherCfg.Store(cfg)
 }
 
 func resolveDefaultLoop(agentsCfg *config.AgentsConfig) config.AgentLoopConfig {
