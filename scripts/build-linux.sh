@@ -12,6 +12,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+if ! command -v npm &> /dev/null; then
+  echo "Error: npm is required to build the web UI, but it was not found."
+  exit 1
+fi
+
+# Build the embedded web UI first so go:embed bundles the latest assets.
+(
+  cd web
+  if [[ ! -d node_modules ]]; then
+    echo "Installing web dependencies..."
+    npm install
+  fi
+  echo "Building web UI..."
+  npm run build
+)
+
 ARCH="${1:-amd64}"
 case "$ARCH" in
   amd64|x86_64)
