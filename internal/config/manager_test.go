@@ -272,6 +272,40 @@ func TestDebugConversationLogConfigRoundTrip(t *testing.T) {
 	assert.True(t, m.Get().Debug.ConversationLog.Enabled)
 }
 
+func TestCommentHistoryLimitConfigRoundTrip(t *testing.T) {
+	fileCfg := &Config{
+		LLM: LLMConfig{
+			Defaults: LLMDefaultsConfig{Provider: "deepseek", Model: "deepseek-chat"},
+		},
+		Dispatcher: DispatcherConfig{MaxConcurrent: 2, TaskRetryCount: 1},
+		Agents: AgentsConfig{
+			Defaults: DefaultAgentDefaults(),
+			Loop:     DefaultAgentLoopConfig(),
+		},
+	}
+
+	m := NewConfigManager(fileCfg)
+	m.SetStore(&mockConfigStore{data: map[string]string{}})
+
+	// Explicit value round-trips through display map and live config.
+	require.NoError(t, m.Update("dispatcher.comment_history_limit", "3"))
+	display, err := m.GetDisplayMap()
+	require.NoError(t, err)
+	assert.Equal(t, 3, display["dispatcher.comment_history_limit"])
+	assert.Equal(t, 3, m.Get().Dispatcher.CommentHistoryLimit)
+
+	// 0 normalizes to the system default.
+	require.NoError(t, m.Update("dispatcher.comment_history_limit", "0"))
+	assert.Equal(t, DefaultCommentHistoryLimit, m.Get().Dispatcher.CommentHistoryLimit)
+
+	// Negative disables injection (kept as-is).
+	require.NoError(t, m.Update("dispatcher.comment_history_limit", "-1"))
+	assert.Equal(t, -1, m.Get().Dispatcher.CommentHistoryLimit)
+
+	// Non-numeric rejected.
+	require.Error(t, m.Update("dispatcher.comment_history_limit", "abc"))
+}
+
 func TestGetProviderModelsReturnsBuiltinCatalog(t *testing.T) {
 	fileCfg := &Config{
 		LLM: LLMConfig{

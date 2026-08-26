@@ -165,6 +165,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Dispatcher.RateLimitBackoff == 0 {
 		cfg.Dispatcher.RateLimitBackoff = DefaultRateLimitBackoffSec
 	}
+	if cfg.Dispatcher.CommentHistoryLimit == 0 {
+		cfg.Dispatcher.CommentHistoryLimit = DefaultCommentHistoryLimit
+	}
 	if cfg.LLM.RateLimitRetries == 0 {
 		cfg.LLM.RateLimitRetries = DefaultRateLimitRetries
 	}

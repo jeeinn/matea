@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeeinn/matea/internal/config"
 	"github.com/jeeinn/matea/internal/gitea"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 
@@ -77,4 +78,28 @@ func TestNeedsCommentHistory(t *testing.T) {
 	assert.True(t, needsCommentHistory("solve_comment"))
 	assert.False(t, needsCommentHistory("solve_issue"))
 	assert.False(t, needsCommentHistory("review_pr"))
+}
+
+func TestCommentHistoryLimitResolution(t *testing.T) {
+	// Nil config → system default.
+	d := &Dispatcher{}
+	assert.Equal(t, config.DefaultCommentHistoryLimit, d.commentHistoryLimit())
+
+	// Explicit positive value wins.
+	d.SetDispatcherConfig(&config.DispatcherConfig{CommentHistoryLimit: 3})
+	assert.Equal(t, 3, d.commentHistoryLimit())
+
+	// 0 falls back to the system default.
+	d.SetDispatcherConfig(&config.DispatcherConfig{CommentHistoryLimit: 0})
+	assert.Equal(t, config.DefaultCommentHistoryLimit, d.commentHistoryLimit())
+
+	// Negative disables injection; selectCommentsForContext returns nil for limit <= 0.
+	d.SetDispatcherConfig(&config.DispatcherConfig{CommentHistoryLimit: -1})
+	assert.Equal(t, -1, d.commentHistoryLimit())
+	comments := []gitea.IssueComment{{ID: 1, User: gitea.User{Login: "u"}, Body: "x"}}
+	assert.Empty(t, selectCommentsForContext(comments, nil, d.commentHistoryLimit()))
+
+	// Nil setter arg is ignored (hot reload never clears to zero-value).
+	d.SetDispatcherConfig(nil)
+	assert.Equal(t, -1, d.commentHistoryLimit())
 }

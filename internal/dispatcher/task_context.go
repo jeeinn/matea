@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/jeeinn/matea/internal/config"
 	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 )
@@ -83,7 +84,7 @@ func (d *Dispatcher) appendCommentHistory(base string, evt *giteaingress.Webhook
 	}
 
 	prefer := d.reviewAgentUsernames()
-	selected := selectCommentsForContext(comments, prefer, commentHistoryLimit)
+	selected := selectCommentsForContext(comments, prefer, d.commentHistoryLimit())
 	history := formatCommentHistory(selected, prefer)
 	if history == "" {
 		return base
@@ -92,6 +93,16 @@ func (d *Dispatcher) appendCommentHistory(base string, evt *giteaingress.Webhook
 	log.Printf("[INFO] Injected %d recent comments into solve_comment context for %s/%s#%d",
 		len(selected), owner, repo, commentIssueID)
 	return base + history
+}
+
+// commentHistoryLimit resolves the configured cap for injected comments.
+// 0/unset falls back to the system default; negative disables injection
+// (selectCommentsForContext returns nil for limit <= 0).
+func (d *Dispatcher) commentHistoryLimit() int {
+	if dc := d.dispatcherCfg.Load(); dc != nil && dc.CommentHistoryLimit != 0 {
+		return dc.CommentHistoryLimit
+	}
+	return config.DefaultCommentHistoryLimit
 }
 
 func commentFetchTarget(evt *giteaingress.WebhookEvent) (owner, repo string, issueOrPR int) {

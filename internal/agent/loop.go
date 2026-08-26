@@ -158,6 +158,11 @@ func (a *AgentLoop) Run(ctx context.Context, messages []llm.Message) (string, er
 		messages = trimmed
 		// Record delta after truncate: msgStart captured before truncate can exceed len(messages) and panic.
 		msgStart := len(messages)
+		if i == 0 {
+			// Persist the initial input (system prompt + user context) as iteration 0
+			// so the conversation log shows what the model was actually given.
+			a.persistInitial(messages)
+		}
 
 		resp, err := a.provider.ChatCompletion(ctx, &llm.ChatRequest{
 			Model:            a.model,
@@ -257,6 +262,18 @@ func (a *AgentLoop) persistIteration(iteration int, delta []llm.Message, finalAs
 	}
 	if err := a.recorder.RecordIteration(a.taskID, iteration, delta, finalAssistant); err != nil {
 		logging.Warnf("Failed to persist conversation log (task=%d iter=%d): %v", a.taskID, iteration, err)
+	}
+}
+
+// persistInitial records the initial messages (system prompt + user context) as
+// iteration 0. Called once on the first loop iteration, after truncation, so the
+// log reflects exactly what the first LLM call saw.
+func (a *AgentLoop) persistInitial(messages []llm.Message) {
+	if a.recorder == nil || a.taskID <= 0 || len(messages) == 0 {
+		return
+	}
+	if err := a.recorder.RecordIteration(a.taskID, 0, messages, nil); err != nil {
+		logging.Warnf("Failed to persist initial conversation messages (task=%d): %v", a.taskID, err)
 	}
 }
 

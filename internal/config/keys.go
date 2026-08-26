@@ -19,6 +19,7 @@ var configKeys = []string{
 	"dispatcher.max_concurrent",
 	"dispatcher.task_retry_count",
 	"dispatcher.rate_limit_backoff",
+	"dispatcher.comment_history_limit",
 	"dispatcher.agent_concurrency",
 	"llm.rate_limit_retries",
 	"agents.defaults.provider",
@@ -56,6 +57,7 @@ func IsConfigKey(key string) bool {
 func parseConfigValue(key, value string) (interface{}, error) {
 	switch key {
 	case "dispatcher.max_concurrent", "dispatcher.task_retry_count", "dispatcher.rate_limit_backoff",
+		"dispatcher.comment_history_limit",
 		"llm.rate_limit_retries",
 		"agents.defaults.max_output_tokens", "agents.defaults.max_input_tokens",
 		"agents.loop.max_iterations", "agents.loop.iteration_interval",
@@ -156,6 +158,8 @@ func getConfigValueTyped(cfg *Config, key string) interface{} {
 		return cfg.Dispatcher.TaskRetryCount
 	case "dispatcher.rate_limit_backoff":
 		return cfg.Dispatcher.RateLimitBackoff
+	case "dispatcher.comment_history_limit":
+		return cfg.Dispatcher.CommentHistoryLimit
 	case "dispatcher.agent_concurrency":
 		return cfg.Dispatcher.AgentConcurrency
 	case "llm.rate_limit_retries":
@@ -254,6 +258,15 @@ func applyConfigEntry(cfg *Config, key, value string) error {
 			n = DefaultRateLimitBackoffSec // 0 = system default; negative disables
 		}
 		cfg.Dispatcher.RateLimitBackoff = n
+	case "dispatcher.comment_history_limit":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("not a number: %s", value)
+		}
+		if n == 0 {
+			n = DefaultCommentHistoryLimit // 0 = system default; negative disables injection
+		}
+		cfg.Dispatcher.CommentHistoryLimit = n
 	case "dispatcher.agent_concurrency":
 		switch value {
 		case AgentConcurrencyParallel, AgentConcurrencySerialQueue:
@@ -398,6 +411,8 @@ func getConfigEntry(cfg *Config, key string) string {
 		return strconv.Itoa(cfg.Dispatcher.TaskRetryCount)
 	case "dispatcher.rate_limit_backoff":
 		return strconv.Itoa(cfg.Dispatcher.RateLimitBackoff)
+	case "dispatcher.comment_history_limit":
+		return strconv.Itoa(cfg.Dispatcher.CommentHistoryLimit)
 	case "dispatcher.agent_concurrency":
 		return cfg.Dispatcher.AgentConcurrency
 	case "llm.rate_limit_retries":

@@ -62,13 +62,19 @@ type recordingRecorder struct {
 type recordCall struct {
 	iteration int
 	messages  int
+	roles     []string
 	hasFinal  bool
 }
 
 func (r *recordingRecorder) RecordIteration(taskID int64, iteration int, messages []llm.Message, finalAssistant *llm.ChatResponse) error {
+	roles := make([]string, len(messages))
+	for i, m := range messages {
+		roles[i] = m.Role
+	}
 	r.calls = append(r.calls, recordCall{
 		iteration: iteration,
 		messages:  len(messages),
+		roles:     roles,
 		hasFinal:  finalAssistant != nil,
 	})
 	return nil
@@ -131,11 +137,68 @@ func TestAgentLoopPersistsIterations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if len(recorder.calls) != 3 {
-		t.Fatalf("expected 3 recorded iterations, got %d", len(recorder.calls))
+	// 3 iterations + 1 initial-input record (iteration 0)
+	if len(recorder.calls) != 4 {
+		t.Fatalf("expected 4 recorded calls (initial + 3 iterations), got %d", len(recorder.calls))
 	}
-	if !recorder.calls[2].hasFinal {
+	if recorder.calls[0].iteration != 0 {
+		t.Fatalf("expected first recorded call to be iteration 0 (initial input), got %d", recorder.calls[0].iteration)
+	}
+	if !recorder.calls[3].hasFinal {
 		t.Fatalf("expected final iteration to include assistant response")
+	}
+}
+
+func TestAgentLoopPersistsInitialMessages(t *testing.T) {
+	provider := &countingProvider{}
+	registry := NewToolRegistry()
+	recorder := &recordingRecorder{}
+	loop := NewAgentLoopWithConfig(provider, registry, "test-model", 1024, 8192, 0.3, config.AgentLoopConfig{
+		MaxIterations: 3,
+	})
+	loop.SetConversationRecorder(recorder, 42)
+
+	messages := []llm.Message{
+		{Role: "system", Content: "You are a coder."},
+		{Role: "user", Content: "Fix the bug."},
+	}
+	_, err := loop.Run(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(recorder.calls) == 0 {
+		t.Fatal("expected conversation recorder to be called")
+	}
+	initial := recorder.calls[0]
+	if initial.iteration != 0 {
+		t.Fatalf("expected initial input recorded as iteration 0, got %d", initial.iteration)
+	}
+	if initial.messages != 2 {
+		t.Fatalf("expected initial record to contain system+user messages, got %d", initial.messages)
+	}
+	if len(initial.roles) != 2 || initial.roles[0] != "system" || initial.roles[1] != "user" {
+		t.Fatalf("expected initial roles [system user], got %v", initial.roles)
+	}
+	if initial.hasFinal {
+		t.Fatal("initial record must not carry a final assistant response")
+	}
+	// Initial input is recorded exactly once even across multiple iterations.
+	for i, c := range recorder.calls[1:] {
+		if c.iteration == 0 {
+			t.Fatalf("call %d: iteration 0 recorded more than once", i+1)
+		}
+	}
+}
+
+func TestAgentLoopNoRecorderNoPanic(t *testing.T) {
+	provider := &countingProvider{}
+	registry := NewToolRegistry()
+	loop := NewAgentLoopWithConfig(provider, registry, "test-model", 1024, 8192, 0.3, config.AgentLoopConfig{
+		MaxIterations: 3,
+	})
+	// No SetConversationRecorder: persistInitial/persistIteration must be no-ops.
+	if _, err := loop.Run(context.Background(), []llm.Message{{Role: "user", Content: "go"}}); err != nil {
+		t.Fatalf("Run failed: %v", err)
 	}
 }
 
