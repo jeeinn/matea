@@ -242,8 +242,38 @@ type opencodeMessagesListItem struct {
 }
 
 type opencodeMessageInfo struct {
-	ID   string `json:"id"`
-	Role string `json:"role"` // "user" | "assistant"
+	ID    string                `json:"id"`
+	Role  string                `json:"role"` // "user" | "assistant"
+	Error *opencodeMessageError `json:"error"`
+}
+
+// opencodeMessageError mirrors the run failure recorded on an assistant
+// message's info.error (e.g. provider 401 / quota / unknown-model errors).
+// Without decoding it, a failed run surfaces only as the opaque
+// "no assistant text message found".
+type opencodeMessageError struct {
+	Name string `json:"name"`
+	Data struct {
+		Message     string `json:"message"`
+		StatusCode  int    `json:"statusCode"`
+		IsRetryable bool   `json:"isRetryable"`
+	} `json:"data"`
+}
+
+// formatOpencodeError renders the provider-side run failure for task errors.
+func formatOpencodeError(e *opencodeMessageError) string {
+	msg := strings.TrimSpace(e.Data.Message)
+	name := e.Name
+	if name == "" {
+		name = "error"
+	}
+	if e.Data.StatusCode != 0 {
+		return fmt.Sprintf("%s (status %d): %s", name, e.Data.StatusCode, msg)
+	}
+	if msg == "" {
+		return name
+	}
+	return fmt.Sprintf("%s: %s", name, msg)
 }
 
 // sendMessage calls POST /session/{id}/message and then polls
@@ -323,6 +353,7 @@ func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessi
 	}
 
 	// Walk backwards to find the last assistant message
+	var lastErr *opencodeMessageError
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Info.Role != "assistant" {
 			continue
@@ -338,8 +369,17 @@ func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessi
 			// Join with double-newline to match multi-part natural flow
 			return joinParts(texts), nil
 		}
+		// Assistant message without text: remember its run error so a
+		// provider-side failure (401/quota/unknown model) is surfaced
+		// instead of the opaque fallback below.
+		if lastErr == nil && messages[i].Info.Error != nil {
+			lastErr = messages[i].Info.Error
+		}
 	}
 
+	if lastErr != nil {
+		return "", fmt.Errorf("opencode run failed in session %s: %s", sessionID, formatOpencodeError(lastErr))
+	}
 	return "", fmt.Errorf("no assistant text message found in session %s", sessionID)
 }
 

@@ -227,6 +227,110 @@ func TestOpenCodeHTTPSendMessage(t *testing.T) {
 	assert.NotEmpty(t, summary)
 }
 
+// errorSessionHandler serves a session whose only assistant message carries a
+// provider-side run failure (info.error) and no text parts — the shape a 401
+// CreditsError / unknown-model run produces on a real opencode server.
+func errorSessionHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	switch {
+	case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"id": "msg-2", "role": "assistant"})
+	case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]any{
+			map[string]any{
+				"info":  map[string]any{"id": "msg-1", "role": "user"},
+				"parts": []any{map[string]any{"type": "text", "text": "implement the fix"}},
+			},
+			map[string]any{
+				"info": map[string]any{
+					"id":   "msg-2",
+					"role": "assistant",
+					"error": map[string]any{
+						"name": "APIError",
+						"data": map[string]any{
+							"message":     "Unauthorized: CreditsError: No payment method",
+							"statusCode":  401,
+							"isRetryable": false,
+						},
+					},
+				},
+				"parts": []any{},
+			},
+		})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func TestOpenCodeHTTPSurfacesRunError(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{"/session/": errorSessionHandler})
+	backend := newTestBackend(t, srv.URL)
+
+	_, err := backend.getLastAssistantMessage(context.Background(), "sess-err")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "APIError")
+	assert.Contains(t, err.Error(), "401")
+	assert.Contains(t, err.Error(), "No payment method")
+	assert.NotContains(t, err.Error(), "no assistant text message found")
+}
+
+func TestOpenCodeHTTPRunErrorPropagatesThroughRun(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{"/session/": errorSessionHandler})
+	backend := newTestBackend(t, srv.URL)
+
+	_, err := backend.Run(context.Background(), CodingRequest{
+		WorkDir: "/tmp/test-repo",
+		Prompt:  "Fix issue #1",
+		Agent:   &store.Agent{Provider: "opencode", Model: "gemini-3-flash"},
+		Task:    &store.Task{ID: 11},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "APIError (status 401)")
+}
+
+func TestOpenCodeHTTPNoAssistantMessageKeepsFallback(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/message") && r.Method == http.MethodGet {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info":  map[string]any{"id": "msg-1", "role": "user"},
+						"parts": []any{map[string]any{"type": "text", "text": "hi"}},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		},
+	})
+	backend := newTestBackend(t, srv.URL)
+
+	_, err := backend.getLastAssistantMessage(context.Background(), "sess-empty")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no assistant text message found")
+}
+
+func TestFormatOpencodeError(t *testing.T) {
+	withStatus := &opencodeMessageError{Name: "APIError"}
+	withStatus.Data.Message = "boom"
+	withStatus.Data.StatusCode = 500
+	assert.Equal(t, "APIError (status 500): boom", formatOpencodeError(withStatus))
+
+	noStatus := &opencodeMessageError{Name: "ProviderError"}
+	noStatus.Data.Message = "quota exceeded"
+	assert.Equal(t, "ProviderError: quota exceeded", formatOpencodeError(noStatus))
+
+	nameOnly := &opencodeMessageError{Name: "UnknownError"}
+	assert.Equal(t, "UnknownError", formatOpencodeError(nameOnly))
+
+	empty := &opencodeMessageError{}
+	assert.Equal(t, "error", formatOpencodeError(empty))
+}
+
 // --- Abort -----------------------------------------------------------------
 
 func TestOpenCodeHTTPAbort(t *testing.T) {
