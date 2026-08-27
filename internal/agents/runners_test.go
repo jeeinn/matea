@@ -191,6 +191,9 @@ func TestFinalizeWriteTaskPRCreatesWhenNoOpenPR(t *testing.T) {
 	assert.True(t, createCalled)
 	assert.Equal(t, "pr", result.Action)
 	assert.Equal(t, 3, result.PRID)
+	// Comment uses Gitea's native #N reference instead of a raw URL.
+	assert.Contains(t, result.Content, "PR created: #3")
+	assert.NotContains(t, result.Content, "http://")
 }
 
 func TestFinalizeWriteTaskPRCommentsWhenOpenPRExists(t *testing.T) {

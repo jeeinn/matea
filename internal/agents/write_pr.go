@@ -57,8 +57,11 @@ func FinalizeWriteTaskPR(adminClient *gitea.Client, owner, repo, branchName, bas
 
 	log.Printf("[INFO] Task %d PR created: %s (PR #%d)", task.ID, pr.HTMLURL, pr.Number)
 	return &Result{
-		Content: fmt.Sprintf("✅ PR created: %s\n\n%s", pr.HTMLURL, agentResult),
+		// Use Gitea's native #N reference syntax so the link renders correctly
+		// regardless of Gitea's ROOT_URL configuration (e.g. localhost setups).
+		Content: fmt.Sprintf("✅ PR created: #%d\n\n%s", pr.Number, agentResult),
 		Action:  "pr",
 		PRID:    pr.Number,
 	}, nil
 }
+
