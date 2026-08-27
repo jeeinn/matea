@@ -21,11 +21,14 @@ import (
 // Dispatcher orchestrates the event processing pipeline:
 // WebhookEvent → EventResolver → Gate checks → WorkflowContext → TaskQueue.Enqueue → Executor.execute
 type Dispatcher struct {
-	queue     *TaskQueue
-	executor  *Executor
-	db        *store.DB
-	giteaCfg  atomic.Pointer[config.GiteaConfig]
-	agentsCfg *config.AgentsConfig
+	queue    *TaskQueue
+	executor *Executor
+	db       *store.DB
+	giteaCfg atomic.Pointer[config.GiteaConfig]
+
+	// agentsCfg is kept live (hot reload) for templates read on the dispatch
+	// path and for rebuilding the runner factory with new coding backends.
+	agentsCfg atomic.Pointer[config.AgentsConfig]
 
 	// dispatcherCfg is kept live (hot reload) for per-event settings like
 	// comment_history_limit that are read on the dispatch path.
@@ -61,22 +64,7 @@ func NewDispatcher(
 	mcpCfg config.MCPConfig,
 ) *Dispatcher {
 	queue := NewTaskQueue(db, dispatcherCfg.QueueSize)
-	agentDefaults := config.DefaultAgentDefaults()
-	if agentsCfg != nil {
-		agentDefaults = agentsCfg.Defaults
-		if agentDefaults.MaxOutputTokens <= 0 {
-			agentDefaults.MaxOutputTokens = config.DefaultAgentDefaults().MaxOutputTokens
-		}
-		if agentDefaults.MaxInputTokens <= 0 {
-			agentDefaults.MaxInputTokens = config.DefaultAgentDefaults().MaxInputTokens
-		}
-		if agentDefaults.Temperature <= 0 {
-			agentDefaults.Temperature = config.DefaultAgentDefaults().Temperature
-		}
-		if agentDefaults.Timeout == "" {
-			agentDefaults.Timeout = config.DefaultAgentDefaults().Timeout
-		}
-	}
+	agentDefaults := resolveAgentDefaults(agentsCfg)
 	agentConcurrency := config.AgentConcurrencyParallel
 	if dispatcherCfg != nil && dispatcherCfg.AgentConcurrency != "" {
 		agentConcurrency = dispatcherCfg.AgentConcurrency
@@ -94,12 +82,14 @@ func NewDispatcher(
 	)
 
 	d := &Dispatcher{
-		queue:     queue,
-		executor:  executor,
-		db:        db,
-		agentsCfg: agentsCfg,
+		queue:    queue,
+		executor: executor,
+		db:       db,
 	}
 	d.giteaCfg.Store(giteaCfg)
+	if agentsCfg != nil {
+		d.agentsCfg.Store(agentsCfg)
+	}
 	if dispatcherCfg != nil {
 		d.dispatcherCfg.Store(dispatcherCfg)
 	}
@@ -118,11 +108,51 @@ func NewDispatcher(
 func (d *Dispatcher) SetDebugConfigGetter(getter func() config.DebugConfig) {
 	if d.executor != nil && d.executor.giteaFactory != nil {
 		var backends *config.AgentBackendsConfig
-		if d.agentsCfg != nil {
-			backends = &d.agentsCfg.Backends
+		if ac := d.getAgentsConfig(); ac != nil {
+			backends = &ac.Backends
 		}
 		d.executor.SetGiteaClientFactory(d.executor.giteaFactory, getter, backends)
 	}
+}
+
+// SetAgentsConfig hot-applies agents config (defaults / loop / coding backends)
+// without a restart: the executor rebuilds its runner factory so newly
+// configured hub backends resolve immediately, and dispatch-path readers
+// (templates) see the new config.
+func (d *Dispatcher) SetAgentsConfig(cfg *config.AgentsConfig) {
+	if cfg == nil || d.executor == nil {
+		return
+	}
+	d.agentsCfg.Store(cfg)
+	d.executor.ReloadAgentsConfig(resolveAgentDefaults(cfg), resolveDefaultLoop(cfg), &cfg.Backends)
+}
+
+// getAgentsConfig returns the live agents config (nil if never set).
+func (d *Dispatcher) getAgentsConfig() *config.AgentsConfig {
+	return d.agentsCfg.Load()
+}
+
+// resolveAgentDefaults normalizes agent defaults, filling zero values from the
+// system defaults. Shared by NewDispatcher and SetAgentsConfig (hot reload).
+func resolveAgentDefaults(agentsCfg *config.AgentsConfig) config.AgentDefaultsConfig {
+	agentDefaults := config.DefaultAgentDefaults()
+	if agentsCfg == nil {
+		return agentDefaults
+	}
+	agentDefaults = agentsCfg.Defaults
+	if agentDefaults.MaxOutputTokens <= 0 {
+		agentDefaults.MaxOutputTokens = config.DefaultAgentDefaults().MaxOutputTokens
+	}
+	if agentDefaults.MaxInputTokens <= 0 {
+		agentDefaults.MaxInputTokens = config.DefaultAgentDefaults().MaxInputTokens
+	}
+	if agentDefaults.Temperature <= 0 {
+		agentDefaults.Temperature = config.DefaultAgentDefaults().Temperature
+	}
+	if agentDefaults.Timeout == "" {
+		agentDefaults.Timeout = config.DefaultAgentDefaults().Timeout
+	}
+	return agentDefaults
 }
 
 // SetModelMetaProvider sets the model metadata provider for adaptive token limits.

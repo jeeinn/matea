@@ -42,14 +42,21 @@ type Executor struct {
 	sem              chan struct{}
 	retryCount       int // task_retry_count: whole-task retries after runner failure
 	giteaFactory     GiteaClientFactory
-	runnerFactory    *agents.RunnerFactory
-	agentDefaults    config.AgentDefaultsConfig
-	defaultLoop      config.AgentLoopConfig
-	sandboxCfg       sandbox.SandboxConfig
-	mcpCfg           config.MCPConfig
-	deliverCfg       config.DeliverConfig
-	onComplete       TaskCompleteCallback
-	onFailed         TaskFailedCallback
+
+	// cfgMu guards the hot-reloadable agent configuration below (ReloadAgentsConfig
+	// swaps them from the API goroutine while workers read them).
+	cfgMu             sync.RWMutex
+	runnerFactory     *agents.RunnerFactory
+	agentDefaults     config.AgentDefaultsConfig
+	defaultLoop       config.AgentLoopConfig
+	getDebugConfig    func() config.DebugConfig
+	modelMetaProvider agents.ModelMetaProvider
+
+	sandboxCfg sandbox.SandboxConfig
+	mcpCfg     config.MCPConfig
+	deliverCfg config.DeliverConfig
+	onComplete TaskCompleteCallback
+	onFailed   TaskFailedCallback
 
 	// rootCtx is cancelled on Shutdown so in-flight agent loops abort promptly.
 	rootCtx    context.Context
@@ -245,21 +252,68 @@ func (e *Executor) SetOnFailed(cb TaskFailedCallback) {
 
 // SetGiteaClientFactory sets the factory for creating Gitea clients.
 func (e *Executor) SetGiteaClientFactory(factory GiteaClientFactory, getDebugConfig func() config.DebugConfig, backends *config.AgentBackendsConfig) {
+	e.cfgMu.Lock()
 	e.giteaFactory = factory
+	e.getDebugConfig = getDebugConfig
+	e.rebuildRunnerFactoryLocked(backends)
+	e.cfgMu.Unlock()
+	e.startDeployKeySweepLoop(10 * time.Minute)
+}
+
+// rebuildRunnerFactoryLocked constructs a fresh RunnerFactory from the current
+// executor state and swaps it in. Callers must hold cfgMu. In-flight tasks keep
+// the factory they started with; new tasks pick up the new one. Hub backend
+// singletons are (re)registered inside NewRunnerFactory, so a backends config
+// change fully takes effect here without a restart.
+func (e *Executor) rebuildRunnerFactoryLocked(backends *config.AgentBackendsConfig) {
 	mcpReg := mcp.NewRegistry(e.mcpCfg)
 	gatewayDir, _ := os.Getwd()
-	e.runnerFactory = agents.NewRunnerFactory(e.llmRegistry, factory, e.db, e.agentDefaults, e.defaultLoop, getDebugConfig, backends, nil, e.sandboxCfg, mcpReg, gatewayDir)
+	rf := agents.NewRunnerFactory(e.llmRegistry, e.giteaFactory, e.db, e.agentDefaults, e.defaultLoop, e.getDebugConfig, backends, nil, e.sandboxCfg, mcpReg, gatewayDir)
 	// (Re)inject the outbound deliver client whenever the runner factory is
 	// rebuilt (task 2.3.3). A disabled config (empty webhook_url) yields a
 	// no-op client.
-	e.runnerFactory.SetDeliverClient(buildDeliverClient(e.deliverCfg))
+	rf.SetDeliverClient(buildDeliverClient(e.deliverCfg))
+	if e.modelMetaProvider != nil {
+		rf.SetModelMetaProvider(e.modelMetaProvider)
+	}
 	// git_sync (task A6): the deploy key issuer rides on the admin client's
 	// token (write:repository scope suffices per the A0.2 spike — no extra
 	// credential is introduced, and the hub never sees this token).
-	if admin := factory.GetAdminGiteaClient(); admin != nil {
-		e.runnerFactory.SetDeployKeyIssuer(agents.NewGiteaDeployKeyIssuer(admin))
+	if e.giteaFactory != nil {
+		if admin := e.giteaFactory.GetAdminGiteaClient(); admin != nil {
+			rf.SetDeployKeyIssuer(agents.NewGiteaDeployKeyIssuer(admin))
+		}
 	}
-	e.startDeployKeySweepLoop(10 * time.Minute)
+	e.runnerFactory = rf
+}
+
+// ReloadAgentsConfig hot-swaps agent defaults / loop config / coding backends
+// without a restart (config hot-reload path). The runner factory is rebuilt so
+// newly added hub backends resolve immediately.
+func (e *Executor) ReloadAgentsConfig(defaults config.AgentDefaultsConfig, loop config.AgentLoopConfig, backends *config.AgentBackendsConfig) {
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	e.agentDefaults = defaults
+	if loop.MaxIterations <= 0 {
+		loop = config.DefaultAgentLoopConfig()
+	}
+	e.defaultLoop = loop
+	e.rebuildRunnerFactoryLocked(backends)
+}
+
+// getRunnerFactory returns the current runner factory (nil before the first
+// SetGiteaClientFactory).
+func (e *Executor) getRunnerFactory() *agents.RunnerFactory {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.runnerFactory
+}
+
+// getAgentConfig returns the current agent defaults / loop config for workers.
+func (e *Executor) getAgentConfig() (config.AgentDefaultsConfig, config.AgentLoopConfig) {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.agentDefaults, e.defaultLoop
 }
 
 // startDeployKeySweepLoop runs the B4 deploy-key lifecycle hook: an immediate
@@ -303,9 +357,12 @@ func (e *Executor) startDeployKeySweepLoop(interval time.Duration) {
 // SetDeliverConfig updates the outbound deliver configuration. The new client
 // is applied immediately to the live runner factory.
 func (e *Executor) SetDeliverConfig(cfg config.DeliverConfig) {
+	e.cfgMu.Lock()
 	e.deliverCfg = cfg
-	if e.runnerFactory != nil {
-		e.runnerFactory.SetDeliverClient(buildDeliverClient(cfg))
+	rf := e.runnerFactory
+	e.cfgMu.Unlock()
+	if rf != nil {
+		rf.SetDeliverClient(buildDeliverClient(cfg))
 	}
 }
 
@@ -329,8 +386,12 @@ func buildDeliverClient(cfg config.DeliverConfig) *deliver.Client {
 
 // SetModelMetaProvider sets the model metadata provider for adaptive token limits.
 func (e *Executor) SetModelMetaProvider(m agents.ModelMetaProvider) {
-	if e.runnerFactory != nil {
-		e.runnerFactory.SetModelMetaProvider(m)
+	e.cfgMu.Lock()
+	e.modelMetaProvider = m
+	rf := e.runnerFactory
+	e.cfgMu.Unlock()
+	if rf != nil {
+		rf.SetModelMetaProvider(m)
 	}
 }
 
@@ -584,12 +645,13 @@ func (e *Executor) finalizeTaskResult(task *store.Task, runErr error) {
 }
 
 func (e *Executor) resolveTaskTimeout(taskType string, agent *store.Agent) time.Duration {
+	agentDefaults, defaultLoop := e.getAgentConfig()
 	if isLoopTask(taskType) {
-		merged := agents.MergeLoopConfig(agent.LoopConfig, e.defaultLoop)
+		merged := agents.MergeLoopConfig(agent.LoopConfig, defaultLoop)
 		if d, err := time.ParseDuration(merged.TotalTimeout); err == nil && d > 0 {
 			return d
 		}
-		if d, err := time.ParseDuration(e.defaultLoop.TotalTimeout); err == nil && d > 0 {
+		if d, err := time.ParseDuration(defaultLoop.TotalTimeout); err == nil && d > 0 {
 			return d
 		}
 		return 30 * time.Minute
@@ -597,7 +659,7 @@ func (e *Executor) resolveTaskTimeout(taskType string, agent *store.Agent) time.
 
 	timeoutStr := agent.Timeout
 	if timeoutStr == "" {
-		timeoutStr = e.agentDefaults.Timeout
+		timeoutStr = agentDefaults.Timeout
 	}
 	if d, err := time.ParseDuration(timeoutStr); err == nil && d > 0 {
 		return d
@@ -615,7 +677,7 @@ func isLoopTask(taskType string) bool {
 }
 
 func (e *Executor) runTask(ctx context.Context, task *store.Task, agent *store.Agent) error {
-	runner := e.runnerFactory.GetRunner(task.TaskType)
+	runner := e.getRunnerFactory().GetRunner(task.TaskType)
 
 	result, err := runner.Run(ctx, task, agent)
 	if err != nil {
