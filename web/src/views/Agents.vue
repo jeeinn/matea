@@ -198,14 +198,15 @@
           <el-alert type="info" :closable="false" style="margin-bottom: 12px">
             <template #title>
               连接配置（URL / 鉴权 / 工作区模式）在服务器端 agents.backends.&lt;后端名&gt; 中按命名后端统一设置，
-              此处仅可覆盖提交到 OpenCode 的模型与 Provider。
+              此处仅可覆盖提交到 OpenCode 的模型与 Provider。留空则使用 OpenCode 服务端自己的默认模型；
+              覆盖时模型与 Provider 必须同时填写。
             </template>
           </el-alert>
           <el-form-item label="OpenCode 模型">
-            <el-input v-model="form.backend_options.opencode_model" placeholder="覆盖 opencode 端 model（可选）" />
+            <el-input v-model="form.backend_options.opencode_model" placeholder="留空用服务端默认；覆盖需与 Provider 同填" />
           </el-form-item>
           <el-form-item label="OpenCode Provider">
-            <el-input v-model="form.backend_options.opencode_provider" placeholder="覆盖 opencode 端 provider（可选）" />
+            <el-input v-model="form.backend_options.opencode_provider" placeholder="留空用服务端默认；覆盖需与模型同填" />
           </el-form-item>
           <el-form-item label="OpenCode Agent">
             <el-input v-model="form.backend_options.opencode_agent" placeholder="提示性：opencode agent 名（可选）" />

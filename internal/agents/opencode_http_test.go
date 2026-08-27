@@ -227,6 +227,91 @@ func TestOpenCodeHTTPSendMessage(t *testing.T) {
 	assert.NotEmpty(t, summary)
 }
 
+// captureMessageBodyServer records the POST /session/{id}/message body and
+// replies with a normal assistant message.
+func captureMessageBodyServer(t *testing.T, captured *map[string]any) *httptest.Server {
+	t.Helper()
+	return newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+				json.NewDecoder(r.Body).Decode(captured)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-2", "role": "assistant"})
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info":  map[string]any{"id": "msg-2", "role": "assistant"},
+						"parts": []any{map[string]any{"type": "text", "text": "Done."}},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	})
+}
+
+func TestOpenCodeHTTPModelOmittedWithoutOverride(t *testing.T) {
+	var body map[string]any
+	srv := captureMessageBodyServer(t, &body)
+	backend := newTestBackend(t, srv.URL)
+
+	// Agent Provider/Model must NOT leak into the opencode request: they are
+	// matea's builtin-LLM namespace and can map to paid/unknown models server-side.
+	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+		Prompt: "Fix the bug.",
+		Agent:  &store.Agent{Provider: "opencode", Model: "gemini-3-flash"},
+		Task:   &store.Task{ID: 2},
+	})
+	require.NoError(t, err)
+	_, hasModel := body["modelID"]
+	_, hasProvider := body["providerID"]
+	assert.False(t, hasModel, "modelID must be omitted without explicit override, body: %v", body)
+	assert.False(t, hasProvider, "providerID must be omitted without explicit override, body: %v", body)
+}
+
+func TestOpenCodeHTTPModelSentWithBothOverrides(t *testing.T) {
+	var body map[string]any
+	srv := captureMessageBodyServer(t, &body)
+	backend := newTestBackend(t, srv.URL)
+
+	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+		Prompt: "Fix the bug.",
+		Agent:  &store.Agent{Provider: "ignored", Model: "ignored"},
+		Task:   &store.Task{ID: 3},
+		BackendOptions: map[string]interface{}{
+			"opencode_model":    "big-pickle",
+			"opencode_provider": "opencode",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "big-pickle", body["modelID"])
+	assert.Equal(t, "opencode", body["providerID"])
+}
+
+func TestOpenCodeHTTPSingleOverrideIgnored(t *testing.T) {
+	var body map[string]any
+	srv := captureMessageBodyServer(t, &body)
+	backend := newTestBackend(t, srv.URL)
+
+	// Only opencode_model set (no provider): the pair is incomplete, so the
+	// override is ignored and the server default applies.
+	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+		Prompt:         "Fix the bug.",
+		Agent:          &store.Agent{Provider: "mock", Model: "gpt-test"},
+		Task:           &store.Task{ID: 4},
+		BackendOptions: map[string]interface{}{"opencode_model": "big-pickle"},
+	})
+	require.NoError(t, err)
+	_, hasModel := body["modelID"]
+	_, hasProvider := body["providerID"]
+	assert.False(t, hasModel, "incomplete override must be ignored, body: %v", body)
+	assert.False(t, hasProvider, "incomplete override must be ignored, body: %v", body)
+}
+
 // errorSessionHandler serves a session whose only assistant message carries a
 // provider-side run failure (info.error) and no text parts — the shape a 401
 // CreditsError / unknown-model run produces on a real opencode server.

@@ -93,9 +93,13 @@ func (b *OpenCodeHTTPBackend) Name() string { return b.name }
 // and the remote session ID (for future continue support).
 //
 // Provider mapping:
-//   - Agent.Provider is passed through as providerID; Agent.Model as modelID.
-//   - If the provider/model combination is unknown to the OpenCode sidecar, it
-//     will fall back to its own default (matching v4 §4.3).
+//   - Model/provider are NOT derived from Agent.Provider/Agent.Model — those
+//     belong to matea's builtin-LLM namespace and are meaningless (or worse,
+//     billable) to the OpenCode sidecar. They are sent only when the agent
+//     explicitly overrides them via backend_options (opencode_model +
+//     opencode_provider).
+//   - Without an override the sidecar runs its own configured default model
+//     (matching v4 §4.3).
 //
 // The actual file modifications happen on disk via the sidecar; Run does not
 // touch the workspace. finalizeWriteChanges uses git.HasChanges() to decide
@@ -213,8 +217,10 @@ func (b *OpenCodeHTTPBackend) createSession(ctx context.Context, req CodingReque
 
 // opencodeMessageRequest maps to the /session/{id}/message request body.
 type opencodeMessageRequest struct {
-	ModelID    string                `json:"modelID"`
-	ProviderID string                `json:"providerID"`
+	// ModelID/ProviderID are omitted unless explicitly overridden via
+	// backend_options — the opencode server then runs its own default model.
+	ModelID    string                `json:"modelID,omitempty"`
+	ProviderID string                `json:"providerID,omitempty"`
 	Parts      []opencodeMessagePart `json:"parts"`
 	System     string                `json:"system,omitempty"`
 	Tools      *opencodeToolsConfig  `json:"tools,omitempty"`
@@ -284,8 +290,6 @@ func formatOpencodeError(e *opencodeMessageError) string {
 // sufficient and simpler. The HTTP client timeout guards against hangs.
 func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string, req CodingRequest) (string, error) {
 	msgReq := opencodeMessageRequest{
-		ModelID:    req.Agent.Model,
-		ProviderID: req.Agent.Provider,
 		Parts: []opencodeMessagePart{
 			{Type: "text", Text: req.Prompt},
 		},
@@ -299,13 +303,21 @@ func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string,
 		},
 	}
 
-	// Inject override from backend_options if present
+	// Model/provider are sent ONLY when explicitly overridden via
+	// backend_options (opencode_model + opencode_provider, both required).
+	// The agent's own Provider/Model belong to matea's builtin-LLM namespace
+	// and must not leak into OpenCode: an unknown or paid pair makes the
+	// sidecar run fail (e.g. OpenCode Zen 401 on a paid model). When omitted,
+	// the opencode server runs its own configured default model.
 	if bo := req.BackendOptions; bo != nil {
-		if v, ok := bo["opencode_model"].(string); ok && v != "" {
-			msgReq.ModelID = v
-		}
-		if v, ok := bo["opencode_provider"].(string); ok && v != "" {
-			msgReq.ProviderID = v
+		model, _ := bo["opencode_model"].(string)
+		provider, _ := bo["opencode_provider"].(string)
+		switch {
+		case model != "" && provider != "":
+			msgReq.ModelID = model
+			msgReq.ProviderID = provider
+		case model != "" || provider != "":
+			log.Printf("[WARN] Task %d: opencode_model and opencode_provider must be set together; ignoring override, opencode server default model applies", req.Task.ID)
 		}
 		if v, ok := bo["opencode_agent"].(string); ok && v != "" {
 			// opencode_agent is noted in v4 §4.3 but the server-side agent
