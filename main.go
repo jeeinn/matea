@@ -249,6 +249,7 @@ func main() {
 		manager.ReloadGitea(&newCfg.Gitea)
 		d.SetGiteaConfig(&newCfg.Gitea)
 		d.SetDispatcherConfig(&newCfg.Dispatcher)
+		d.SetAgentsConfig(&newCfg.Agents)
 		d.SetWorkflowPolicy(workflow.BuildPolicy(newCfg.Workflow.Preset, newCfg.Workflow.Gates))
 		d.SetDeliverConfig(newCfg.Deliver)
 		webhookHandler.SetGiteaConfig(&newCfg.Gitea)

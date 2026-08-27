@@ -36,8 +36,8 @@ func (d *Dispatcher) renderTaskContextBase(evt *giteaingress.WebhookEvent, agent
 	}
 
 	// Try to use template from config based on task type
-	if d.agentsCfg != nil {
-		if tmpl, ok := d.agentsCfg.Templates[taskType]; ok && tmpl.UserTemplate != "" {
+	if ac := d.getAgentsConfig(); ac != nil {
+		if tmpl, ok := ac.Templates[taskType]; ok && tmpl.UserTemplate != "" {
 			data := BuildTemplateData(evt)
 			data.Task = &TaskData{TaskType: taskType}
 			rendered, err := RenderTemplate(tmpl.UserTemplate, data)
