@@ -217,7 +217,7 @@ func TestOpenCodeHTTPSendMessage(t *testing.T) {
 	sessionID, err := backend.createSession(ctx, CodingRequest{WorkDir: "/tmp/test", Task: &store.Task{ID: 1}})
 	require.NoError(t, err)
 
-	summary, err := backend.sendMessage(ctx, sessionID, CodingRequest{
+	summary, messages, err := backend.sendMessage(ctx, sessionID, CodingRequest{
 		SystemPrompt: "You are helpful.",
 		Prompt:       "Fix the bug.",
 		Agent:        &store.Agent{Provider: "mock", Model: "gpt-test"},
@@ -225,6 +225,7 @@ func TestOpenCodeHTTPSendMessage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, summary)
+	assert.NotNil(t, messages)
 }
 
 // captureMessageBodyServer records the POST /session/{id}/message body and
@@ -261,7 +262,7 @@ func TestOpenCodeHTTPModelOmittedWithoutOverride(t *testing.T) {
 
 	// Agent Provider/Model must NOT leak into the opencode request: they are
 	// matea's builtin-LLM namespace and can map to paid/unknown models server-side.
-	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+	_, _, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
 		Prompt: "Fix the bug.",
 		Agent:  &store.Agent{Provider: "opencode", Model: "gemini-3-flash"},
 		Task:   &store.Task{ID: 2},
@@ -278,7 +279,7 @@ func TestOpenCodeHTTPModelSentWithBothOverrides(t *testing.T) {
 	srv := captureMessageBodyServer(t, &body)
 	backend := newTestBackend(t, srv.URL)
 
-	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+	_, _, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
 		Prompt: "Fix the bug.",
 		Agent:  &store.Agent{Provider: "ignored", Model: "ignored"},
 		Task:   &store.Task{ID: 3},
@@ -299,7 +300,7 @@ func TestOpenCodeHTTPSingleOverrideIgnored(t *testing.T) {
 
 	// Only opencode_model set (no provider): the pair is incomplete, so the
 	// override is ignored and the server default applies.
-	_, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
+	_, _, err := backend.sendMessage(context.Background(), "sess-1", CodingRequest{
 		Prompt:         "Fix the bug.",
 		Agent:          &store.Agent{Provider: "mock", Model: "gpt-test"},
 		Task:           &store.Task{ID: 4},
@@ -353,7 +354,7 @@ func TestOpenCodeHTTPSurfacesRunError(t *testing.T) {
 	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{"/session/": errorSessionHandler})
 	backend := newTestBackend(t, srv.URL)
 
-	_, err := backend.getLastAssistantMessage(context.Background(), "sess-err")
+	_, _, err := backend.getLastAssistantMessage(context.Background(), "sess-err")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "APIError")
 	assert.Contains(t, err.Error(), "401")
@@ -365,14 +366,18 @@ func TestOpenCodeHTTPRunErrorPropagatesThroughRun(t *testing.T) {
 	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{"/session/": errorSessionHandler})
 	backend := newTestBackend(t, srv.URL)
 
-	_, err := backend.Run(context.Background(), CodingRequest{
+	res, err := backend.Run(context.Background(), CodingRequest{
 		WorkDir: "/tmp/test-repo",
 		Prompt:  "Fix issue #1",
 		Agent:   &store.Agent{Provider: "opencode", Model: "gemini-3-flash"},
 		Task:    &store.Task{ID: 11},
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "APIError (status 401)")
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.Success)
+	assert.Contains(t, res.Summary, "APIError (status 401)")
+	assert.NotEmpty(t, res.Messages)
+	assert.Equal(t, "assistant", res.Messages[0].Role)
 }
 
 func TestOpenCodeHTTPNoAssistantMessageKeepsFallback(t *testing.T) {
@@ -394,7 +399,7 @@ func TestOpenCodeHTTPNoAssistantMessageKeepsFallback(t *testing.T) {
 	})
 	backend := newTestBackend(t, srv.URL)
 
-	_, err := backend.getLastAssistantMessage(context.Background(), "sess-empty")
+	_, _, err := backend.getLastAssistantMessage(context.Background(), "sess-empty")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no assistant text message found")
 }

@@ -3,11 +3,13 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeeinn/matea/internal/config"
@@ -607,4 +609,271 @@ func newOpencodeMockLLMRegistry(t *testing.T) *llm.Registry {
 	reg := &llm.Registry{}
 	reg.Register("mock", &opencodeMockLLMProvider{})
 	return reg
+}
+
+// --- Conversation log tests (Phase 2 hub transcript passthrough) -------------
+
+// conversationTestServer returns an OpenCode mock server whose message list
+// contains a user echo, two assistant turns (with an intervening tool message),
+// and a final assistant text message.
+func conversationTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "role": "assistant"})
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info":  map[string]any{"id": "msg-1", "role": "user"},
+						"parts": []any{map[string]any{"type": "text", "text": "implement the fix"}},
+					},
+					map[string]any{
+						"info":  map[string]any{"id": "msg-2", "role": "assistant"},
+						"parts": []any{map[string]any{"type": "text", "text": "I'll start by reading the files."}},
+					},
+					map[string]any{
+						"info":  map[string]any{"id": "msg-3", "role": "tool"},
+						"parts": []any{map[string]any{"type": "text", "text": "file contents"}},
+					},
+					map[string]any{
+						"info":  map[string]any{"id": "msg-4", "role": "assistant"},
+						"parts": []any{map[string]any{"type": "text", "text": "Done."}},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	})
+}
+
+// newOpenCodeTestFactoryWithDB builds a RunnerFactory with an in-memory SQLite
+// database and a debug-config getter wired for conversation-log tests.
+func newOpenCodeTestFactoryWithDB(t *testing.T, enabled bool) (*RunnerFactory, *store.DB) {
+	t.Helper()
+	db, err := store.Open(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cfg := config.DebugConfig{ConversationLog: config.ConversationLogConfig{Enabled: enabled, MaxContentChars: 100000}}
+	getDebug := func() config.DebugConfig { return cfg }
+
+	backends := &config.AgentBackendsConfig{
+		Backends: map[string]config.BackendConfig{
+			"opencode-local": {
+				Type:               config.BackendTypeHubOpenCode,
+				BaseURL:            "http://unused",
+				Auth:               config.BackendAuthConfig{Password: "test-key"},
+				WorkspaceTransport: config.WorkspaceTransportGitSync,
+			},
+		},
+	}
+	sbCfg := sandbox.DefaultSandboxConfig()
+	sbCfg.Mode = sandbox.ModeTemp
+	f := NewRunnerFactory(nil, nil, db, config.AgentDefaultsConfig{},
+		config.DefaultAgentLoopConfig(), getDebug, backends, nil, sbCfg, nil, "")
+	return f, db
+}
+
+func TestOpenCodeHubBackendResultMessages(t *testing.T) {
+	srv := conversationTestServer(t)
+	backend := newTestBackend(t, srv.URL)
+
+	tc := &TaskContext{
+		TaskType:     "analyze_issue",
+		Repo:         "owner/repo",
+		IssueID:      5,
+		TaskID:       10,
+		Provider:     "mock",
+		Model:        "test-model",
+		SystemPrompt: "You are a coder.",
+		UserPrompt:   "Fix issue #5",
+		SandboxPath:  t.TempDir(),
+	}
+	h, err := backend.Submit(context.Background(), tc)
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	res, state, err := backend.Poll(context.Background(), h)
+	require.NoError(t, err)
+	assert.Equal(t, StateDone, state)
+	require.NotNil(t, res)
+	require.Len(t, res.Messages, 3, "user echo should be dropped")
+
+	assert.Equal(t, "assistant", res.Messages[0].Role)
+	assert.Contains(t, res.Messages[0].Content, "reading the files")
+	assert.Equal(t, "tool", res.Messages[1].Role)
+	assert.Equal(t, "assistant", res.Messages[2].Role)
+	assert.Contains(t, res.Messages[2].Content, "Done.")
+}
+
+func TestOpenCodeHubSubmitFailureRetainsMessages(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "role": "assistant"})
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info": map[string]any{
+							"id":   "msg-2",
+							"role": "assistant",
+							"error": map[string]any{
+								"name": "APIError",
+								"data": map[string]any{
+									"message":     "No payment method",
+									"statusCode":  401,
+									"isRetryable": false,
+								},
+							},
+						},
+						"parts": []any{},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	})
+	backend := newTestBackend(t, srv.URL)
+
+	tc := &TaskContext{
+		TaskType:     "analyze_issue",
+		Repo:         "owner/repo",
+		IssueID:      6,
+		TaskID:       11,
+		Provider:     "mock",
+		Model:        "test-model",
+		SystemPrompt: "You are a coder.",
+		UserPrompt:   "Fix issue #6",
+		SandboxPath:  t.TempDir(),
+	}
+	h, err := backend.Submit(context.Background(), tc)
+	require.NoError(t, err, "Submit must return a Handle even on failure so the transcript survives")
+	require.NotNil(t, h)
+
+	res, state, err := backend.Poll(context.Background(), h)
+	assert.Equal(t, StateFailed, state)
+	require.Error(t, err)
+	require.NotNil(t, res, "Poll must return the failed result with Messages")
+	require.Len(t, res.Messages, 1)
+	assert.Equal(t, "assistant", res.Messages[0].Role)
+	assert.Contains(t, res.Messages[0].Content, "APIError")
+	assert.Contains(t, res.Messages[0].Content, "401")
+}
+
+func TestOpenCodeHubPollReattachFillsMessages(t *testing.T) {
+	srv := conversationTestServer(t)
+	backend := newTestBackend(t, srv.URL)
+
+	h, err := backend.Submit(context.Background(), &TaskContext{
+		TaskType:    "analyze_issue",
+		Repo:        "owner/repo",
+		IssueID:     7,
+		TaskID:      12,
+		Provider:    "mock",
+		Model:       "test-model",
+		UserPrompt:  "Fix issue #7",
+		SandboxPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	// Simulate a Matea restart: wipe the instance-local outcome cache.
+	backend.hubMu.Lock()
+	backend.hubResults = map[string]hubOutcome{}
+	backend.hubMu.Unlock()
+
+	res, state, err := backend.Poll(context.Background(), h)
+	require.NoError(t, err)
+	assert.Equal(t, StateDone, state)
+	require.NotNil(t, res)
+	require.Len(t, res.Messages, 3, "re-attach must recover Messages, dropping user echo")
+	assert.Equal(t, "assistant", res.Messages[0].Role)
+	assert.Equal(t, "tool", res.Messages[1].Role)
+	assert.Equal(t, "assistant", res.Messages[2].Role)
+}
+
+func TestRecordHubConversation(t *testing.T) {
+	f, db := newOpenCodeTestFactoryWithDB(t, true)
+
+	agent := &store.Agent{Name: "test", GiteaUsername: "u1", GiteaToken: "t"}
+	require.NoError(t, db.CreateAgent(agent))
+	task := &store.Task{Repo: "o/r", IssueID: 1, TaskType: "analyze_issue", AgentID: agent.ID}
+	require.NoError(t, db.CreateTask(task))
+
+	tc := &TaskContext{
+		SystemPrompt: "You are a coder.",
+		UserPrompt:   "Fix issue #1",
+	}
+	res := &BackendResult{
+		Summary: "Done.",
+		Messages: []llm.Message{
+			{Role: "assistant", Content: "Let me read the code."},
+			{Role: "tool", Content: "file contents"},
+			{Role: "assistant", Content: "Done."},
+		},
+	}
+
+	f.recordHubConversation(task, tc, res, nil)
+
+	logs, err := db.ListConversationLogs(task.ID)
+	require.NoError(t, err)
+	require.Len(t, logs, 5, "iteration 0 (system+user) + iteration 1 (assistant+tool) + iteration 2 (assistant)")
+
+	assert.Equal(t, 0, logs[0].Iteration)
+	assert.Equal(t, "system", logs[0].Role)
+	assert.Equal(t, 0, logs[1].Iteration)
+	assert.Equal(t, "user", logs[1].Role)
+	assert.Equal(t, 1, logs[2].Iteration)
+	assert.Equal(t, "assistant", logs[2].Role)
+	assert.Equal(t, 1, logs[3].Iteration)
+	assert.Equal(t, "tool", logs[3].Role)
+	assert.Equal(t, 2, logs[4].Iteration)
+	assert.Equal(t, "assistant", logs[4].Role)
+}
+
+func TestRecordHubConversationFailureFallback(t *testing.T) {
+	f, db := newOpenCodeTestFactoryWithDB(t, true)
+
+	agent := &store.Agent{Name: "test", GiteaUsername: "u2", GiteaToken: "t"}
+	require.NoError(t, db.CreateAgent(agent))
+	task := &store.Task{Repo: "o/r", IssueID: 2, TaskType: "analyze_issue", AgentID: agent.ID}
+	require.NoError(t, db.CreateTask(task))
+	tc := &TaskContext{UserPrompt: "Fix issue #2"}
+
+	f.recordHubConversation(task, tc, nil, fmt.Errorf("hub backend failed"))
+
+	logs, err := db.ListConversationLogs(task.ID)
+	require.NoError(t, err)
+	require.Len(t, logs, 2)
+	assert.Equal(t, "user", logs[0].Role)
+	assert.Equal(t, "assistant", logs[1].Role)
+	assert.Contains(t, logs[1].Content, "hub backend failed")
+}
+
+func TestRecordHubConversationDisabled(t *testing.T) {
+	f, db := newOpenCodeTestFactoryWithDB(t, false)
+
+	agent := &store.Agent{Name: "test", GiteaUsername: "u3", GiteaToken: "t"}
+	require.NoError(t, db.CreateAgent(agent))
+	task := &store.Task{Repo: "o/r", IssueID: 3, TaskType: "analyze_issue", AgentID: agent.ID}
+	require.NoError(t, db.CreateTask(task))
+	tc := &TaskContext{UserPrompt: "Fix issue #3"}
+	res := &BackendResult{Summary: "Done.", Messages: []llm.Message{{Role: "assistant", Content: "Done."}}}
+
+	f.recordHubConversation(task, tc, res, nil)
+
+	count, err := db.CountConversationLogs(task.ID)
+	require.NoError(t, err)
+	assert.Zero(t, count, "conversation log must not be written when disabled")
 }

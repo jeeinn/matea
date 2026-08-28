@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jeeinn/matea/internal/config"
+	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/store"
 )
 
@@ -123,13 +124,25 @@ func (b *OpenCodeHTTPBackend) Run(ctx context.Context, req CodingRequest) (*Codi
 	log.Printf("[INFO] Task %d opencode session created: %s", task.ID, sessionID)
 
 	// 2. Send message
-	summary, err := b.sendMessage(ctx, sessionID, req)
+	summary, messages, err := b.sendMessage(ctx, sessionID, req)
 	if err != nil {
 		// Try to abort on failure so the sidecar doesn't keep working
 		if abortErr := b.Abort(ctx, sessionID); abortErr != nil {
 			log.Printf("[WARN] Failed to abort opencode session %s after message error: %v", sessionID, abortErr)
 		}
-		return nil, fmt.Errorf("opencode message: %w", err)
+		// Return a failed-but-informative result so that Submit can still
+		// surface the transcript (including any assistant error messages) to
+		// the conversation log.
+		if summary == "" {
+			summary = err.Error()
+		}
+		return &CodingResult{
+			Summary:         summary,
+			Success:         false,
+			RemoteSessionID: sessionID,
+			Provider:        nil,
+			Messages:        b.opencodeMessagesToLLM(messages),
+		}, nil
 	}
 
 	log.Printf("[INFO] Task %d opencode coding completed, summary len=%d", task.ID, len(summary))
@@ -142,6 +155,7 @@ func (b *OpenCodeHTTPBackend) Run(ctx context.Context, req CodingRequest) (*Codi
 		// server-side. finalizeWriteChanges will still generate a commit
 		// message using the gateway's own provider (see note in finalize).
 		Provider: nil,
+		Messages: b.opencodeMessagesToLLM(messages),
 	}, nil
 }
 
@@ -284,11 +298,13 @@ func formatOpencodeError(e *opencodeMessageError) string {
 
 // sendMessage calls POST /session/{id}/message and then polls
 // GET /session/{id}/message to extract the assistant's text response.
+// It returns the assistant summary plus the full message list so that
+// conversation logs can persist the transcript even on failure.
 //
 // Note: the SDK uses streaming tokens (SSE) for real-time UI. For the gateway's
 // headless use case, a synchronous POST + subsequent list-messages lookup is
 // sufficient and simpler. The HTTP client timeout guards against hangs.
-func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string, req CodingRequest) (string, error) {
+func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string, req CodingRequest) (string, []opencodeMessagesListItem, error) {
 	msgReq := opencodeMessageRequest{
 		Parts: []opencodeMessagePart{
 			{Type: "text", Text: req.Prompt},
@@ -333,7 +349,7 @@ func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string,
 	}
 	httpReq, err := b.newJSONRequest(ctx, http.MethodPost, url, msgReq)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if req.WorkDir != "" {
 		httpReq.Header.Set("X-Opencode-Directory", req.WorkDir)
@@ -343,25 +359,26 @@ func (b *OpenCodeHTTPBackend) sendMessage(ctx context.Context, sessionID string,
 	// We ignore the response body (token stream shape varies) and instead fetch
 	// the final assistant message from the messages list, which is more stable.
 	if err := b.doJSON(httpReq, nil); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	// Fetch message list and extract the last assistant text part
 	return b.getLastAssistantMessage(ctx, sessionID)
 }
 
-// getLastAssistantMessage fetches the message list and concatenates all
-// text parts from the most recent assistant message.
-func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessionID string) (string, error) {
+// getLastAssistantMessage fetches the message list and returns both the
+// concatenated text of the most recent assistant message and the full message
+// list for downstream conversation logging.
+func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessionID string) (string, []opencodeMessagesListItem, error) {
 	url := fmt.Sprintf("%s/session/%s/message", b.cfg.BaseURL, sessionID)
 	httpReq, err := b.newJSONRequest(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	var messages []opencodeMessagesListItem
 	if err := b.doJSON(httpReq, &messages); err != nil {
-		return "", fmt.Errorf("list messages: %w", err)
+		return "", nil, fmt.Errorf("list messages: %w", err)
 	}
 
 	// Walk backwards to find the last assistant message
@@ -379,7 +396,7 @@ func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessi
 		}
 		if len(texts) > 0 {
 			// Join with double-newline to match multi-part natural flow
-			return joinParts(texts), nil
+			return joinParts(texts), messages, nil
 		}
 		// Assistant message without text: remember its run error so a
 		// provider-side failure (401/quota/unknown model) is surfaced
@@ -390,9 +407,9 @@ func (b *OpenCodeHTTPBackend) getLastAssistantMessage(ctx context.Context, sessi
 	}
 
 	if lastErr != nil {
-		return "", fmt.Errorf("opencode run failed in session %s: %s", sessionID, formatOpencodeError(lastErr))
+		return "", messages, fmt.Errorf("opencode run failed in session %s: %s", sessionID, formatOpencodeError(lastErr))
 	}
-	return "", fmt.Errorf("no assistant text message found in session %s", sessionID)
+	return "", messages, fmt.Errorf("no assistant text message found in session %s", sessionID)
 }
 
 func joinParts(parts []string) string {
@@ -407,6 +424,46 @@ func joinParts(parts []string) string {
 		result += "\n\n" + p
 	}
 	return result
+}
+
+// opencodeMessagesToLLM converts the raw OpenCode message list into the
+// llm.Message shape used by task_conversation_logs. Matea supplies its own
+// system/user messages from TaskContext, so OpenCode-echoed user/system roles
+// are dropped to avoid duplication.
+func (b *OpenCodeHTTPBackend) opencodeMessagesToLLM(messages []opencodeMessagesListItem) []llm.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]llm.Message, 0, len(messages))
+	for _, m := range messages {
+		role := m.Info.Role
+		if role == "user" || role == "system" {
+			continue
+		}
+		if role == "" {
+			role = "assistant"
+		}
+		var texts []string
+		for _, p := range m.Parts {
+			if p.Type == "text" && p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		content := joinParts(texts)
+		if m.Info.Error != nil {
+			errText := formatOpencodeError(m.Info.Error)
+			if content != "" {
+				content = content + "\n\n[error] " + errText
+			} else {
+				content = "[error] " + errText
+			}
+		}
+		out = append(out, llm.Message{
+			Role:    role,
+			Content: content,
+		})
+	}
+	return out
 }
 
 func urlQueryEscape(s string) string {
@@ -591,7 +648,32 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 		return nil, err
 	}
 	if !res.Success {
-		return nil, fmt.Errorf("hub-opencode backend %q reported failure: %s", b.name, res.Summary)
+		// Cache the failed result and return a Handle so that runViaHub's Poll
+		// path reports StateFailed with the transcript preserved for conversation
+		// logging.
+		remoteID := res.RemoteSessionID
+		if remoteID == "" {
+			remoteID = fmt.Sprintf("opencode-%d", time.Now().UnixNano())
+		}
+		h := &Handle{
+			Backend:        b.name,
+			RemoteID:       remoteID,
+			IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", tc.TaskType, tc.Repo, tc.IssueID, tc.PRID),
+		}
+		result := &BackendResult{Summary: res.Summary, Messages: res.Messages}
+		if gitSync {
+			result.GitSync = &GitSyncResult{
+				DraftBranch: tc.GitSync.DraftBranch,
+				DraftHEAD:   ParseDraftHeadTrailer(res.Summary),
+			}
+		}
+		b.hubMu.Lock()
+		b.hubResults[remoteID] = hubOutcome{
+			result: result,
+			err:    fmt.Errorf("hub-opencode backend %q reported failure: %s", b.name, res.Summary),
+		}
+		b.hubMu.Unlock()
+		return h, nil
 	}
 
 	remoteID := res.RemoteSessionID
@@ -603,7 +685,7 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 		RemoteID:       remoteID,
 		IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", tc.TaskType, tc.Repo, tc.IssueID, tc.PRID),
 	}
-	result := &BackendResult{Summary: res.Summary}
+	result := &BackendResult{Summary: res.Summary, Messages: res.Messages}
 	if gitSync {
 		// Report the draft branch back so runViaHub's Approve can fetch and
 		// validate it. The trailer cross-checks hub honesty; the fetched remote
@@ -644,14 +726,16 @@ func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResu
 	b.hubMu.Unlock()
 	if ok {
 		if out.err != nil {
-			return nil, StateFailed, out.err
+			// Return the result alongside the error so that runViaHub can still
+			// log any assistant-side transcript captured before the failure.
+			return out.result, StateFailed, out.err
 		}
 		return out.result, StateDone, nil
 	}
 
 	// Cache miss — try to re-attach to the still-living sidecar session.
-	if summary, rerr := b.getLastAssistantMessage(ctx, h.RemoteID); rerr == nil && summary != "" {
-		res := &BackendResult{Summary: summary}
+	if summary, messages, rerr := b.getLastAssistantMessage(ctx, h.RemoteID); rerr == nil && summary != "" {
+		res := &BackendResult{Summary: summary, Messages: b.opencodeMessagesToLLM(messages)}
 		// Re-populate the cache so subsequent Polls are cheap and consistent.
 		b.hubMu.Lock()
 		b.hubResults[h.RemoteID] = hubOutcome{result: res}

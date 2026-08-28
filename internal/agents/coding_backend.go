@@ -81,6 +81,10 @@ type CodingResult struct {
 	Success         bool         // false → finalize returns a comment with the error
 	RemoteSessionID string       // opencode session id (empty for internal)
 	Provider        llm.Provider // LLM provider used (reused by finalize for commit message)
+
+	// Messages is the full assistant-side transcript returned by the hub
+	// backend. Empty for the builtin backend.
+	Messages []llm.Message `json:"messages,omitempty"`
 }
 
 // BuiltinCodingBackend wraps the existing AgentLoop + DefaultTools as the

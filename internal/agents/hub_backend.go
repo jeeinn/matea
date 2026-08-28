@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jeeinn/matea/internal/llm"
 )
 
 // This file defines the HubBackend abstraction (Phase 1.2, tasks 1.2.1/1.2.2):
@@ -82,7 +84,7 @@ type TaskContext struct {
 	IssueTitle string            `json:"issue_title,omitempty"`
 	IssueBody  string            `json:"issue_body,omitempty"`
 	Comments   []CommentSnapshot `json:"comments,omitempty"`
-	Diff       string            `json:"diff,omitempty"`        // review_pr only
+	Diff       string            `json:"diff,omitempty"` // review_pr only
 	BaseBranch string            `json:"base_branch,omitempty"`
 
 	// Execution target for the builtin backend: which local LLM to run.
@@ -178,14 +180,19 @@ type DeliverRequest struct {
 
 // BackendResult is what a hub backend returns for a completed task.
 type BackendResult struct {
-	Summary      string        `json:"summary"`
-	GiteaActions []GiteaAction `json:"gitea_actions,omitempty"`
+	Summary      string          `json:"summary"`
+	GiteaActions []GiteaAction   `json:"gitea_actions,omitempty"`
 	Deliver      *DeliverRequest `json:"deliver,omitempty"`
 
 	// GitSync reports the hub-pushed draft branch for write tasks under the
 	// git_sync transport (task A2). Matea's WorkspaceTransport.Approve
 	// validates it (three elements) and opens the PR.
 	GitSync *GitSyncResult `json:"git_sync,omitempty"`
+
+	// Messages is the assistant-side transcript returned by the hub backend
+	// (system/user are supplied by Matea from TaskContext). Used to populate
+	// task_conversation_logs when debug.conversation_log.enabled is on.
+	Messages []llm.Message `json:"messages,omitempty"`
 
 	// ExternallyHandled is true when the hub already performed git/PR itself
 	// (only honored when Capabilities().HandlesGit is true). Default false:
