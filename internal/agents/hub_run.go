@@ -250,6 +250,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			case StateCanceled:
 				f.markHubHandleTerminal(task.ID, store.HubHandleStatusCanceled)
 				f.cleanupGitSyncKey(transport, task, issuedKey)
+				f.recordHubConversation(task, tc, res, err)
 				if err != nil {
 					return nil, fmt.Errorf("hub backend %q cancelled the task: %w", backend.Name(), err)
 				}
@@ -346,14 +347,14 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			// of reporting it as a backend failure.
 			if pollCtx.Err() != nil {
 				f.cleanupGitSyncKey(transport, task, issuedKey)
-				return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
+				return nil, abortHubRun(f, task, tc, ctx, pollCtx, backend, handle)
 			}
 			return nil, fmt.Errorf("hub poll: %w", err)
 		}
 		select {
 		case <-pollCtx.Done():
 			f.cleanupGitSyncKey(transport, task, issuedKey)
-			return nil, abortHubRun(f, task, ctx, pollCtx, backend, handle)
+			return nil, abortHubRun(f, task, tc, ctx, pollCtx, backend, handle)
 		case <-time.After(hubPollInterval):
 		}
 	}
@@ -390,7 +391,8 @@ func (f *RunnerFactory) recordHubConversation(task *store.Task, tc *TaskContext,
 	}
 	maxChars := debugCfg.ConversationLog.MaxContentChars
 
-	// Iteration 0: the prompt Matea sent to the hub (authoritative source).
+	// Iteration 0: the prompt Matea sent to the hub (authoritative source,
+	// excluding hub-side memory/git_sync injections appended by Submit).
 	var iter0 []llm.Message
 	if tc != nil {
 		if tc.SystemPrompt != "" {
@@ -401,7 +403,11 @@ func (f *RunnerFactory) recordHubConversation(task *store.Task, tc *TaskContext,
 		}
 	}
 	if len(iter0) > 0 {
-		if err := f.db.AppendConversationMessages(task.ID, 0, iter0, maxChars); err != nil {
+		// Guard against duplicate iteration-0 rows if the task is re-run after a
+		// crash between markHubHandleTerminal and conversation persistence.
+		if count, cerr := f.db.CountConversationLogs(task.ID); cerr == nil && count > 0 {
+			log.Printf("[DEBUG] task %d: skipping duplicate hub conversation input", task.ID)
+		} else if err := f.db.AppendConversationMessages(task.ID, 0, iter0, maxChars); err != nil {
 			log.Printf("[WARN] task %d: failed to persist hub conversation input: %v", task.ID, err)
 		}
 	}
@@ -421,9 +427,21 @@ func (f *RunnerFactory) recordHubConversation(task *store.Task, tc *TaskContext,
 		}
 	}
 
+	// Resume iteration numbering from the highest existing iteration so that
+	// partial re-runs do not overwrite or duplicate earlier assistant rounds.
+	iteration := 1
+	if err := f.db.QueryRow(`SELECT COALESCE(MAX(iteration), 0) FROM task_conversation_logs WHERE task_id = ?`, task.ID).Scan(&iteration); err != nil {
+		log.Printf("[WARN] task %d: failed to resolve next conversation iteration: %v", task.ID, err)
+		iteration = 1
+	}
+	if iteration < 1 {
+		iteration = 1
+	} else {
+		iteration++
+	}
+
 	// Group assistant/tool messages into iterations: each assistant starts a new
 	// iteration, and any trailing tool messages ride along with it.
-	iteration := 1
 	var current []llm.Message
 	flush := func() {
 		if len(current) > 0 {
@@ -481,7 +499,7 @@ func (f *RunnerFactory) cleanupGitSyncKey(transport WorkspaceTransport, task *st
 // the backend (e.g. Hermes' minimal contract has no cancel endpoint), marking
 // the Handle canceled here is what actually prevents a restart re-pickup of
 // the orphaned run (Phase 2 review Problem E-1).
-func abortHubRun(f *RunnerFactory, task *store.Task, ctx, pollCtx context.Context, backend HubBackend, handle *Handle) error {
+func abortHubRun(f *RunnerFactory, task *store.Task, tc *TaskContext, ctx, pollCtx context.Context, backend HubBackend, handle *Handle) error {
 	cause := ctx.Err()
 	reason := "task cancelled by executor"
 	switch {
@@ -504,7 +522,12 @@ func abortHubRun(f *RunnerFactory, task *store.Task, ctx, pollCtx context.Contex
 	// but Matea must not treat it as in-flight).
 	f.markHubHandleTerminal(task.ID, store.HubHandleStatusCanceled)
 
-	return fmt.Errorf("hub run aborted (%s): %w", reason, cause)
+	// Preserve at least the task input and the cancellation reason for
+	// post-mortem debugging.
+	abortErr := fmt.Errorf("hub run aborted (%s): %w", reason, cause)
+	f.recordHubConversation(task, tc, nil, abortErr)
+
+	return abortErr
 }
 
 // mapHubResult converts a completed BackendResult into a Runner Result.

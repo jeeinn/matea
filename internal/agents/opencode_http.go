@@ -458,6 +458,9 @@ func (b *OpenCodeHTTPBackend) opencodeMessagesToLLM(messages []opencodeMessagesL
 				content = "[error] " + errText
 			}
 		}
+		if content == "" {
+			continue
+		}
 		out = append(out, llm.Message{
 			Role:    role,
 			Content: content,
@@ -661,12 +664,8 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 			IdempotencyKey: fmt.Sprintf("%s:%s:%d:%d", tc.TaskType, tc.Repo, tc.IssueID, tc.PRID),
 		}
 		result := &BackendResult{Summary: res.Summary, Messages: res.Messages}
-		if gitSync {
-			result.GitSync = &GitSyncResult{
-				DraftBranch: tc.GitSync.DraftBranch,
-				DraftHEAD:   ParseDraftHeadTrailer(res.Summary),
-			}
-		}
+		// Do not report GitSync on failure: the draft branch was not validated
+		// and runViaHub's StateFailed branch does not consume it.
 		b.hubMu.Lock()
 		b.hubResults[remoteID] = hubOutcome{
 			result: result,
@@ -734,7 +733,8 @@ func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResu
 	}
 
 	// Cache miss — try to re-attach to the still-living sidecar session.
-	if summary, messages, rerr := b.getLastAssistantMessage(ctx, h.RemoteID); rerr == nil && summary != "" {
+	summary, messages, rerr := b.getLastAssistantMessage(ctx, h.RemoteID)
+	if rerr == nil && summary != "" {
 		res := &BackendResult{Summary: summary, Messages: b.opencodeMessagesToLLM(messages)}
 		// Re-populate the cache so subsequent Polls are cheap and consistent.
 		b.hubMu.Lock()
@@ -742,6 +742,19 @@ func (b *OpenCodeHTTPBackend) Poll(ctx context.Context, h *Handle) (*BackendResu
 		b.hubMu.Unlock()
 		log.Printf("[INFO] hub-opencode backend %q: re-attached to sidecar session %q after cache miss", b.name, h.RemoteID)
 		return res, StateDone, nil
+	}
+	if len(messages) > 0 {
+		// The sidecar still has the session but the run failed. Preserve the
+		// transcript so a Matea restart does not lose the failure context.
+		if summary == "" {
+			summary = rerr.Error()
+		}
+		res := &BackendResult{Summary: summary, Messages: b.opencodeMessagesToLLM(messages)}
+		b.hubMu.Lock()
+		b.hubResults[h.RemoteID] = hubOutcome{result: res, err: rerr}
+		b.hubMu.Unlock()
+		log.Printf("[INFO] hub-opencode backend %q: re-attached to failed sidecar session %q after cache miss", b.name, h.RemoteID)
+		return res, StateFailed, rerr
 	}
 
 	return nil, "", fmt.Errorf("hub-opencode backend %q: unknown handle %q", b.name, h.RemoteID)

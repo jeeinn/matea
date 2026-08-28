@@ -803,6 +803,120 @@ func TestOpenCodeHubPollReattachFillsMessages(t *testing.T) {
 	assert.Equal(t, "assistant", res.Messages[2].Role)
 }
 
+func TestOpenCodeHubPollReattachFailedRetainsMessages(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "role": "assistant"})
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info": map[string]any{
+							"id":   "msg-2",
+							"role": "assistant",
+							"error": map[string]any{
+								"name": "APIError",
+								"data": map[string]any{
+									"message":     "No payment method",
+									"statusCode":  401,
+									"isRetryable": false,
+								},
+							},
+						},
+						"parts": []any{},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	})
+	backend := newTestBackend(t, srv.URL)
+
+	h, err := backend.Submit(context.Background(), &TaskContext{
+		TaskType:    "analyze_issue",
+		Repo:        "owner/repo",
+		IssueID:     8,
+		TaskID:      13,
+		Provider:    "mock",
+		Model:       "test-model",
+		UserPrompt:  "Fix issue #8",
+		SandboxPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	// Simulate a Matea restart: wipe the instance-local outcome cache.
+	backend.hubMu.Lock()
+	backend.hubResults = map[string]hubOutcome{}
+	backend.hubMu.Unlock()
+
+	res, state, err := backend.Poll(context.Background(), h)
+	assert.Equal(t, StateFailed, state)
+	require.Error(t, err)
+	require.NotNil(t, res, "re-attach to a failed session must return the result with Messages")
+	require.Len(t, res.Messages, 1)
+	assert.Equal(t, "assistant", res.Messages[0].Role)
+	assert.Contains(t, res.Messages[0].Content, "APIError")
+	assert.Contains(t, res.Messages[0].Content, "401")
+}
+
+func TestOpenCodeHubBackendResultMessagesSkipsEmpty(t *testing.T) {
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch {
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodPost:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "role": "assistant"})
+			case strings.HasSuffix(path, "/message") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode([]any{
+					map[string]any{
+						"info":  map[string]any{"id": "msg-1", "role": "user"},
+						"parts": []any{map[string]any{"type": "text", "text": "implement the fix"}},
+					},
+					map[string]any{
+						// Empty assistant message without text or error: must be skipped.
+						"info":  map[string]any{"id": "msg-2", "role": "assistant"},
+						"parts": []any{},
+					},
+					map[string]any{
+						"info":  map[string]any{"id": "msg-3", "role": "assistant"},
+						"parts": []any{map[string]any{"type": "text", "text": "Done."}},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+	})
+	backend := newTestBackend(t, srv.URL)
+
+	h, err := backend.Submit(context.Background(), &TaskContext{
+		TaskType:    "analyze_issue",
+		Repo:        "owner/repo",
+		IssueID:     9,
+		TaskID:      14,
+		Provider:    "mock",
+		Model:       "test-model",
+		UserPrompt:  "Fix issue #9",
+		SandboxPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, h)
+
+	res, _, err := backend.Poll(context.Background(), h)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Messages, 1, "empty assistant message should be skipped")
+	assert.Equal(t, "Done.", res.Messages[0].Content)
+}
+
 func TestRecordHubConversation(t *testing.T) {
 	f, db := newOpenCodeTestFactoryWithDB(t, true)
 
@@ -840,6 +954,36 @@ func TestRecordHubConversation(t *testing.T) {
 	assert.Equal(t, "tool", logs[3].Role)
 	assert.Equal(t, 2, logs[4].Iteration)
 	assert.Equal(t, "assistant", logs[4].Role)
+}
+
+func TestRecordHubConversationSkipsDuplicateIter0(t *testing.T) {
+	f, db := newOpenCodeTestFactoryWithDB(t, true)
+
+	agent := &store.Agent{Name: "test", GiteaUsername: "u4", GiteaToken: "t"}
+	require.NoError(t, db.CreateAgent(agent))
+	task := &store.Task{Repo: "o/r", IssueID: 4, TaskType: "analyze_issue", AgentID: agent.ID}
+	require.NoError(t, db.CreateTask(task))
+
+	tc := &TaskContext{SystemPrompt: "sys", UserPrompt: "user"}
+	res := &BackendResult{Summary: "Done.", Messages: []llm.Message{{Role: "assistant", Content: "Done."}}}
+
+	f.recordHubConversation(task, tc, res, nil)
+	// Simulate a re-run writing the same task again: iteration 0 (the input)
+	// must be deduplicated, but assistant-side iterations are intentionally
+	// appended because a real re-run produces a fresh transcript.
+	f.recordHubConversation(task, tc, res, nil)
+
+	logs, err := db.ListConversationLogs(task.ID)
+	require.NoError(t, err)
+	require.Len(t, logs, 4, "iteration 0 once + two assistant iterations")
+	assert.Equal(t, 0, logs[0].Iteration)
+	assert.Equal(t, "system", logs[0].Role)
+	assert.Equal(t, 0, logs[1].Iteration)
+	assert.Equal(t, "user", logs[1].Role)
+	assert.Equal(t, 1, logs[2].Iteration)
+	assert.Equal(t, "assistant", logs[2].Role)
+	assert.Equal(t, 2, logs[3].Iteration)
+	assert.Equal(t, "assistant", logs[3].Role)
 }
 
 func TestRecordHubConversationFailureFallback(t *testing.T) {
