@@ -47,11 +47,11 @@ func TestHealthSummaryUnconfigured(t *testing.T) {
 		t.Errorf("expected healthy=true for unconfigured deps, got false")
 	}
 	want := map[string]string{
-		"gitea":       healthStatusUnconfigured,
-		"llm":         healthStatusUnconfigured,
+		"gitea":        healthStatusUnconfigured,
+		"llm":          healthStatusUnconfigured,
 		"hub_backends": healthStatusDisabled,
-		"deliver":     healthStatusDisabled,
-		"database":    healthStatusDisabled,
+		"deliver":      healthStatusDisabled,
+		"database":     healthStatusDisabled,
 	}
 	for name, status := range want {
 		c, ok := s.Components[name]

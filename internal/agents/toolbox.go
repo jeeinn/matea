@@ -112,9 +112,9 @@ type GiteaReadOnlyAccessor interface {
 // NewToolBox creates an empty ToolBox. Use Register to populate.
 func NewToolBox(sb *sandbox.Sandbox, gitea GiteaReadOnlyAccessor) *ToolBox {
 	return &ToolBox{
-		tools:          make(map[string]ToolDecl),
-		sandbox:        sb,
-		giteaReadOnly:  gitea,
+		tools:         make(map[string]ToolDecl),
+		sandbox:       sb,
+		giteaReadOnly: gitea,
 	}
 }
 

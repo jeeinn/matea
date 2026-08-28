@@ -3,8 +3,8 @@ package workflow
 import (
 	"testing"
 
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,22 +17,22 @@ func TestTaskTypeTable_Completeness(t *testing.T) {
 	// Count expected mappings (not all combinations are valid)
 	expectedMappings := map[ResolveKey]bool{
 		// Analyze
-		{store.RoleAnalyze, SurfaceIssue, IntentAssign}:      true,
-		{store.RoleAnalyze, SurfaceIssue, IntentMention}:     true,
-		{store.RoleAnalyze, SurfaceIssue, IntentSlashDev}:    true,
-		{store.RoleAnalyze, SurfaceIssue, IntentSlashReply}:  true,
-		{store.RoleAnalyze, SurfacePR, IntentMention}:        true,
-		{store.RoleAnalyze, SurfacePR, IntentSlashDev}:       true,
-		{store.RoleAnalyze, SurfacePR, IntentSlashReply}:     true,
+		{store.RoleAnalyze, SurfaceIssue, IntentAssign}:     true,
+		{store.RoleAnalyze, SurfaceIssue, IntentMention}:    true,
+		{store.RoleAnalyze, SurfaceIssue, IntentSlashDev}:   true,
+		{store.RoleAnalyze, SurfaceIssue, IntentSlashReply}: true,
+		{store.RoleAnalyze, SurfacePR, IntentMention}:       true,
+		{store.RoleAnalyze, SurfacePR, IntentSlashDev}:      true,
+		{store.RoleAnalyze, SurfacePR, IntentSlashReply}:    true,
 
 		// Coder
-		{store.RoleCoder, SurfaceIssue, IntentAssign}:      true,
-		{store.RoleCoder, SurfaceIssue, IntentMention}:     true,
-		{store.RoleCoder, SurfaceIssue, IntentSlashDev}:    true,
-		{store.RoleCoder, SurfaceIssue, IntentSlashReply}:  true,
-		{store.RoleCoder, SurfacePR, IntentMention}:        true,
-		{store.RoleCoder, SurfacePR, IntentSlashDev}:       true,
-		{store.RoleCoder, SurfacePR, IntentSlashReply}:     true,
+		{store.RoleCoder, SurfaceIssue, IntentAssign}:     true,
+		{store.RoleCoder, SurfaceIssue, IntentMention}:    true,
+		{store.RoleCoder, SurfaceIssue, IntentSlashDev}:   true,
+		{store.RoleCoder, SurfaceIssue, IntentSlashReply}: true,
+		{store.RoleCoder, SurfacePR, IntentMention}:       true,
+		{store.RoleCoder, SurfacePR, IntentSlashDev}:      true,
+		{store.RoleCoder, SurfacePR, IntentSlashReply}:    true,
 
 		// Review
 		{store.RoleReview, SurfacePR, IntentReviewRequested}: true,
@@ -169,10 +169,10 @@ func TestResolveTaskType_ReviewRole(t *testing.T) {
 		expected string
 	}{
 		{SurfacePR, IntentReviewRequested, "review_pr"},
-		{SurfacePR, IntentMention, "reply_comment"},       // Critical: NOT review_pr
+		{SurfacePR, IntentMention, "reply_comment"}, // Critical: NOT review_pr
 		{SurfacePR, IntentSlashDev, "solve_comment"},
 		{SurfacePR, IntentSlashReply, "reply_comment"},
-		{SurfaceIssue, IntentMention, "reply_comment"},    // Critical: NOT review_pr
+		{SurfaceIssue, IntentMention, "reply_comment"}, // Critical: NOT review_pr
 		{SurfaceIssue, IntentSlashDev, "solve_comment"},
 		{SurfaceIssue, IntentSlashReply, "reply_comment"},
 	}

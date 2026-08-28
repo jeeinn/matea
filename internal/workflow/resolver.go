@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/jeeinn/matea/internal/agents"
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 // ResolveResult holds the resolution of a webhook event.
@@ -71,7 +71,6 @@ func stripCodeBlocks(text string) string {
 
 	return text
 }
-
 
 // Resolve determines what to do with a webhook event.
 // Returns nil if the event should be ignored.

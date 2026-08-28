@@ -14,7 +14,7 @@ import (
 // memStore is an in-memory config.Store for handler tests.
 type memStore struct{ data map[string]string }
 
-func newMemStore() *memStore { return &memStore{data: map[string]string{}} }
+func newMemStore() *memStore                             { return &memStore{data: map[string]string{}} }
 func (m *memStore) GetConfig(key string) (string, error) { return m.data[key], nil }
 func (m *memStore) SetConfig(key, value string) error    { m.data[key] = value; return nil }
 func (m *memStore) DeleteConfig(key string) error        { delete(m.data, key); return nil }

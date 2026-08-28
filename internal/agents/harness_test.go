@@ -12,13 +12,13 @@ import (
 // --- Mock Harness for testing ---
 
 type mockHarness struct {
-	profile      HarnessProfile
-	turnCalled   bool
-	turnInput    *HarnessTurnInput
-	turnResult   *HarnessTurnResult
-	turnErr      error
-	closeCalled  bool
-	resetCalled  string
+	profile     HarnessProfile
+	turnCalled  bool
+	turnInput   *HarnessTurnInput
+	turnResult  *HarnessTurnResult
+	turnErr     error
+	closeCalled bool
+	resetCalled string
 }
 
 func (m *mockHarness) Profile() HarnessProfile {
@@ -48,15 +48,15 @@ func TestHarnessRouterRegisterAndLookup(t *testing.T) {
 
 	h := &mockHarness{
 		profile: HarnessProfile{
-			ID:                "test-harness",
-			DisplayName:       "Test Harness",
-			ControlTransport:  ControlSubmitContract,
-			ToolTransport:     ToolViaSubmit,
-			SupportsToolUse:   true,
-			SupportsMemory:    false,
-			HandlesGit:        false,
-			HasIMChannels:     false,
-			OwnsWorkspace:     false,
+			ID:               "test-harness",
+			DisplayName:      "Test Harness",
+			ControlTransport: ControlSubmitContract,
+			ToolTransport:    ToolViaSubmit,
+			SupportsToolUse:  true,
+			SupportsMemory:   false,
+			HandlesGit:       false,
+			HasIMChannels:    false,
+			OwnsWorkspace:    false,
 		},
 	}
 

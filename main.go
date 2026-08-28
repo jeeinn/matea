@@ -23,12 +23,12 @@ import (
 	"github.com/jeeinn/matea/internal/auth"
 	"github.com/jeeinn/matea/internal/config"
 	"github.com/jeeinn/matea/internal/dispatcher"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/logging"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
 	"github.com/jeeinn/matea/internal/sysinfo"
-	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 

@@ -60,4 +60,3 @@ func ParseIntent(eventType, deliveryID string, payload []byte) (*Intent, error) 
 func WrapEvent(evt *WebhookEvent) *Intent {
 	return &Intent{Source: SourceGitea, Event: evt}
 }
-

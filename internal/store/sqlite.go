@@ -271,12 +271,12 @@ func (db *DB) migrate() error {
 		`ALTER TABLE agents ADD COLUMN max_input_tokens INTEGER DEFAULT 65536`,
 		`ALTER TABLE agents ADD COLUMN timeout TEXT DEFAULT '5m'`,
 		`ALTER TABLE task_usage ADD COLUMN cost REAL DEFAULT 0.0`,
-		`ALTER TABLE agents ADD COLUMN backend TEXT DEFAULT 'builtin'`,    // OpenCode Path A; canonical name since 1.2.6
-		`ALTER TABLE agents ADD COLUMN backend_options TEXT DEFAULT '{}'`, // OpenCode Path A
-		`ALTER TABLE agents ADD COLUMN tool_pack TEXT DEFAULT ''`,         // P1.4: ToolPack per agent
-		`ALTER TABLE agents ADD COLUMN mcp_servers TEXT DEFAULT '[]'`,     // P2.8: MCP servers per agent
+		`ALTER TABLE agents ADD COLUMN backend TEXT DEFAULT 'builtin'`,     // OpenCode Path A; canonical name since 1.2.6
+		`ALTER TABLE agents ADD COLUMN backend_options TEXT DEFAULT '{}'`,  // OpenCode Path A
+		`ALTER TABLE agents ADD COLUMN tool_pack TEXT DEFAULT ''`,          // P1.4: ToolPack per agent
+		`ALTER TABLE agents ADD COLUMN mcp_servers TEXT DEFAULT '[]'`,      // P2.8: MCP servers per agent
 		`ALTER TABLE agents ADD COLUMN managed_by_matea INTEGER DEFAULT 0`, // Phase 1.1.3: track Matea-managed Gitea accounts
-		`DROP TABLE IF EXISTS routes`,                                     // v2: routes table removed (Assign model replaces Label trigger)
+		`DROP TABLE IF EXISTS routes`,                                      // v2: routes table removed (Assign model replaces Label trigger)
 		// Webhook inbox: accept-before-200, replay accepted on startup
 		`ALTER TABLE processed_deliveries ADD COLUMN status TEXT NOT NULL DEFAULT 'processed'`,
 		`ALTER TABLE processed_deliveries ADD COLUMN event_type TEXT NOT NULL DEFAULT ''`,
@@ -319,7 +319,7 @@ func (db *DB) migrate() error {
 }
 
 // migrateBackendIdentifiers rewrites legacy coding-backend identifiers to
-// canonical names (task 1.2.6d): 'internal'/'' → 'builtin', 'opencode_http' →
+// canonical names (task 1.2.6d): 'internal'/” → 'builtin', 'opencode_http' →
 // 'hub-opencode'. Idempotent; safe to run on every startup. Read-side
 // normalization (config.NormalizeBackend) also accepts legacy values, so this
 // migration is a convergence step, not a requirement for correctness.

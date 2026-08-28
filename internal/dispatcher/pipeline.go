@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/jeeinn/matea/internal/deliver"
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 	"github.com/jeeinn/matea/internal/workflow"
 )
 

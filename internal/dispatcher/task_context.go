@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/jeeinn/matea/internal/config"
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 // buildTaskContext constructs the context string for the task from the event.

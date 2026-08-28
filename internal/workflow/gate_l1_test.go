@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 func TestL1ReviewRequiresPR(t *testing.T) {

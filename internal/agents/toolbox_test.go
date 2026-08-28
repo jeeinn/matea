@@ -12,11 +12,11 @@ import (
 // --- Mock Gitea accessor ---
 
 type mockGiteaReadOnly struct {
-	issueTitle  string
-	issueBody   string
-	diff        string
-	issueErr    error
-	diffErr     error
+	issueTitle string
+	issueBody  string
+	diff       string
+	issueErr   error
+	diffErr    error
 }
 
 func (m *mockGiteaReadOnly) GetIssue(ctx context.Context, repo string, issueID int) (title, body string, err error) {

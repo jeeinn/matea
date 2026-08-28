@@ -407,9 +407,9 @@ func (h *Handler) giteaWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSON(w, 200, map[string]interface{}{
-			"success":     true,
-			"registered":  registered,
-			"hook_id":     hookID,
+			"success":      true,
+			"registered":   registered,
+			"hook_id":      hookID,
 			"callback_url": callbackURL,
 		})
 	case "register":
@@ -419,10 +419,10 @@ func (h *Handler) giteaWebhookHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{
-			"success":     true,
-			"registered":  registered,
-			"created":     created,
-			"hook_id":     hookID,
+			"success":      true,
+			"registered":   registered,
+			"created":      created,
+			"hook_id":      hookID,
 			"callback_url": callbackURL,
 		})
 	default:

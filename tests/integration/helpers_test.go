@@ -20,10 +20,10 @@ import (
 	"github.com/jeeinn/matea/internal/api"
 	"github.com/jeeinn/matea/internal/config"
 	"github.com/jeeinn/matea/internal/dispatcher"
+	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/llm"
 	"github.com/jeeinn/matea/internal/sandbox"
 	"github.com/jeeinn/matea/internal/store"
-	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
 	"github.com/jeeinn/matea/internal/workflow"
 
 	_ "modernc.org/sqlite"

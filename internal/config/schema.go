@@ -90,8 +90,8 @@ func DefaultSessionConfig() SessionConfig {
 }
 
 type ServerConfig struct {
-	Host      string `yaml:"host"`
-	Port      int    `yaml:"port"`
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
 	// PublicURL is the externally reachable address of Matea used to build the
 	// inbound webhook callback URL (Gitea → Matea). Empty means the inbound
 	// webhook auto-registration is disabled (C-13).

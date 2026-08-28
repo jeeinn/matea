@@ -34,11 +34,11 @@ func IsTerminalHubStatus(status string) bool {
 // re-attach polling after a restart and so idempotent re-submission reuses the
 // same remote run instead of starting a duplicate.
 type HubHandle struct {
-	TaskID         int64     `json:"task_id"`
-	Backend        string    `json:"backend"`         // backend name, e.g. "hub-opencode"
-	RemoteID       string    `json:"remote_id"`       // hub-side session/job id
-	IdempotencyKey string    `json:"idempotency_key"` // dedup key for safe resubmission
-	Status         string    `json:"status"`          // HubHandleStatus*
+	TaskID         int64  `json:"task_id"`
+	Backend        string `json:"backend"`         // backend name, e.g. "hub-opencode"
+	RemoteID       string `json:"remote_id"`       // hub-side session/job id
+	IdempotencyKey string `json:"idempotency_key"` // dedup key for safe resubmission
+	Status         string `json:"status"`          // HubHandleStatus*
 
 	// git_sync fields (task A2): the draft-branch contract state for hub write
 	// tasks. Empty/zero for read/reply tasks.

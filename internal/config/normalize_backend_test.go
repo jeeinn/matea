@@ -14,8 +14,8 @@ func TestNormalizeBackend(t *testing.T) {
 	}{
 		{"internal", "builtin"},
 		{"opencode_http", "hub-opencode"},
-		{"builtin", "builtin"},         // already canonical
-		{"hub-opencode", "hub-opencode"}, // already canonical
+		{"builtin", "builtin"},               // already canonical
+		{"hub-opencode", "hub-opencode"},     // already canonical
 		{"opencode-local", "opencode-local"}, // user-defined names pass through
 		{"hub-hermes", "hub-hermes"},
 		{"", ""}, // empty passes through

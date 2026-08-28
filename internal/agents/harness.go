@@ -165,10 +165,10 @@ type HarnessTurnResult struct {
 
 // PendingApproval is an action that needs human confirmation.
 type PendingApproval struct {
-	Kind        string `json:"kind"`                  // "comment" | "create_pr" | "push"
-	Description string `json:"description"`           // human-readable summary
-	Payload     string `json:"payload"`               // opaque data for execution
-	ExpiresAt   int64  `json:"expires_at,omitempty"`  // unix seconds, 0 = no expiry
+	Kind        string `json:"kind"`                 // "comment" | "create_pr" | "push"
+	Description string `json:"description"`          // human-readable summary
+	Payload     string `json:"payload"`              // opaque data for execution
+	ExpiresAt   int64  `json:"expires_at,omitempty"` // unix seconds, 0 = no expiry
 }
 
 // Harness is the unified pluggable execution kernel.
@@ -195,7 +195,7 @@ type Harness interface {
 // harnessRouter is the single registry for all harnesses. Adding a new brain
 // = implement Harness + one Register call.
 type harnessRouter struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	harnesses map[string]Harness
 }
 

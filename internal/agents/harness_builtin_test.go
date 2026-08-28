@@ -119,17 +119,17 @@ func TestBuiltinHarnessInRouter(t *testing.T) {
 func TestBuiltinHarnessIntegrationWithTaskContext(t *testing.T) {
 	// Verify that TaskContext is properly passed through
 	tc := &TaskContext{
-		TaskType:    "analyze_issue",
-		Role:        "analyze",
-		Repo:        "owner/repo",
-		IssueID:     123,
-		IssueTitle:  "Test Issue",
-		IssueBody:   "Issue body",
-		Provider:    "openai",
-		Model:       "gpt-4",
+		TaskType:     "analyze_issue",
+		Role:         "analyze",
+		Repo:         "owner/repo",
+		IssueID:      123,
+		IssueTitle:   "Test Issue",
+		IssueBody:    "Issue body",
+		Provider:     "openai",
+		Model:        "gpt-4",
 		SystemPrompt: "You are an analyst",
 		UserPrompt:   "Analyze this issue",
-		TaskID:      456,
+		TaskID:       456,
 	}
 
 	// Verify fields are accessible

@@ -1,8 +1,8 @@
 package workflow
 
 import (
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 // Surface represents the event surface (issue or PR).
@@ -35,21 +35,21 @@ type ResolveKey struct {
 // This table preserves all current behavior while making the mapping explicit.
 var TaskTypeTable = map[ResolveKey]string{
 	// Analyze role
-	{store.RoleAnalyze, SurfaceIssue, IntentAssign}:    "analyze_issue",
-	{store.RoleAnalyze, SurfaceIssue, IntentMention}:   "reply_comment",
-	{store.RoleAnalyze, SurfaceIssue, IntentSlashDev}:  "solve_comment", // Force dev mode
+	{store.RoleAnalyze, SurfaceIssue, IntentAssign}:     "analyze_issue",
+	{store.RoleAnalyze, SurfaceIssue, IntentMention}:    "reply_comment",
+	{store.RoleAnalyze, SurfaceIssue, IntentSlashDev}:   "solve_comment", // Force dev mode
 	{store.RoleAnalyze, SurfaceIssue, IntentSlashReply}: "reply_comment",
-	{store.RoleAnalyze, SurfacePR, IntentMention}:      "reply_comment",
-	{store.RoleAnalyze, SurfacePR, IntentSlashDev}:     "solve_comment", // Force dev mode
-	{store.RoleAnalyze, SurfacePR, IntentSlashReply}:   "reply_comment",
+	{store.RoleAnalyze, SurfacePR, IntentMention}:       "reply_comment",
+	{store.RoleAnalyze, SurfacePR, IntentSlashDev}:      "solve_comment", // Force dev mode
+	{store.RoleAnalyze, SurfacePR, IntentSlashReply}:    "reply_comment",
 
 	// Coder role
-	{store.RoleCoder, SurfaceIssue, IntentAssign}:    "solve_issue", // Note: special case for bug label → fix_bug
-	{store.RoleCoder, SurfaceIssue, IntentMention}:   "solve_comment",
-	{store.RoleCoder, SurfaceIssue, IntentSlashDev}:  "solve_comment",
+	{store.RoleCoder, SurfaceIssue, IntentAssign}:     "solve_issue", // Note: special case for bug label → fix_bug
+	{store.RoleCoder, SurfaceIssue, IntentMention}:    "solve_comment",
+	{store.RoleCoder, SurfaceIssue, IntentSlashDev}:   "solve_comment",
 	{store.RoleCoder, SurfaceIssue, IntentSlashReply}: "reply_comment", // Force reply mode
-	{store.RoleCoder, SurfacePR, IntentMention}:      "solve_comment",
-	{store.RoleCoder, SurfacePR, IntentSlashDev}:     "solve_comment",
+	{store.RoleCoder, SurfacePR, IntentMention}:       "solve_comment",
+	{store.RoleCoder, SurfacePR, IntentSlashDev}:      "solve_comment",
 	{store.RoleCoder, SurfacePR, IntentSlashReply}:    "reply_comment", // Force reply mode
 
 	// Review role

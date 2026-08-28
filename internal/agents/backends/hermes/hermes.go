@@ -52,11 +52,11 @@ const (
 
 // hermesRunRequest is the body of POST /v1/runs.
 type hermesRunRequest struct {
-	Input               string                          `json:"input"`
-	SessionID           string                          `json:"session_id,omitempty"`
-	Instructions        string                          `json:"instructions,omitempty"`
-	ConversationHistory []hermesConversationMessage      `json:"conversation_history,omitempty"`
-	PreviousResponseID  string                          `json:"previous_response_id,omitempty"`
+	Input               string                      `json:"input"`
+	SessionID           string                      `json:"session_id,omitempty"`
+	Instructions        string                      `json:"instructions,omitempty"`
+	ConversationHistory []hermesConversationMessage `json:"conversation_history,omitempty"`
+	PreviousResponseID  string                      `json:"previous_response_id,omitempty"`
 }
 
 // hermesConversationMessage is one turn of conversation history.
@@ -96,8 +96,8 @@ type Backend struct {
 	// populate this — Submit returns before completion — but the cache
 	// makes the adapter robust to fast-fail and synchronous-completion
 	// scenarios without violating the async contract.
-	mu             sync.Mutex
-	terminalCache  map[string]agents.BackendResult
+	mu            sync.Mutex
+	terminalCache map[string]agents.BackendResult
 }
 
 // Compile-time interface compliance check.

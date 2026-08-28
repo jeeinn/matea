@@ -64,4 +64,3 @@ func FinalizeWriteTaskPR(adminClient *gitea.Client, owner, repo, branchName, bas
 		PRID:    pr.Number,
 	}, nil
 }
-

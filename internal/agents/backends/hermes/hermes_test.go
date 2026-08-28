@@ -45,11 +45,11 @@ func startHermesMock(t *testing.T) (*httptest.Server, *mockHermesControl) {
 
 // mockHermesControl drives the mock server behavior.
 type mockHermesControl struct {
-	mu       sync.Mutex
-	runs     map[string]*mockHermesRun
-	counter  int
-	token    string // if set, require Bearer <token>
-	fail502  bool
+	mu      sync.Mutex
+	runs    map[string]*mockHermesRun
+	counter int
+	token   string // if set, require Bearer <token>
+	fail502 bool
 }
 
 type mockHermesRun struct {
@@ -169,14 +169,14 @@ func TestBackend_SubmitAndPoll(t *testing.T) {
 	b := newTestBackend(t, server.URL)
 
 	tc := &agents.TaskContext{
-		TaskType:    "analyze_issue",
-		Role:        "analyze",
-		Repo:        "test/repo",
-		IssueID:     123,
-		IssueTitle:  "Test issue",
-		IssueBody:   "Issue body",
+		TaskType:     "analyze_issue",
+		Role:         "analyze",
+		Repo:         "test/repo",
+		IssueID:      123,
+		IssueTitle:   "Test issue",
+		IssueBody:    "Issue body",
 		SystemPrompt: "You are an analyst.",
-		UserPrompt:  "Please analyze this issue.",
+		UserPrompt:   "Please analyze this issue.",
 	}
 
 	// Submit returns a handle quickly (async).
@@ -308,10 +308,10 @@ func TestBackend_Submit_WithDiff(t *testing.T) {
 	b := newTestBackend(t, server.URL)
 
 	tc := &agents.TaskContext{
-		TaskType: "review_pr",
-		Repo:     "test/repo",
-		PRID:     42,
-		Diff:     "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,3 @@\n-foo\n+bar",
+		TaskType:   "review_pr",
+		Repo:       "test/repo",
+		PRID:       42,
+		Diff:       "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,3 @@\n-foo\n+bar",
 		UserPrompt: "Review this PR.",
 	}
 
@@ -408,11 +408,11 @@ func TestBuildRunRequestGitSyncInjection(t *testing.T) {
 	b := newTestBackend(t, srv.URL)
 
 	h, err := b.Submit(context.Background(), &agents.TaskContext{
-		TaskType:    "solve_issue",
-		Repo:        "o/r",
-		IssueID:     5,
-		TaskID:      42,
-		UserPrompt:  "Fix it",
+		TaskType:   "solve_issue",
+		Repo:       "o/r",
+		IssueID:    5,
+		TaskID:     42,
+		UserPrompt: "Fix it",
 		MemoryKeys: map[string]string{"analysis_summary": "prior finding"},
 		GitSync: &agents.GitSyncInfo{
 			CloneURL:       "ssh://git@example.com/o/r.git",

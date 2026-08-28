@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/jeeinn/matea/internal/gitea"
-	"github.com/jeeinn/matea/internal/store"
 	giteaingress "github.com/jeeinn/matea/internal/ingress/gitea"
+	"github.com/jeeinn/matea/internal/store"
 )
 
 // GateResult is the outcome of a gate check.
