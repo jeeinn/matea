@@ -239,9 +239,9 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 	log.Printf("[INFO] Task %d enqueued: agent_id=%d agent=%s role=%s type=%s logic_issue_id=%d pr_id=%d effective_key=%d session_id=%s",
 		task.ID, result.Agent.ID, result.Agent.Name, result.Role, result.TaskType, logicIssueID, prID, issueID, sessionID)
 
-	// Post progress comment
-	d.postGateComment(result.Agent, repo, issueID,
-		fmt.Sprintf("🔄 %s 已开始处理（task #%d）", result.Agent.Name, task.ID))
+	// Post the task's status card instead of the old "已开始处理" comment: one
+	// card per task, PATCHed in place as it progresses (20260828 plan §2.5).
+	d.postStatusCard(result.Agent, task, issueID)
 
 	return true
 }

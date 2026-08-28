@@ -771,17 +771,23 @@ func (e *Executor) writeFailureToGitea(task *store.Task, taskErr error) error {
 		return fmt.Errorf("load agent for failure writeback: %w", err)
 	}
 
-	client := e.giteaFactory.GetGiteaClient(agent.GiteaToken)
-
-	parts := strings.SplitN(task.Repo, "/", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid repo format: %s", task.Repo)
-	}
-	owner, repo := parts[0], parts[1]
-
-	commentBody := workflow.FormatAgentComment(formatFailureComment(task, taskErr))
-	if err := client.IssueComment(owner, repo, targetID, commentBody); err != nil {
-		return fmt.Errorf("post failure comment: %w", err)
+	// Fold the failure into the task's status card: the card is the single
+	// place a task's outcome lives, so a failed task leaves one trace instead
+	// of a stale "已开始处理" comment plus a separate failure comment.
+	//
+	// A failure cause is exactly the information a user must not miss, so if
+	// the card cannot be written the classic failure comment is still posted.
+	if err := failStatusCard(e.giteaFactory, e.db, agent, task, targetID, taskErr.Error()); err != nil {
+		log.Printf("[WARN] Task %d status card not updated (%v); falling back to a plain failure comment", task.ID, err)
+		client := e.giteaFactory.GetGiteaClient(agent.GiteaToken)
+		parts := strings.SplitN(task.Repo, "/", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid repo format: %s", task.Repo)
+		}
+		commentBody := workflow.FormatAgentComment(formatFailureComment(task, taskErr))
+		if err := client.IssueComment(parts[0], parts[1], targetID, commentBody); err != nil {
+			return fmt.Errorf("post failure comment: %w", err)
+		}
 	}
 
 	log.Printf("[INFO] Task %d failure written back to %s#%d", task.ID, task.Repo, targetID)
