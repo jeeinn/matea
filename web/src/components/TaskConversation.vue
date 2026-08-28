@@ -48,7 +48,7 @@
         >
           <template #description>
             <p>请在「系统配置」开启 debug.conversation_log.enabled 后重新跑任务</p>
-            <p class="empty-hint">仅多轮 Agent Loop（如 solve_issue / solve_comment）会写入对话日志</p>
+            <p class="empty-hint">多轮 Agent Loop 与 hub 后端任务在开关开启后均会写入对话日志</p>
           </template>
         </el-empty>
 
