@@ -38,6 +38,10 @@ type Task struct {
 	FinishedAt *time.Time `json:"finished_at"`
 	Result     string     `json:"result"`
 	Error      string     `json:"error"`
+	// StatusCommentID is the Gitea comment ID of the task's status card (0 =
+	// none yet). Persisted so Matea can PATCH the same card after a restart
+	// instead of posting a second one.
+	StatusCommentID int64 `json:"status_comment_id"`
 }
 
 // TaskUsage represents token usage for a task.
@@ -160,12 +164,23 @@ func (db *DB) UpdateTaskStatus(id int64, status, result, errMsg string) error {
 	return nil
 }
 
+// UpdateTaskStatusCommentID records the Gitea comment ID of the task's status
+// card. Called immediately after the card is created so later state changes
+// PATCH that same comment (and so a restart can find it again without scanning
+// comments for the marker).
+func (db *DB) UpdateTaskStatusCommentID(id, commentID int64) error {
+	if _, err := db.Exec(`UPDATE tasks SET status_comment_id=? WHERE id=?`, commentID, id); err != nil {
+		return fmt.Errorf("update task status comment id: %w", err)
+	}
+	return nil
+}
+
 // taskColumns is the common SELECT column list for tasks.
-const taskColumns = `id, event, repo, issue_id, pr_id, agent_id, task_type, context, status, priority, delivery_id, base_branch, session_id, role, created_at, started_at, finished_at, result, error`
+const taskColumns = `id, event, repo, issue_id, pr_id, agent_id, task_type, context, status, priority, delivery_id, base_branch, session_id, role, created_at, started_at, finished_at, result, error, status_comment_id`
 
 // taskScanFields returns scan targets for a Task row.
 func taskScanFields(t *Task) []interface{} {
-	return []interface{}{&t.ID, &t.Event, &t.Repo, &t.IssueID, &t.PRID, &t.AgentID, &t.TaskType, &t.Context, &t.Status, &t.Priority, &t.DeliveryID, &t.BaseBranch, &t.SessionID, &t.Role, &t.CreatedAt, &t.StartedAt, &t.FinishedAt, &t.Result, &t.Error}
+	return []interface{}{&t.ID, &t.Event, &t.Repo, &t.IssueID, &t.PRID, &t.AgentID, &t.TaskType, &t.Context, &t.Status, &t.Priority, &t.DeliveryID, &t.BaseBranch, &t.SessionID, &t.Role, &t.CreatedAt, &t.StartedAt, &t.FinishedAt, &t.Result, &t.Error, &t.StatusCommentID}
 }
 
 // ListPendingTasks returns all pending tasks ordered by priority and creation time.

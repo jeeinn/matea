@@ -15,6 +15,39 @@ func (c *Client) IssueComment(owner, repo string, issueID int, body string) erro
 	return nil
 }
 
+// CreateIssueComment posts a comment on the given issue and returns the created
+// comment, including the ID Gitea assigned to it.
+//
+// Prefer this over IssueComment whenever the caller may need to update the
+// comment later: the task status card is created once at task start and then
+// PATCHed in place, instead of stacking one comment per state change.
+func (c *Client) CreateIssueComment(owner, repo string, issueID int, body string) (*IssueComment, error) {
+	raw, err := c.do("POST", fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, issueID),
+		map[string]string{"body": body})
+	if err != nil {
+		return nil, fmt.Errorf("create issue comment: %w", err)
+	}
+	var comment IssueComment
+	if err := json.Unmarshal(raw, &comment); err != nil {
+		return nil, fmt.Errorf("unmarshal created comment: %w", err)
+	}
+	return &comment, nil
+}
+
+// EditIssueComment replaces the body of an existing comment in place
+// (PATCH /repos/{owner}/{repo}/issues/comments/{id}).
+//
+// Gitea only allows editing comments the authenticated identity may modify, so
+// callers must edit with the same token that created the comment — the status
+// card is created with the task's agent token and must be updated with it too.
+func (c *Client) EditIssueComment(owner, repo string, commentID int, body string) error {
+	if _, err := c.do("PATCH", fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID),
+		map[string]string{"body": body}); err != nil {
+		return fmt.Errorf("edit issue comment: %w", err)
+	}
+	return nil
+}
+
 // IssueAddLabels adds labels to the given issue.
 func (c *Client) IssueAddLabels(owner, repo string, issueID int, labels []string) error {
 	_, err := c.do("POST", fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, issueID),

@@ -40,30 +40,42 @@ func (d *Dispatcher) postL3Notification(task *store.Task) {
 		return
 	}
 
+	targetID := effectiveIssueKey(task.IssueID, task.PRID)
+
 	switch task.TaskType {
 	case "analyze_issue":
-		if !d.wfPolicy.Notify.OnAnalyzeDone {
-			return
+		detail := ""
+		if d.wfPolicy.Notify.OnAnalyzeDone {
+			detail = workflow.FormatL3Comment(workflow.L3AnalyzeDone, map[string]string{
+				"task_id":    fmt.Sprintf("%d", task.ID),
+				"agent_name": agent.GiteaUsername,
+			})
 		}
-		body := workflow.FormatL3Comment(workflow.L3AnalyzeDone, map[string]string{
-			"task_id":    fmt.Sprintf("%d", task.ID),
-			"agent_name": agent.GiteaUsername,
-		})
-		d.postGateComment(agent, task.Repo, effectiveIssueKey(task.IssueID, task.PRID), body)
+		d.completeStatusCard(agent, task, targetID, detail)
 
 	case "solve_issue", "fix_bug", "solve_comment":
-		if !d.wfPolicy.Notify.OnCoderPROpened {
-			return
+		detail := ""
+		// Guidance only when a PR was actually created and the notice is on.
+		if d.wfPolicy.Notify.OnCoderPROpened && task.PRID > 0 {
+			giteaCfg := d.giteaCfg.Load()
+			prURL := fmt.Sprintf("%s/%s/pulls/%d", strings.TrimRight(giteaCfg.URL, "/"), task.Repo, task.PRID)
+			detail = workflow.FormatL3Comment(workflow.L3CoderPROpened, map[string]string{
+				"pr_url": prURL,
+			})
 		}
-		// Only notify when a PR was actually created
-		if task.PRID == 0 {
-			return
+		d.completeStatusCard(agent, task, targetID, detail)
+	}
+}
+
+// completeStatusCard flips the task's card to "完成", folding the L3 guidance
+// into it. If the card cannot be written at all, the guidance is posted as a
+// plain comment instead — the user should learn the next step even when the
+// card machinery is broken.
+func (d *Dispatcher) completeStatusCard(agent *store.Agent, task *store.Task, targetID int, detail string) {
+	if err := d.finishStatusCard(agent, task, targetID, detail); err != nil {
+		log.Printf("[WARN] Task %d status card not updated (%v); falling back to a plain comment", task.ID, err)
+		if detail != "" {
+			d.postGateComment(agent, task.Repo, targetID, detail)
 		}
-		giteaCfg := d.giteaCfg.Load()
-		prURL := fmt.Sprintf("%s/%s/pulls/%d", strings.TrimRight(giteaCfg.URL, "/"), task.Repo, task.PRID)
-		body := workflow.FormatL3Comment(workflow.L3CoderPROpened, map[string]string{
-			"pr_url": prURL,
-		})
-		d.postGateComment(agent, task.Repo, effectiveIssueKey(task.IssueID, task.PRID), body)
 	}
 }

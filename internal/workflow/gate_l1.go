@@ -87,12 +87,12 @@ func (g *L1Gate) checkReviewRequiresPR(evt *giteaingress.WebhookEvent) GateResul
 
 // FormatAgentComment wraps a message with the agent comment marker for loop prevention.
 func FormatAgentComment(body string) string {
-	return "<!-- matea-agent -->\n" + body
+	return AgentCommentMarker + "\n" + body
 }
 
 // IsAgentComment checks if a comment was posted by the gateway agent.
 func IsAgentComment(body string) bool {
-	return strings.HasPrefix(body, "<!-- matea-agent -->")
+	return strings.HasPrefix(body, AgentCommentMarker)
 }
 
 // CommentOnIssue posts a comment on the issue/PR using the agent's token.

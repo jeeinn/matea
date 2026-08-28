@@ -296,6 +296,10 @@ func (db *DB) migrate() error {
 		// session summary injected into continuation prompts (B2.3).
 		`ALTER TABLE agent_sessions ADD COLUMN last_head TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_sessions ADD COLUMN memory TEXT NOT NULL DEFAULT ''`,
+		// Status card (20260828-issue-status-card): the Gitea comment ID of a
+		// task's single progress card, so it can be PATCHed in place across
+		// restarts instead of stacking one comment per state change.
+		`ALTER TABLE tasks ADD COLUMN status_comment_id INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, m := range additionalMigrations {
