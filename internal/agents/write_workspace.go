@@ -264,9 +264,12 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 		if wwc.BranchName != "" && wwc.RepoInfo != nil &&
 			wwc.BranchName != wwc.RepoInfo.DefaultBranch &&
 			factory != nil && factory.giteaFactory != nil {
-			adminClient := factory.giteaFactory.GetAdminGiteaClient()
-			if adminClient == nil {
-				return nil, fmt.Errorf("cannot finalize delivery for branch %s: admin gitea client unavailable", wwc.BranchName)
+			// Attribute the delivery to the agent that ran the task (see
+			// resolveTaskGiteaClient); falls back to admin only if the agent
+			// carries no token.
+			client := resolveTaskGiteaClient(factory.giteaFactory, agent)
+			if client == nil {
+				return nil, fmt.Errorf("cannot finalize delivery for branch %s: gitea client unavailable", wwc.BranchName)
 			}
 			// Push the local branch before opening the PR so the remote head
 			// exists. This is a no-op when already in sync, and creates the
@@ -283,7 +286,7 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 			if wwc.UseSession {
 				saveSessionProgress(factory, task, wwc.BranchName, git.HeadSHA())
 			}
-			res, err := FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+			res, err := FinalizeWriteTaskPR(client, wwc.Owner, wwc.Repo, wwc.BranchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 			if err != nil {
 				// Push may have succeeded, but without a PR the delivery is
 				// incomplete — do NOT report success.
@@ -332,11 +335,11 @@ func finalizeWriteChanges(ctx context.Context, wwc *WriteWorkspaceContext, task 
 		saveSessionProgress(factory, task, branchName, git.HeadSHA())
 	}
 
-	adminClient := factory.giteaFactory.GetAdminGiteaClient()
-	if adminClient == nil {
-		return nil, fmt.Errorf("changes pushed to %s but cannot open PR: admin gitea client unavailable", branchName)
+	client := resolveTaskGiteaClient(factory.giteaFactory, agent)
+	if client == nil {
+		return nil, fmt.Errorf("changes pushed to %s but cannot open PR: gitea client unavailable", branchName)
 	}
-	return FinalizeWriteTaskPR(adminClient, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
+	return FinalizeWriteTaskPR(client, wwc.Owner, wwc.Repo, branchName, wwc.RepoInfo.DefaultBranch, task, taskSubType, agentResult)
 }
 
 // prepareAnalyzeWorkspace sets up a temporary sandbox with a shallow clone of

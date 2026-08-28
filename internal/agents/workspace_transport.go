@@ -277,11 +277,19 @@ func (t *gitSyncTransport) Approve(ctx context.Context, task *store.Task, agent 
 
 	// Validation passed: the hub's draft branch is the deliverable. Open or
 	// update the PR — no re-commit, no re-push (unlike finalizeWriteChanges).
+	//
+	// The fetch/validation above is Matea's own platform action (admin), but
+	// the PR itself belongs to the agent that did the work, so it is opened
+	// with the agent's token — see resolveTaskGiteaClient.
 	taskSubType := "dev"
 	if task.TaskType == "fix_bug" {
 		taskSubType = "bugfix"
 	}
-	return FinalizeWriteTaskPR(adminClient, owner, repo, info.DraftBranch, info.BaseBranch, task, taskSubType, agentResult)
+	client := resolveTaskGiteaClient(t.giteaFactory, agent)
+	if client == nil {
+		return nil, fmt.Errorf("git_sync approve: gitea client unavailable")
+	}
+	return FinalizeWriteTaskPR(client, owner, repo, info.DraftBranch, info.BaseBranch, task, taskSubType, agentResult)
 }
 
 // fetchDraft clones nothing whole: it inits a bare-ish temp repo, fetches the
