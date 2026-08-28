@@ -7,10 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-28
+
+### Added
+- **Agent 显式接管已存在的 Gitea 账号**：创建/更新 Agent 时勾选 `take_over_gitea_user` 即可显式接管同名 Gitea 账号（重置密码、签发 Token 并标记 `managed_by_matea`），解决此前仅有错误提示却无入口的问题
+- **工作分支前缀统一为 `matea/`**：builtin 写路径分支从 `ai/{type}/issue-{id}` 改为 `matea/{type-kebab}-{id}`，与 hub 后端 `matea/hub-{taskID}` 统一品牌感知
+- **hub 后端对话日志透传**：`BackendResult` 新增 `Messages` 字段，`hub-opencode` / `hub-hermes` 把完整对话 transcript 带回 Matea；任务详情页 `TaskConversation.vue` 复用 `debug.conversation_log.enabled` 开关展示 hub 后端对话
+- **对话日志记录初始 system/user 输入**：agent loop 启动即写入首条 system/user 消息，便于追踪完整上下文
+- **solve_comment 评论注入条数可配置**：新增 `agents.loop.solve_comment.max_injected_comments`（默认 50），控制注入 solver 的上下文评论数量
+- **Linux 交叉编译脚本**：新增 `scripts/build-linux.sh`（Bash）与 `scripts/build-linux.bat`（Windows CMD），先构建 Web UI 再交叉编译 linux/amd64/arm64 二进制
+
+### Changed
+- **默认重试/超时策略收紧**：单次任务默认超时 5m → 20m；429 退避默认 60s、429 重试默认 10 次，缓解大模型限流导致失败
+- **SenseNova / DeepSeek 预设 URL 修正**：`config.full-example.yaml` 与 provider preset 同步最新端点
+- **PR 创建评论改用 Gitea 原生 `#N` 引用**：替代此前依赖 `pr.HTMLURL` 的完整链接，规避 ROOT_URL 配置错误导致的内网/不可点击链接
+- **hub-opencode 模型透传策略**：不再默认透传 Agent 的 provider/model（避免命中 OpenCode 未知或付费模型）；仅当 `backend_options` 成对填写 `opencode_model` + `opencode_provider` 时才投递，否则使用 OpenCode 服务端默认模型
+- **agents 配置热更新后 hub backend 免重启**：Web UI 新增/修改 `agents.backends`、`agents.defaults`、`agents.loop` 后，Dispatcher/Executor 自动重建 RunnerFactory，无需重启服务
+
 ### Fixed
 - **Gitea Token 权限指引错误导致初始化被拦截**：向导/文档此前只提示 `write:admin` + repo，但 Gitea ≥1.22 细粒度 scope 各类别相互独立，`GET /user` 需要 `read:user`——按旧文案生成的 Token 在「完成初始化」时 403。`gitea.TestConnection()` 重写为分项权限探查（identity/repo/issue/admin），返回结构化 `checks` 与 `required_scopes`；解析 Gitea scope 拒绝报文给出精确缺失提示（如「Token 缺少 read:user（当前仅含：write:admin, write:repository）」）
 - **向导第 1 步权限预检**：Token 输入框下方列出精确 scope 清单（`read:user` / `write:repository` / `write:issue` / `write:admin`）；「测试连接」逐项展示权限检查结果，未通过前「下一步」禁用（修改地址/Token 后需重测）；第 3 步失败可一键返回第 1 步；完成页展示降级警告（如非站点管理员）
 - **文案同步修正**：SystemConfig Gitea Token 提示、README 权限清单（补 `read:user`/`write:issue`）、`docs/DEPLOYMENT.md`（含 403 scope 报错 FAQ）、`config.full-example.yaml` 注释
+- **session 分支不存在时降级为新建分支**：修复首个任务失败（如 429）后分支未推送，后续任务按"已存在分支"检出导致硬失败的问题
+- **solve_comment 会话分支注入 BaseBranch 时同样允许全新创建**：与上述分支降级对齐
+- **hub-opencode 运行失败时透传 provider 真实错误**：OpenCode 返回 `info.error` 时（如 401/额度/模型不存在），不再吞掉为 "no assistant text message found"，直接把 provider 错误抛给上层
+- **hub 对话日志审查修复**：Poll cache-miss 分支保留重启后失败会话的 transcript；`StateCanceled` 与 `abortHubRun` 分支也写入对话日志；iteration 0 去重、assistant 迭代续号；失败路径 `BackendResult` 不再填充 `GitSync`
+- **Web UI 细节**：HTTP 环境剪贴板复制 fallback；模型发现后默认模型标签刷新；webhook 设置文案更明确
 
 ## [0.12.0] - 2026-08-21
 
@@ -476,7 +498,8 @@ Matea 品牌首发：项目更名、Bootstrap 自配置、Release 恢复单二�
 - SQLite 存储 (WAL 模式)
 - YAML 配置 (环境变量展开)
 
-[Unreleased]: https://github.com/jeeinn/matea/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/jeeinn/matea/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/jeeinn/matea/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/jeeinn/matea/compare/v0.11.4...v0.12.0
 [0.11.4]: https://github.com/jeeinn/matea/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/jeeinn/matea/compare/v0.11.2...v0.11.3

@@ -200,7 +200,7 @@ func main() {
 		setup := config.CheckSetup(active)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","version":"0.12.0","setup_required":%t}`, setup.SetupRequired)
+		fmt.Fprintf(w, `{"status":"ok","version":"0.12.1","setup_required":%t}`, setup.SetupRequired)
 	})
 
 	// Webhook handler - wired to dispatcher
