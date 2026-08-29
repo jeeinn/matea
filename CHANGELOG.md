@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **git_sync 续写 PR 开错 base（start-point anchoring 事故修复）**：`Prepare` 此前把 `store.Task.BaseBranch`（语义是 PR head / 会话工作分支）当作合并基线，导致 PR 上二次 `@code-opencode` 的续写任务把新 draft 的合并目标算成上一轮的 draft 分支（`matea/hub-14`），漂移检测窗口也错放在 draft 分支上。现改为：有 `task.PRID` 时取 PR 的 `base.ref`，否则取仓库默认分支；`hub_handles` 新增 `base_branch` 列持久化该结果，重启 re-attach 对旧行按同一规则重新解析，不再回退到 `task.BaseBranch`；draft 分支（`matea/hub-*`）永不作为基线
+- **git_sync 续写锚点从「建议」升级为契约**：下发给 hub 的 git workflow 明确要求完整克隆（禁 `--depth` / `--single-branch`，clone 命令带 `--no-single-branch`），并在 `git checkout -b <draft> <anchor>` 后追加 `git merge-base --is-ancestor <anchor> HEAD` 自校验，hub 一旦从默认分支 tip 重新起分支就在这一步失败，而不是等整轮跑完才在 Approve 报错
+- **hub-opencode 的 memory 注入不再被 git 契约覆盖**：git_sync 分支此前从 `tc.UserPrompt` 重新拼装 prompt，把已拼好的会话 / repo memory 整块丢掉（Hermes 后端无此问题），续写任务的 hub 因此完全不知道上一轮做过什么。现改为在 memory 之后追加契约：memory 在前、强制 workflow 在后
+- **start-point anchoring 报错可诊断**：draft 从 base tip 起分支时，报错直接说明「从 base tip 起分支、上一轮工作不在分支内」并给出正确的 `git checkout -b` 命令；无共同祖先时提示 `shares no history`；`fetchDraft` 在锚点对象缺失时按 sha 兜底抓取一次，避免「抓不到」被误判为「起点错」
+
 ## [0.12.1] - 2026-08-28
 
 ### Added
