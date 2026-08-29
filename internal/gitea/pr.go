@@ -109,6 +109,26 @@ func PRHeadRef(pr map[string]interface{}) (string, error) {
 	return ref, nil
 }
 
+// PRBaseRef extracts the base branch ref from a PR detail map returned by
+// PRGet: the branch the PR merges INTO (as opposed to PRHeadRef, the branch
+// carrying the proposed changes).
+//
+// git_sync Prepare uses it to target a continuation task's draft at the same
+// branch the PR under discussion targets (20260829 start-point-anchoring fix):
+// it is the only authoritative source of "where should this work land", since
+// store.Task.BaseBranch holds the PR head / session working branch.
+func PRBaseRef(pr map[string]interface{}) (string, error) {
+	base, ok := pr["base"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("PR base missing or wrong type")
+	}
+	ref, ok := base["ref"].(string)
+	if !ok || ref == "" {
+		return "", fmt.Errorf("PR base ref missing")
+	}
+	return ref, nil
+}
+
 // PRDiff returns the diff of a pull request.
 func (c *Client) PRDiff(owner, repo string, prID int) (string, error) {
 	req, err := http.NewRequest("GET",

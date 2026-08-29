@@ -95,6 +95,43 @@ func TestValidateGitSyncDraft_WrongStartPoint(t *testing.T) {
 	assert.Contains(t, err.Error(), "start-point anchoring")
 }
 
+// F5: the two real-world shapes of a wrong start point must be told apart — a
+// draft that branched from the base tip (previous round's work silently lost)
+// versus one with unrelated history.
+func TestValidateGitSyncDraft_StartFromBaseNamesLostWork(t *testing.T) {
+	info := testGitSyncInfo()
+	info.AnchorHEAD = "eeee4444"
+	result := &GitSyncResult{DraftBranch: "matea/hub-42", DraftHEAD: "bbbb1111"}
+	fetched := &fetchedDraft{
+		DraftHEAD:       "bbbb1111",
+		BaseHEAD:        "aaaa0000",
+		IsAncestor:      false,
+		StartedFromBase: true,
+	}
+	err := validateGitSyncDraft(info, result, fetched, DiffPolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start-point anchoring")
+	assert.Contains(t, err.Error(), "branched from base")
+	assert.Contains(t, err.Error(), "previous session's work is NOT in this branch")
+	assert.Contains(t, err.Error(), "git checkout -b matea/hub-42 eeee4444", "the error tells the operator how to redo it")
+}
+
+func TestValidateGitSyncDraft_UnrelatedHistoryReportsNoMergeBase(t *testing.T) {
+	info := testGitSyncInfo()
+	info.AnchorHEAD = "eeee4444"
+	result := &GitSyncResult{DraftBranch: "matea/hub-42", DraftHEAD: "bbbb1111"}
+	fetched := &fetchedDraft{
+		DraftHEAD:  "bbbb1111",
+		BaseHEAD:   "aaaa0000",
+		IsAncestor: false,
+		MergeBase:  "", // unrelated histories: git merge-base found nothing
+	}
+	err := validateGitSyncDraft(info, result, fetched, DiffPolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start-point anchoring")
+	assert.Contains(t, err.Error(), "shares no history")
+}
+
 func TestValidateGitSyncDraft_BaseDriftFails(t *testing.T) {
 	info := testGitSyncInfo()
 	result := &GitSyncResult{DraftBranch: "matea/hub-42", DraftHEAD: "bbbb1111"}

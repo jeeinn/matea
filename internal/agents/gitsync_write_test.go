@@ -82,11 +82,23 @@ func (b *gitSyncTestHub) HealthCheck(ctx context.Context) error       { return b
 // gitSyncFakeGitea serves the API surface Approve touches. The repo's
 // clone_url points at a local bare repo via file:// so fetchDraft runs real git.
 type gitSyncFakeGitea struct {
-	t         *testing.T
-	cloneURL  string
-	mainHEAD  string
+	t        *testing.T
+	cloneURL string
+	mainHEAD string
+	// defaultBranch overrides the repo metadata answer (empty = "main").
+	defaultBranch string
+	// prBaseRef, when set, makes GET /pulls/{n} answer with a PR whose base
+	// ref is this value — the PR a continuation task runs on.
+	prBaseRef string
 	prCreated *gitea.CreatePRRequest
 	server    *httptest.Server
+}
+
+func (g *gitSyncFakeGitea) defaultBranchOrMain() string {
+	if strings.TrimSpace(g.defaultBranch) != "" {
+		return g.defaultBranch
+	}
+	return "main"
 }
 
 func newGitSyncFakeGitea(t *testing.T, cloneURL, mainHEAD string) *gitSyncFakeGitea {
@@ -94,15 +106,27 @@ func newGitSyncFakeGitea(t *testing.T, cloneURL, mainHEAD string) *gitSyncFakeGi
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/o/r", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"default_branch": "main",
+			"default_branch": g.defaultBranchOrMain(),
 			"clone_url":      g.cloneURL,
 			"ssh_url":        "ssh://git@example.com/o/r.git",
 		})
 	})
-	mux.HandleFunc("/api/v1/repos/o/r/branches/main", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/repos/o/r/branches/{name...}", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"name":   "main",
+			"name":   r.PathValue("name"),
 			"commit": map[string]any{"id": g.mainHEAD},
+		})
+	})
+	mux.HandleFunc("/api/v1/repos/o/r/pulls/{index}", func(w http.ResponseWriter, r *http.Request) {
+		if g.prBaseRef == "" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"message": "pull request does not exist"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"number": 8,
+			"base":   map[string]any{"ref": g.prBaseRef},
+			"head":   map[string]any{"ref": "matea/hub-14"},
 		})
 	})
 	mux.HandleFunc("/api/v1/repos/o/r/pulls", func(w http.ResponseWriter, r *http.Request) {
