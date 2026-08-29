@@ -167,12 +167,31 @@ if gitSync {
 失败信息升级为：
 `draft 从 <base tip> 起分支，未继承续写锚点 <anchor>（上一轮工作不在分支内）`。
 
-### F6（可选，设计变更）平台侧强制：Prepare 时把 draft ref 建在锚点上
+### F6（**经评审后决定不实现**）平台侧强制：Prepare 时把 draft ref 建在锚点上
 
 `git push origin <anchor>:refs/heads/matea/hub-{taskID}`，hub 即便只跑 `git checkout -b matea/hub-N`
 也会 DWIM 落到锚点；且 hub 若仍从 base tip 起分支，其 push 会因 non-fast-forward 被拒（fail 提前到 push 时刻）。
 代价：Matea 首次为一个空 ref 推送（trust model v3 的"Matea 不代推"需要开这个口子），
 且 `gitsync_sweep.go` 目前只扫 deploy key、不扫孤儿 draft 分支，需要补清理。
+
+**决议（2026-08-29）：不实现。** 理由：
+
+1. **它要解决的问题已被更轻的手段覆盖。** F6 的核心收益是"把起点错从 Approve 提前到 push 时刻"。
+   而 F3 已经把失败点提前到 hub 的第 4 步——`checkout -b <anchor>` 之后紧跟
+   `merge-base --is-ancestor <anchor> HEAD` 自校验，跑任何代码之前就会失败；F5 再兜一层，
+   让漏网时的报错直接给出正确的 `git checkout -b` 命令。剩下的收益只是"少跑一轮 LLM"，
+   不值得为此改动信任模型。
+2. **成本不在代码量，在破例。** Matea 为一个空 ref 主动 push，直接违反 trust model v3
+   "Matea 不代推"的不变量。这条不变量是 git_sync 其余安全校验的信任基础——deploy key 按任务发放、
+   draft 分支独占性、必需 footer 都建立在"Matea 只校验不代写"之上。为 P2 级收益开口子，
+   后续每个"顺手让 Matea 推一下"的改动都会援引此例。
+3. **新增高危清理面。** Prepare 建了 ref 而任务失败/取消，draft 分支即成孤儿；
+   `gitsync_sweep.go` 得新增远端 ref 的扫描与删除，而删除远端 ref 是不可逆操作，
+   误删的代价远高于本次要防的问题。
+
+若将来确实需要平台侧强约束，优先选这两个不破坏信任模型的变体：
+(a) Prepare 时把锚点打成一个 tag 推上去（tag 非业务 ref），下发给 hub 去 `git fetch && git checkout -b <branch> <tag>`；
+(b) 保持现状，把"起点错"作为 Approve 的硬门禁并附修复命令（F5 已实现）。
 
 ## 5. 验收
 
@@ -186,11 +205,11 @@ if gitSync {
 
 ## 6. 落地顺序建议
 
-F1 + F2 + F4（纯 Matea 侧，风险低、本次直接致病）→ F3 + F5（契约与可诊断性）→ F6（设计变更，需单独评审）。
+F1 + F2 + F4（纯 Matea 侧，风险低、本次直接致病）→ F3 + F5（契约与可诊断性）→ ~~F6~~（评审后决定不实现，理由见第 4 节 F6 条目）。
 
 ## 7. 落地状态（2026-08-29）
 
-F1~F5 已实现，F6 未做（设计变更，需单独评审）。
+F1~F5 已实现并合入（`52f5d28` 代码+测试、`05fd298` 文档）；**F6 经评审后决定不实现**，理由见第 4 节 F6 条目下的「决议」。
 
 | 项 | 实现位置 | 与方案的差异 |
 |----|---------|-------------|
@@ -199,6 +218,7 @@ F1~F5 已实现，F6 未做（设计变更，需单独评审）。
 | F3 | `BuildGitSyncInstructions` | 与方案一致：`--no-single-branch`、禁 `--depth`、`checkout -b <anchor>` 后追加 `git merge-base --is-ancestor <anchor> HEAD`；锚点为空时对 `BaseHEAD` 做同样的自校验 |
 | F4 | `internal/agents/opencode_http.go` Submit | 与方案一致 |
 | F5 | `fetchedDraft.StartedFromBase` / `MergeBase` + `validateGitSyncDraft` | 另加了锚点对象缺失时按 sha 兜底抓取一次（P2-2），避免"抓不到"被误判为"起点错" |
+| F6 | **不实现** | 失败点已由 F3 提前到 hub 的第 4 步、F5 补齐可读性，剩余收益（少跑一轮 LLM）不足以换取"Matea 代推"这一信任模型破例与孤儿分支清理的高危面；替代方案记在第 4 节 F6 条目下 |
 
 新增测试：`internal/agents/gitsync_base_branch_test.go`（基线解析 4 例 + PR 续写开 PR 落在 main + 旧 handle re-attach + 报错文案），
 `workspace_transport_test.go` 两个新校验用例，`gitsync_continuation_test.go` 的契约文本与 OpenCode memory 顺序用例。
