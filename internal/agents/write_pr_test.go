@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jeeinn/matea/internal/gitea"
@@ -96,15 +97,19 @@ func TestResolveTaskGiteaClientTokenReachesHTTP(t *testing.T) {
 	assert.Equal(t, "token agent-token", gotAuth)
 }
 
-// newPRCaptureServer serves the two calls FinalizeWriteTaskPR makes and records
-// the raw JSON body of the PR create request.
-func newPRCaptureServer(t *testing.T, captured *string) *httptest.Server {
+// newPRCaptureServer serves the calls FinalizeWriteTaskPR makes and records the
+// raw JSON body of the PR create request. issueTitle is what the issue lookup
+// returns; pass "" to simulate an issue with no title.
+func newPRCaptureServer(t *testing.T, captured *string, issueTitle string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode([]map[string]interface{}{})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/repos/owner/repo/issues/"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"title": issueTitle})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
 			raw, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
@@ -124,7 +129,7 @@ func newPRCaptureServer(t *testing.T, captured *string) *httptest.Server {
 // issue open.
 func TestFinalizeWriteTaskPRLinksIssueWithRefsNotFixes(t *testing.T) {
 	var prBody string
-	server := newPRCaptureServer(t, &prBody)
+	server := newPRCaptureServer(t, &prBody, "")
 	defer server.Close()
 
 	task := &store.Task{ID: 35, Event: "Issue 5", IssueID: 5}
@@ -142,7 +147,7 @@ func TestFinalizeWriteTaskPRLinksIssueWithRefsNotFixes(t *testing.T) {
 // issue (e.g. PR-triggered work): no dangling reference should be emitted.
 func TestFinalizeWriteTaskPROmitsIssueLinkWithoutIssue(t *testing.T) {
 	var prBody string
-	server := newPRCaptureServer(t, &prBody)
+	server := newPRCaptureServer(t, &prBody, "")
 	defer server.Close()
 
 	task := &store.Task{ID: 36, Event: "Refactor", IssueID: 0}
@@ -152,4 +157,73 @@ func TestFinalizeWriteTaskPROmitsIssueLinkWithoutIssue(t *testing.T) {
 
 	assert.NotContains(t, prBody, "Refs #")
 	assert.NotContains(t, prBody, "Fixes #")
+}
+
+// TestFinalizeWriteTaskPRTitleUsesIssueSubject is the regression for
+// jeeinn/rust-study PR #8, whose title is literally "AI Solution: issues":
+// task.Event carries the webhook event NAME ("issues", "issue_comment"), not
+// the work item, so every PR came out with the same meaningless title. The PR
+// must be named after the issue it actually addresses.
+func TestFinalizeWriteTaskPRTitleUsesIssueSubject(t *testing.T) {
+	var prBody string
+	server := newPRCaptureServer(t, &prBody, "更新 README 补充并发编程章节")
+	defer server.Close()
+
+	task := &store.Task{ID: 35, Event: "issues", IssueID: 5}
+	_, err := FinalizeWriteTaskPR(gitea.NewClient(server.URL, "agent-token"),
+		"owner", "repo", "matea/hub-35", "main", task, "dev", "done")
+	require.NoError(t, err)
+
+	assert.Contains(t, prBody, "AI Solution: 更新 README 补充并发编程章节")
+	assert.NotContains(t, prBody, "AI Solution: issues", "the webhook event name must never become the PR title")
+}
+
+// TestFinalizeWriteTaskPRTitleFallsBackToTaskID covers the degraded path: when
+// the issue title cannot be read, fall back to the task id rather than to
+// task.Event — "Task 35" still identifies the task, while "issues" is noise.
+func TestFinalizeWriteTaskPRTitleFallsBackToTaskID(t *testing.T) {
+	var prBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]interface{}{})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/repos/owner/repo/issues/"):
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
+			raw, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			prBody = string(raw)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(gitea.PRResponse{Number: 7})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	task := &store.Task{ID: 35, Event: "issues", IssueID: 5}
+	_, err := FinalizeWriteTaskPR(gitea.NewClient(server.URL, "agent-token"),
+		"owner", "repo", "matea/hub-35", "main", task, "dev", "done")
+	require.NoError(t, err)
+
+	assert.Contains(t, prBody, "AI Solution: Task 35")
+	assert.NotContains(t, prBody, "AI Solution: issues")
+}
+
+// TestFinalizeWriteTaskPRTitleTruncatesLongSubject keeps an over-long issue
+// title from swallowing the PR title.
+func TestFinalizeWriteTaskPRTitleTruncatesLongSubject(t *testing.T) {
+	var prBody string
+	long := strings.Repeat("长", 200)
+	server := newPRCaptureServer(t, &prBody, long)
+	defer server.Close()
+
+	task := &store.Task{ID: 35, Event: "issues", IssueID: 5}
+	_, err := FinalizeWriteTaskPR(gitea.NewClient(server.URL, "agent-token"),
+		"owner", "repo", "matea/hub-35", "main", task, "dev", "done")
+	require.NoError(t, err)
+
+	assert.Contains(t, prBody, "...", "an over-long title must be truncated")
+	assert.NotContains(t, prBody, long, "the full issue title must not go into the PR title")
 }

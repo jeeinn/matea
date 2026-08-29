@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/jeeinn/matea/internal/agents"
 	"github.com/jeeinn/matea/internal/gitea"
 	"github.com/jeeinn/matea/internal/store"
 	"github.com/jeeinn/matea/internal/workflow"
@@ -40,7 +41,15 @@ func (d *Dispatcher) postL3Notification(task *store.Task) {
 		return
 	}
 
-	targetID := effectiveIssueKey(task.IssueID, task.PRID)
+	// Same target the executor used for the result comment and for failure
+	// writeback. This used to be effectiveIssueKey, which prefers the linked
+	// issue while writebackTargetID prefers the PR for review_pr — so a
+	// review's card was created on one thread and completed on another,
+	// leaving the copy the user actually reads stuck on "处理中".
+	targetID, ok := writebackTargetID(task)
+	if !ok {
+		return
+	}
 
 	switch task.TaskType {
 	case "analyze_issue":
@@ -57,14 +66,45 @@ func (d *Dispatcher) postL3Notification(task *store.Task) {
 		detail := ""
 		// Guidance only when a PR was actually created and the notice is on.
 		if d.wfPolicy.Notify.OnCoderPROpened && task.PRID > 0 {
-			giteaCfg := d.giteaCfg.Load()
-			prURL := fmt.Sprintf("%s/%s/pulls/%d", strings.TrimRight(giteaCfg.URL, "/"), task.Repo, task.PRID)
 			detail = workflow.FormatL3Comment(workflow.L3CoderPROpened, map[string]string{
-				"pr_url": prURL,
+				"pr_ref":        fmt.Sprintf("#%d", task.PRID),
+				"reviewer_hint": reviewerHint(d.registry),
 			})
 		}
 		d.completeStatusCard(agent, task, targetID, detail)
+
+	// review_pr and reply_comment used to fall through this switch untouched,
+	// so their cards were posted as "处理中" and never flipped: on
+	// jeeinn/rust-study PR #8 a review that finished in 56s still shows a card
+	// frozen at "🔄 处理中" to this day.
+	//
+	// detail stays empty — no L3 template exists for these types yet, and
+	// flipping the card to 完成 is the card machinery's job rather than a
+	// notification's, so it must not depend on a Notify switch.
+	case "review_pr", "reply_comment":
+		d.completeStatusCard(agent, task, targetID, "")
 	}
+}
+
+// reviewerHint renders the "what next" suggestion for a card whose task opened
+// a PR. It names a real review-role account when one exists, because the old
+// wording ("Request reviewer Agent 进行代码审查") told the user to do
+// something without saying who to ask; with a name the suggestion is
+// copy-pasteable into a PR comment.
+func reviewerHint(registry *agents.Registry) string {
+	const noReviewer = "在 PR 中指派一个代码审查 Agent 请求复审"
+	if registry == nil {
+		return noReviewer
+	}
+	names := registry.GiteaUsernamesByRole("review")
+	if len(names) == 0 {
+		return noReviewer
+	}
+	mentions := make([]string, 0, len(names))
+	for _, n := range names {
+		mentions = append(mentions, "@"+n)
+	}
+	return "在 PR 中 " + strings.Join(mentions, " 或 ") + " 请求代码审查"
 }
 
 // completeStatusCard flips the task's card to "完成", folding the L3 guidance

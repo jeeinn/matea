@@ -25,9 +25,21 @@ func TestRenderStatusCardRunning(t *testing.T) {
 	assert.Contains(t, body, "🔄 处理中")
 	assert.Contains(t, body, "### 🤖 code-review · 审查")
 	assert.Contains(t, body, "| **开始于** | 2026-08-28 12:25:16 |")
-	assert.Contains(t, body, "| **任务** | #13 |")
+	// Plain id, never "#13": Gitea auto-links #N to this repo's issue/PR of
+	// the same number, so a card for task 13 would render as a link to a
+	// completely unrelated object.
+	assert.Contains(t, body, "| **任务** | 13 |")
 	assert.Contains(t, body, "| **触发** | @code-review |")
 	assert.NotContains(t, body, "耗时", "a running task has no duration to show")
+}
+
+func TestRenderStatusCardTaskIDIsNotAnIssueReference(t *testing.T) {
+	// Regression: the card used to render the task id as "#13", which Gitea
+	// turns into a link to issue/PR 13 of the repo the card is posted in.
+	for _, id := range []int64{1, 13, 99} {
+		body := RenderStatusCard(StatusCard{TaskID: id, AgentName: "a", State: StatusCardRunning})
+		assert.NotContains(t, body, "| **任务** | #", "task id must not be rendered as a #N reference (task %d)", id)
+	}
 }
 
 func TestRenderStatusCardSuccess(t *testing.T) {

@@ -76,7 +76,11 @@ func RenderStatusCard(c StatusCard) string {
 	if !c.StartedAt.IsZero() {
 		b.WriteString(fmt.Sprintf("| **开始于** | %s |\n", c.StartedAt.Format("2006-01-02 15:04:05")))
 	}
-	b.WriteString(fmt.Sprintf("| **任务** | #%d |\n", c.TaskID))
+	// Plain ID, never "#N": Gitea auto-links #N to the repo's issue/PR of the
+	// same number, so a card for task 16 would silently render as a link to
+	// issue or PR 16 — a different object entirely. Observed on
+	// jeeinn/rust-study, where cards for tasks 14/15/16 all showed as links.
+	b.WriteString(fmt.Sprintf("| **任务** | %d |\n", c.TaskID))
 	if c.Trigger != "" {
 		b.WriteString(fmt.Sprintf("| **触发** | %s |\n", c.Trigger))
 	}
