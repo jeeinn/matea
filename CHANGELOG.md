@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **PR 标题改用真实 issue/PR 标题**：此前标题取自 `task.Event`（webhook **事件名**），于是每个 PR 都叫 `AI Solution: issues`（`jeeinn/rust-study` PR #8 即如此），对评审者零信息量。现优先取关联 issue / PR 的真实标题（超 60 字截断），取不到时退化为 `Task {id}`；事件名不再作为标题来源
+- **PR 相关文案中文化**：PR body 标题 `## AI Generated Solution` → `## AI 生成的解决方案`；创建回执 `✅ PR created: #N` → `✅ PR 已创建：#N`；更新分支回执 `🔄 Updated PR branch \`x\` with new changes` → `🔄 已更新 PR 分支 \`x\``
+- **评论 footer 用 Agent 名替代数据库 ID**：`*Task ID: 16 | Agent: 3 | Type: review_pr*` 里的 `3` 是 `agents` 表行 id，读者无从对应。现渲染为 Gitea 用户名（如 `@code-review`），无关联账号时回退内部名
+- **L3 通知模板不再内联绝对 URL**：`L3CoderPROpened` 的 `{{pr_url}}` 由服务端 `gitea.url` 拼出，docker-compose 下是内网地址（实测 `http://localhost:3000/...`），外部打不开。改为原生 `#N` 引用（Gitea 按自身 ROOT_URL 渲染，且带 PR 状态）；同时新增 `{{reviewer_hint}}`——存在 review 角色 Agent 时具名提示（`@code-review`），否则提示先指派一个，替代原来"Request reviewer Agent 进行代码审查"这种没说找谁的措辞
+
 ### Fixed
+- **code review 状态卡永远停在「处理中」**：`postL3Notification` 的 switch 只覆盖 `analyze_issue` 与写任务类型，`review_pr` / `reply_comment` 直接落空，`completeStatusCard` 从未被调用。`jeeinn/rust-study` PR #8 上一条 56 秒就跑完的 review，卡片至今显示 `🔄 处理中`。现补齐这两类（detail 留空——翻转状态是卡片机制本身的职责，不应依赖 Notify 开关）
+- **review 状态卡建在一处、完成在另一处**：状态卡创建用的是 `issueID`（`effectiveIssueKey`，偏向关联 issue），而结果评论与失败写回用的是 `writebackTargetID`（`review_pr` 偏向 PRID）——两套优先级相反，导致 PR 上 review 的卡建在别处、完成无处可 PATCH。现两侧统一走 `writebackTargetID`
+- **状态卡的任务 ID 不再渲染成 `#N`**：Gitea 会把 `#N` 自动链接到本仓库同号的 issue/PR，于是 task 16 的卡片显示成指向 PR #16 的链接——一个完全不相干的对象。现直接输出数字（如 `| **任务** | 16 |`）。`L3AnalyzeDone` 的 `task #{{task_id}}` 同步改为 `任务 {{task_id}}`
 - **git_sync 续写 PR 开错 base（start-point anchoring 事故修复）**：`Prepare` 此前把 `store.Task.BaseBranch`（语义是 PR head / 会话工作分支）当作合并基线，导致 PR 上二次 `@code-opencode` 的续写任务把新 draft 的合并目标算成上一轮的 draft 分支（`matea/hub-14`），漂移检测窗口也错放在 draft 分支上。现改为：有 `task.PRID` 时取 PR 的 `base.ref`，否则取仓库默认分支；`hub_handles` 新增 `base_branch` 列持久化该结果，重启 re-attach 对旧行按同一规则重新解析，不再回退到 `task.BaseBranch`；draft 分支（`matea/hub-*`）永不作为基线
 - **git_sync 续写锚点从「建议」升级为契约**：下发给 hub 的 git workflow 明确要求完整克隆（禁 `--depth` / `--single-branch`，clone 命令带 `--no-single-branch`），并在 `git checkout -b <draft> <anchor>` 后追加 `git merge-base --is-ancestor <anchor> HEAD` 自校验，hub 一旦从默认分支 tip 重新起分支就在这一步失败，而不是等整轮跑完才在 Approve 报错
 - **hub-opencode 的 memory 注入不再被 git 契约覆盖**：git_sync 分支此前从 `tc.UserPrompt` 重新拼装 prompt，把已拼好的会话 / repo memory 整块丢掉（Hermes 后端无此问题），续写任务的 hub 因此完全不知道上一轮做过什么。现改为在 memory 之后追加契约：memory 在前、强制 workflow 在后
