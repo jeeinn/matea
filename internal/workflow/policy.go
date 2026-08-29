@@ -319,10 +319,24 @@ func FormatL3Comment(template string, data map[string]string) string {
 }
 
 // L3 comment templates
+//
+// Two rules govern the placeholders:
+//
+//   - Never render an internal task id as "#N": Gitea auto-links #N to this
+//     repo's issue/PR of the same number, so "task #14" renders as a link to
+//     an unrelated object.
+//   - Never inline an absolute Gitea URL. It is built from the server's
+//     gitea.url config, which under docker-compose is an internal address
+//     (observed: "http://localhost:3000/...") that nobody outside the host
+//     can open. A bare "#N" is resolved by Gitea against its own ROOT_URL, so
+//     it always renders as a working link with the PR's open/merged state.
 const (
-	L3AnalyzeDone = "✅ 分析完成（task #{{task_id}}）。\n\n建议：确认无误后 Assign coder Agent 开始实现。\n若需调整方案，请 @{{agent_name}} 继续讨论。"
+	L3AnalyzeDone = "✅ 分析完成（任务 {{task_id}}）。\n\n建议：确认无误后 Assign coder Agent 开始实现。\n若需调整方案，请 @{{agent_name}} 继续讨论。"
 
-	L3CoderPROpened = "✅ PR 已创建：{{pr_url}}\n\n建议：Request reviewer Agent 进行代码审查。"
+	// {{reviewer_hint}} is a complete suggestion phrase, not a bare name: the
+	// caller knows whether a review-role agent actually exists and picks the
+	// wording that fits (mention it by name, or tell the user to assign one).
+	L3CoderPROpened = "✅ PR 已创建：{{pr_ref}}\n\n建议：{{reviewer_hint}}。"
 
 	L3GateSoft = "⚠️ {{message}}\n\n已按配置继续执行。若希望强制跳过此检查，请在评论中使用 /force。"
 

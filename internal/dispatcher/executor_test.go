@@ -70,7 +70,7 @@ func TestFormatFailureComment(t *testing.T) {
 	}
 	err := errors.New(`runner execution: LLM call: API error 404: {"error":{"message":"model is not found"}}`)
 
-	body := formatFailureComment(task, err)
+	body := formatFailureComment(task, err, "@code-opencode")
 
 	if !strings.Contains(body, "任务执行失败") {
 		t.Fatalf("missing failure title: %s", body)
@@ -80,6 +80,14 @@ func TestFormatFailureComment(t *testing.T) {
 	}
 	if !strings.Contains(body, "Task ID: 23") {
 		t.Fatalf("missing task metadata: %s", body)
+	}
+	// The agent used to be printed as its database row id, which tells the
+	// reader nothing; the footer must name the account they can see on Gitea.
+	if !strings.Contains(body, "Agent: @code-opencode") {
+		t.Fatalf("footer should name the agent, not its row id: %s", body)
+	}
+	if strings.Contains(body, "Agent: 3") {
+		t.Fatalf("footer still prints the agent row id: %s", body)
 	}
 }
 
@@ -264,7 +272,7 @@ func TestFormatPartialFailureComment(t *testing.T) {
 	}
 	wbErr := errors.New("post comment: API error 401: token expired")
 
-	body := formatPartialFailureComment(task, wbErr)
+	body := formatPartialFailureComment(task, wbErr, "code-opencode")
 
 	if !strings.Contains(body, "任务已执行但写回失败") {
 		t.Fatalf("missing partial-failure title: %s", body)

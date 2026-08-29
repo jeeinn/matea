@@ -740,7 +740,7 @@ func (e *Executor) writeBackToGitea(task *store.Task) error {
 	}
 	owner, repo := parts[0], parts[1]
 
-	commentBody := formatComment(task)
+	commentBody := formatComment(task, agentLabel(agent))
 
 	if err := client.IssueComment(owner, repo, targetID, commentBody); err != nil {
 		return fmt.Errorf("post comment: %w", err)
@@ -784,7 +784,7 @@ func (e *Executor) writeFailureToGitea(task *store.Task, taskErr error) error {
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid repo format: %s", task.Repo)
 		}
-		commentBody := workflow.FormatAgentComment(formatFailureComment(task, taskErr))
+		commentBody := workflow.FormatAgentComment(formatFailureComment(task, taskErr, agentLabel(agent)))
 		if err := client.IssueComment(parts[0], parts[1], targetID, commentBody); err != nil {
 			return fmt.Errorf("post failure comment: %w", err)
 		}
@@ -815,7 +815,11 @@ func (e *Executor) writePartialFailureComment(task *store.Task, wbErr error) err
 		return fmt.Errorf("invalid repo format: %s", task.Repo)
 	}
 	owner, repo := parts[0], parts[1]
-	body := workflow.FormatAgentComment(formatPartialFailureComment(task, wbErr))
+	agentName := "unknown"
+	if a, aerr := e.db.GetAgent(task.AgentID); aerr == nil {
+		agentName = agentLabel(a)
+	}
+	body := workflow.FormatAgentComment(formatPartialFailureComment(task, wbErr, agentName))
 	if err := client.IssueComment(owner, repo, targetID, body); err != nil {
 		return fmt.Errorf("post partial failure comment: %w", err)
 	}
@@ -823,7 +827,30 @@ func (e *Executor) writePartialFailureComment(task *store.Task, wbErr error) err
 	return nil
 }
 
-func formatPartialFailureComment(task *store.Task, wbErr error) string {
+// agentLabel renders an agent for a comment footer. The Gitea username wins
+// because it is the identity the reader actually sees on the issue; the
+// internal name is the fallback for agents with no linked account. The raw
+// AgentID was printed here before — a database row id that means nothing to
+// anyone reading the comment.
+func agentLabel(agent *store.Agent) string {
+	switch {
+	case agent == nil:
+		return "unknown"
+	case agent.GiteaUsername != "":
+		return "@" + agent.GiteaUsername
+	case agent.Name != "":
+		return agent.Name
+	default:
+		return fmt.Sprintf("id=%d", agent.ID)
+	}
+}
+
+// commentFooter renders the trailing attribution line of an agent comment.
+func commentFooter(task *store.Task, agentName string) string {
+	return fmt.Sprintf("*Task ID: %d | Agent: %s | Type: %s*", task.ID, agentName, task.TaskType)
+}
+
+func formatPartialFailureComment(task *store.Task, wbErr error, agentName string) string {
 	var sb strings.Builder
 	sb.WriteString("⚠️ **任务已执行但写回失败**\n\n")
 	sb.WriteString("Agent 已完成计算，但结果未能成功评论到此 Issue/PR。可在任务列表查看完整结果（状态：部分完成）。\n\n")
@@ -832,11 +859,11 @@ func formatPartialFailureComment(task *store.Task, wbErr error) string {
 	sb.WriteString(strings.TrimSpace(wbErr.Error()))
 	sb.WriteString("\n```\n\n")
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("*Task ID: %d | Agent: %d | Type: %s*", task.ID, task.AgentID, task.TaskType))
+	sb.WriteString(commentFooter(task, agentName))
 	return sb.String()
 }
 
-func formatFailureComment(task *store.Task, taskErr error) string {
+func formatFailureComment(task *store.Task, taskErr error, agentName string) string {
 	var sb strings.Builder
 	sb.WriteString("❌ **任务执行失败**\n\n")
 	sb.WriteString("**错误原因：**\n")
@@ -844,18 +871,18 @@ func formatFailureComment(task *store.Task, taskErr error) string {
 	sb.WriteString(strings.TrimSpace(taskErr.Error()))
 	sb.WriteString("\n```\n\n")
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("*Task ID: %d | Agent: %d | Type: %s*", task.ID, task.AgentID, task.TaskType))
+	sb.WriteString(commentFooter(task, agentName))
 	return sb.String()
 }
 
 // formatComment formats the LLM result as a Gitea comment.
-func formatComment(task *store.Task) string {
+func formatComment(task *store.Task, agentName string) string {
 	var sb strings.Builder
 
 	sb.WriteString("🤖 **AI Agent Response**\n\n")
 	sb.WriteString(task.Result)
 	sb.WriteString("\n\n---\n")
-	sb.WriteString(fmt.Sprintf("*Task ID: %d | Agent: %d | Type: %s*", task.ID, task.AgentID, task.TaskType))
+	sb.WriteString(commentFooter(task, agentName))
 
 	return sb.String()
 }

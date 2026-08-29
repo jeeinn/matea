@@ -171,6 +171,11 @@ func TestFinalizeWriteTaskPRCreatesWhenNoOpenPR(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode([]map[string]interface{}{})
+		// Issue lookup behind the PR title: the title must name the work item,
+		// not the webhook event name carried in task.Event.
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/repos/owner/repo/issues/"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"title": "Issue 2"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/owner/repo/pulls":
 			createCalled = true
 			w.Header().Set("Content-Type", "application/json")
@@ -192,7 +197,7 @@ func TestFinalizeWriteTaskPRCreatesWhenNoOpenPR(t *testing.T) {
 	assert.Equal(t, "pr", result.Action)
 	assert.Equal(t, 3, result.PRID)
 	// Comment uses Gitea's native #N reference instead of a raw URL.
-	assert.Contains(t, result.Content, "PR created: #3")
+	assert.Contains(t, result.Content, "PR 已创建：#3")
 	assert.NotContains(t, result.Content, "http://")
 }
 
@@ -218,7 +223,7 @@ func TestFinalizeWriteTaskPRCommentsWhenOpenPRExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "comment", result.Action)
 	assert.Equal(t, 3, result.PRID)
-	assert.Contains(t, result.Content, "Updated PR branch")
+	assert.Contains(t, result.Content, "已更新 PR 分支")
 }
 
 // stubModelMeta implements ModelMetaProvider for resolveMax* tests.
