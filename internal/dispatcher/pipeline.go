@@ -241,7 +241,17 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 
 	// Post the task's status card instead of the old "已开始处理" comment: one
 	// card per task, PATCHed in place as it progresses (20260828 plan §2.5).
-	d.postStatusCard(result.Agent, task, issueID)
+	//
+	// The card goes on writebackTargetID's thread, not on issueID: issueID is
+	// the session/lock/workflow key and prefers the linked issue, while the
+	// result comment and the completion PATCH prefer the PR for review_pr.
+	// Creating the card on the key and completing it on the writeback target
+	// left review cards permanently on "处理中" (jeeinn/rust-study PR #8).
+	if cardTarget, ok := writebackTargetID(task); ok {
+		d.postStatusCard(result.Agent, task, cardTarget)
+	} else {
+		log.Printf("[WARN] Task %d: no issue/PR target for status card", task.ID)
+	}
 
 	return true
 }

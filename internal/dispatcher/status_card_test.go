@@ -23,6 +23,7 @@ import (
 // (marker scans).
 type cardServer struct {
 	posts     []string             // raw bodies of POST /comments
+	postPaths []string             // request path of each POST, e.g. .../issues/8/comments
 	patches   map[int]string       // commentID -> latest body
 	comments  []gitea.IssueComment // served to GET /comments
 	failAll   bool                 // force every request to 500
@@ -40,6 +41,7 @@ func (s *cardServer) handler(t *testing.T) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodPost:
 			s.posts = append(s.posts, string(raw))
+			s.postPaths = append(s.postPaths, r.URL.Path)
 			id := 900 + len(s.posts)
 			w.Header().Set("Content-Type", "application/json")
 			require.NoError(t, json.NewEncoder(w).Encode(gitea.IssueComment{ID: id, Body: "created"}))
