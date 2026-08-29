@@ -238,6 +238,7 @@ func (db *DB) migrate() error {
 			idempotency_key TEXT NOT NULL DEFAULT '',
 			status          TEXT NOT NULL DEFAULT 'running',
 			draft_branch    TEXT NOT NULL DEFAULT '',
+			base_branch     TEXT NOT NULL DEFAULT '',
 			base_head       TEXT NOT NULL DEFAULT '',
 			anchor_head     TEXT NOT NULL DEFAULT '',
 			deploy_key_id   INTEGER NOT NULL DEFAULT 0,
@@ -286,6 +287,11 @@ func (db *DB) migrate() error {
 		`ALTER TABLE hub_handles ADD COLUMN draft_branch TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN base_head TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE hub_handles ADD COLUMN deploy_key_id INTEGER NOT NULL DEFAULT 0`,
+		// git_sync base branch (20260829 start-point-anchoring fix): the merge
+		// target Prepare resolved, persisted so a restart re-attach does not
+		// fall back to store.Task.BaseBranch (which holds the PR head /
+		// session working branch, never a valid merge target).
+		`ALTER TABLE hub_handles ADD COLUMN base_branch TEXT NOT NULL DEFAULT ''`,
 		// git_sync continuation (task B2.3): the exact anchor the hub was told to
 		// branch from (session LastHead; empty = base_head). Persisted so a
 		// restart re-attach validates against the ORIGINAL anchor even if a

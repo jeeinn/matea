@@ -187,7 +187,7 @@ func TestGitSyncPrepareRequiresSSHURL(t *testing.T) {
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(srv.URL, "")}
 	transport := NewGitSyncTransport(factory, &fakeDeployKeyIssuer{}, t.TempDir(), DiffPolicy{})
 
-	_, _, err := transport.Prepare(context.Background(), gitSyncApproveTask(9201), "o", "r", "")
+	_, _, err := transport.Prepare(context.Background(), gitSyncApproveTask(9201), "o", "r")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no ssh_url")
 }
@@ -199,7 +199,7 @@ func TestGitSyncPrepareIssueFailurePropagates(t *testing.T) {
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(fake.server.URL, "")}
 	transport := NewGitSyncTransport(factory, issuer, t.TempDir(), DiffPolicy{})
 
-	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(9202), "o", "r", "main")
+	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(9202), "o", "r")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "issue deploy key")
 	assert.Nil(t, info)
@@ -214,7 +214,7 @@ func TestGitSyncPrepareHappyPath(t *testing.T) {
 	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(fake.server.URL, "")}
 	transport := NewGitSyncTransport(factory, issuer, t.TempDir(), DiffPolicy{})
 
-	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(taskID), "o", "r", "")
+	info, key, err := transport.Prepare(context.Background(), gitSyncApproveTask(taskID), "o", "r")
 	require.NoError(t, err)
 	require.NotNil(t, info)
 	require.NotNil(t, key)

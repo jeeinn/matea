@@ -100,7 +100,12 @@ type WorkspaceTransport interface {
 	// base anchor, and builds the GitSyncInfo for the hub. The returned
 	// IssuedDeployKey is retained by the caller (persisted in A2) so Cleanup
 	// can revoke it.
-	Prepare(ctx context.Context, task *store.Task, owner, repo, baseBranch string) (*GitSyncInfo, *IssuedDeployKey, error)
+	//
+	// Prepare resolves the base branch itself (resolveGitSyncBaseBranch): the
+	// caller's notion of "base" is NOT usable here, because
+	// store.Task.BaseBranch documents the PR head / session working branch and
+	// is set to the session's draft branch for continuation tasks.
+	Prepare(ctx context.Context, task *store.Task, owner, repo string) (*GitSyncInfo, *IssuedDeployKey, error)
 
 	// Approve fetches the hub-pushed draft branch, runs the three-element
 	// validation (branch exclusivity / base anchor / required footer), then
@@ -140,7 +145,7 @@ func NewGitSyncTransport(giteaFactory GiteaClientFactory, issuer DeployKeyIssuer
 
 func (t *gitSyncTransport) Name() string { return "git_sync" }
 
-func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner, repo, baseBranch string) (*GitSyncInfo, *IssuedDeployKey, error) {
+func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner, repo string) (*GitSyncInfo, *IssuedDeployKey, error) {
 	if t.issuer == nil {
 		return nil, nil, fmt.Errorf("git_sync transport: deploy key issuer not wired (task A6)")
 	}
@@ -156,9 +161,9 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 	if repoInfo.SSHURL == "" {
 		return nil, nil, fmt.Errorf("git_sync prepare: repo %s/%s has no ssh_url (SSH must be enabled on the Gitea server)", owner, repo)
 	}
-	base := gitea.ResolveDefaultBranch(baseBranch)
-	if baseBranch == "" {
-		base = gitea.ResolveDefaultBranch(repoInfo.DefaultBranch)
+	base, err := resolveGitSyncBaseBranch(adminClient, owner, repo, task, repoInfo.DefaultBranch)
+	if err != nil {
+		return nil, nil, fmt.Errorf("git_sync prepare: %w", err)
 	}
 	branch, err := adminClient.GetBranch(owner, repo, base)
 	if err != nil {
@@ -183,6 +188,69 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 	return info, key, nil
 }
 
+// isDraftBranch reports whether ref is one of the hub-owned draft branches
+// (matea/hub-*). Those refs are never valid merge targets: they are per-task
+// scratch branches whose lifetime ends with the PR.
+func isDraftBranch(ref string) bool { return strings.HasPrefix(ref, DraftBranchPrefix) }
+
+// resolveGitSyncBaseBranch picks the branch a git_sync draft must merge into —
+// which is also the branch whose head bounds the drift window (BaseHEAD).
+//
+// store.Task.BaseBranch is deliberately NOT consulted. It documents the PR
+// head / working branch (store/task.go) and dispatcher/pipeline sets it to the
+// session's draft branch for continuation tasks, so reading it as a base would
+// (a) open matea/hub-{N+1} → matea/hub-{N} instead of → the PR's own target
+// and (b) anchor drift detection on a draft branch. That exact misuse made
+// task 16 (PR #8 continuation) compute a wrong PR base in production
+// (2026-08-29 post-mortem: docs/plan-20260829-gitsync-continuation-anchor.md).
+//
+// Resolution order:
+//  1. the base ref of the PR the task runs on (task.PRID > 0) — authoritative
+//     for PR-conversation continuations;
+//  2. the repository default branch.
+//
+// There is deliberately no "main" last resort: a guessed base would silently
+// open the PR against the wrong branch, which is exactly the failure this
+// function exists to prevent.
+//
+// A draft-prefixed candidate is skipped with a warning instead of propagated:
+// it can only come from a PR opened by a Matea version affected by the bug
+// above, and silently merging into a scratch branch is worse than retargeting
+// the new draft at the repository default. When nothing but draft branches is
+// available the run fails loudly — an empty base would open a malformed PR.
+func resolveGitSyncBaseBranch(client *gitea.Client, owner, repo string, task *store.Task, repoDefault string) (string, error) {
+	if client != nil && task != nil && task.PRID > 0 {
+		pr, err := client.PRGet(owner, repo, task.PRID)
+		switch {
+		case err != nil:
+			log.Printf("[WARN] git_sync: resolve base branch of PR #%d (%s/%s): %v", task.PRID, owner, repo, err)
+		default:
+			ref, rerr := gitea.PRBaseRef(pr)
+			switch {
+			case rerr != nil:
+				log.Printf("[WARN] git_sync: read base ref of PR #%d (%s/%s): %v", task.PRID, owner, repo, rerr)
+			case isDraftBranch(ref):
+				log.Printf("[WARN] git_sync: PR #%d base %q is a hub draft branch (PR opened by a Matea version with the base-branch bug); falling back to the repository default branch", task.PRID, ref)
+			default:
+				return ref, nil
+			}
+		}
+	}
+	if b := strings.TrimSpace(repoDefault); b != "" && !isDraftBranch(b) {
+		return b, nil
+	}
+	if client != nil {
+		if info, err := client.GetRepo(owner, repo); err == nil {
+			if b := strings.TrimSpace(info.DefaultBranch); b != "" && !isDraftBranch(b) {
+				return b, nil
+			}
+		} else {
+			log.Printf("[WARN] git_sync: resolve default branch of %s/%s: %v", owner, repo, err)
+		}
+	}
+	return "", fmt.Errorf("no non-draft base branch could be resolved for %s/%s (repository default=%q)", owner, repo, repoDefault)
+}
+
 // fetchedDraft is the git-side evidence Approve validates against. Separated
 // from validateGitSyncDraft so the three-element rules are unit-testable
 // without a git binary (task A7 adversarial cases).
@@ -192,6 +260,14 @@ type fetchedDraft struct {
 	IsAncestor    bool     // whether the anchor (info.anchor()) is an ancestor of DraftHEAD
 	NewCommitMsgs []string // commit messages of anchor..DraftHEAD
 	ChangedPaths  []string // B3: repo-relative paths touched on anchor..DraftHEAD
+
+	// Diagnostics for a rejected start point (F5 of the 20260829
+	// start-point-anchoring post-mortem): a bare "not descended from anchor"
+	// does not tell the operator whether the hub branched from the base tip —
+	// i.e. silently dropped the previous round's work — or from unrelated
+	// history.
+	StartedFromBase bool   // draft branched from the Prepare-time base head instead of the anchor
+	MergeBase       string // merge-base(anchor, draft); "" when the two share no history
 }
 
 // validateGitSyncDraft enforces the three elements:
@@ -231,8 +307,21 @@ func validateGitSyncDraft(info *GitSyncInfo, result *GitSyncResult, fetched *fet
 
 	// Element 2: start-point anchor + drift (fail + warn, no auto rebase).
 	if !fetched.IsAncestor {
-		return fmt.Errorf("git_sync approve: draft head %s is not descended from anchor %s (start-point anchoring)",
-			fetched.DraftHEAD, anchor)
+		// The common real-world violation is a hub that ignored the
+		// continuation anchor and branched from the base tip: the draft is
+		// then self-consistent (signed footer, right branch) but silently
+		// drops the previous task's work. Say so explicitly instead of
+		// emitting a bare ancestry failure.
+		if fetched.StartedFromBase {
+			return fmt.Errorf("git_sync approve: draft %s branched from base %q tip %s instead of the continuation anchor %s — the previous session's work is NOT in this branch (start-point anchoring); the hub must run `git checkout -b %s %s` before starting",
+				fetched.DraftHEAD, info.BaseBranch, info.BaseHEAD, anchor, info.DraftBranch, anchor)
+		}
+		if fetched.MergeBase == "" {
+			return fmt.Errorf("git_sync approve: draft head %s shares no history with anchor %s (start-point anchoring)",
+				fetched.DraftHEAD, anchor)
+		}
+		return fmt.Errorf("git_sync approve: draft head %s is not descended from anchor %s (start-point anchoring; merge-base %s)",
+			fetched.DraftHEAD, anchor, fetched.MergeBase)
 	}
 	if fetched.BaseHEAD != "" && fetched.BaseHEAD != info.BaseHEAD {
 		return fmt.Errorf("git_sync approve: base branch %q drifted from %s to %s since Prepare (fail+warn policy; rebase intentionally not automatic)",
@@ -330,6 +419,21 @@ func (t *gitSyncTransport) fetchDraft(ctx context.Context, adminClient *gitea.Cl
 	}
 	out.DraftHEAD = strings.TrimSpace(head)
 
+	// The anchor must exist locally for the ancestry test below to mean
+	// anything. A draft that really descends from it carries it along, but a
+	// hub that branched elsewhere leaves it out of the fetched history — and
+	// a shallow/partial fetch would too. Try once by sha (best effort: Gitea
+	// may reject arbitrary-sha fetches depending on uploadpack config) so a
+	// missing anchor is never confused with a wrong start point.
+	anchor := info.anchor()
+	if anchor != "" {
+		if _, cerr := t.runGit(ctx, dir, "cat-file", "-e", anchor+"^{commit}"); cerr != nil {
+			if _, ferr := t.runGit(ctx, dir, "fetch", "-q", "origin", anchor); ferr != nil {
+				log.Printf("[WARN] git_sync approve: continuation anchor %s is not present locally and could not be fetched by sha (%v); the draft almost certainly did not start from it", anchor, ferr)
+			}
+		}
+	}
+
 	// Base branch head for the drift check (best effort: a missing base ref is
 	// caught here; drift policy only applies when we could resolve it).
 	if _, err := t.runGit(ctx, dir, "fetch", "-q", "origin", info.BaseBranch); err == nil {
@@ -340,9 +444,20 @@ func (t *gitSyncTransport) fetchDraft(ctx context.Context, adminClient *gitea.Cl
 
 	// Ancestor check: the anchor (session LastHead for continuations, else the
 	// Prepare-time base head) must be reachable from the draft head.
-	anchor := info.anchor()
 	if _, err := t.runGit(ctx, dir, "merge-base", "--is-ancestor", anchor, out.DraftHEAD); err == nil {
 		out.IsAncestor = true
+	}
+
+	// Diagnostics for the failure branch of the check above (F5).
+	if info.BaseHEAD != "" {
+		if _, err := t.runGit(ctx, dir, "merge-base", "--is-ancestor", info.BaseHEAD, out.DraftHEAD); err == nil {
+			out.StartedFromBase = true
+		}
+	}
+	if anchor != "" {
+		if mb, merr := t.runGit(ctx, dir, "merge-base", anchor, out.DraftHEAD); merr == nil {
+			out.MergeBase = strings.TrimSpace(mb)
+		}
 	}
 
 	// Commit messages on the new range for the footer check. The range starts
@@ -427,9 +542,13 @@ func ParseDraftHeadTrailer(text string) string {
 //
 // Continuation (B2.3): when info.AnchorHEAD is set, the draft branch starts
 // from that commit (the session's previous task head) instead of the default
-// branch tip. The clone is a full clone, so the anchor is reachable as long
-// as the previous draft branch (or a descendant ref) still exists on the
-// remote; an unreachable anchor fails the checkout loudly.
+// branch tip. The clone must be a FULL clone (no --depth, no --single-branch)
+// so the anchor is reachable as long as the previous draft branch still exists
+// on the remote, and the checkout is followed by a `merge-base --is-ancestor`
+// self-check: a hub that silently restarts from the default branch tip now
+// fails at step 4 instead of minutes later at Approve. That self-check is the
+// 2026-08-29 post-mortem fix for the "start-point anchoring" incident, where
+// the anchor was only a suggestion in prose and the hub ignored it.
 func BuildGitSyncInstructions(info *GitSyncInfo, workSubdir string) string {
 	keyB64 := base64.StdEncoding.EncodeToString([]byte(info.PrivateKey))
 	sshCmd := fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'", workSubdir)
@@ -437,10 +556,13 @@ func BuildGitSyncInstructions(info *GitSyncInfo, workSubdir string) string {
 	if info.AnchorHEAD != "" {
 		checkoutStep = fmt.Sprintf("git checkout -b %[1]s %[2]s", info.DraftBranch, info.AnchorHEAD)
 	}
+	if startPoint := info.anchor(); startPoint != "" {
+		checkoutStep += fmt.Sprintf(" && git merge-base --is-ancestor %s HEAD", startPoint)
+	}
 	continuationNote := ""
 	if info.AnchorHEAD != "" {
 		continuationNote = fmt.Sprintf(`
-This task CONTINUES prior session work: the draft branch starts from commit %[1]s (the previous task's pushed head), NOT from the default branch tip. That commit is reachable in your fresh clone; if the checkout fails because it is missing, STOP and report the failure — do not restart the work from the default branch.`, info.AnchorHEAD)
+This task CONTINUES prior session work: the draft branch starts from commit %[1]s (the previous task's pushed head), NOT from the default branch tip. That commit is reachable in your fresh clone because step 3 clones every branch; if the checkout in step 4 fails, or the merge-base self-check that follows it reports the commit is not an ancestor of HEAD, STOP and report the failure — do not restart the work from the default branch (the submitted work would silently discard the previous round).`, info.AnchorHEAD)
 	}
 	return fmt.Sprintf(`## Git workflow (MANDATORY — follow exactly)
 
@@ -450,8 +572,10 @@ You are given a task-scoped deploy key. Do ALL git work yourself; the orchestrat
 2. Restore the deploy key (it is base64-encoded, single line):
    printf '%%s' '%[2]s' | base64 -d > key && chmod 600 key
    Verify: ssh-keygen -y -f key must print a public key without error.
-3. Clone the repository: %[3]s git clone %[4]s repo
+3. Clone the repository — FULL clone, do NOT add --depth or --single-branch (a partial clone hides the commit you must start from):
+   %[3]s git clone --no-single-branch %[4]s repo
 4. cd repo && git config user.email "hub@matea.local" && git config user.name "matea-hub" && %[5]s
+   The trailing merge-base command is a MANDATORY self-check that your branch really starts from the required commit; if it fails, STOP and report — do not retry from the default branch.
 5. Do the task work inside repo/ (read, edit, write files as needed).
 6. Commit ALL changes: git add -A && git commit -m "<summary>" -m "%[6]s"
    Every commit message MUST contain the footer line: %[6]s
@@ -459,6 +583,7 @@ You are given a task-scoped deploy key. Do ALL git work yourself; the orchestrat
 8. End your final response with a line exactly of this form (full 40-char sha):
    matea-draft-head: <output of: cd repo && git rev-parse HEAD>
 %[8]s
-Rules: push ONLY the branch %[7]s — never any other branch. Do not open pull requests yourself.`,
+Rules: push ONLY the branch %[7]s — never any other branch. Do not open pull requests yourself.
+Start point: if step 4's checkout or its merge-base self-check fails, STOP and report the failure — never fall back to another starting point (a draft started elsewhere is rejected, and the previous round's work would be lost).`,
 		workSubdir, keyB64, sshCmd, info.CloneURL, checkoutStep, info.RequiredFooter, info.DraftBranch, continuationNote)
 }

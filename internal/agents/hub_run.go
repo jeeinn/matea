@@ -161,7 +161,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 
 	if writeViaGitSync && handle == nil {
 		owner, repo := splitOwnerRepo(task.Repo)
-		info, key, err := transport.Prepare(ctx, task, owner, repo, task.BaseBranch)
+		info, key, err := transport.Prepare(ctx, task, owner, repo)
 		if err != nil {
 			return nil, fmt.Errorf("git_sync prepare: %w", err)
 		}
@@ -182,9 +182,28 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		// The anchor comes from the persisted row (B2.3), NOT a fresh session
 		// read: a concurrent same-session task may have advanced LastHead
 		// since this task's Prepare, and validation must use the original one.
+		//
+		// The base branch likewise comes from the row (persisted at Prepare).
+		// Row written before the base_branch column existed are re-resolved
+		// with Prepare's own rules; task.BaseBranch is NOT a fallback — it
+		// holds the PR head / session working branch and using it here opened
+		// continuation PRs against the previous draft branch (2026-08-29
+		// start-point-anchoring post-mortem).
+		base := persisted.BaseBranch
+		if base == "" {
+			if f.giteaFactory == nil {
+				return nil, fmt.Errorf("git_sync re-attach: cannot resolve base branch for task %d (no gitea client factory)", task.ID)
+			}
+			owner, repo := splitOwnerRepo(task.Repo)
+			resolved, rerr := resolveGitSyncBaseBranch(f.giteaFactory.GetAdminGiteaClient(), owner, repo, task, "")
+			if rerr != nil {
+				return nil, fmt.Errorf("git_sync re-attach: %w", rerr)
+			}
+			base = resolved
+		}
 		gitSyncInfo = &GitSyncInfo{
 			DraftBranch:    persisted.DraftBranch,
-			BaseBranch:     task.BaseBranch,
+			BaseBranch:     base,
 			BaseHEAD:       persisted.BaseHEAD,
 			AnchorHEAD:     persisted.AnchorHEAD,
 			RequiredFooter: RequiredFooter(task.ID),
@@ -214,6 +233,7 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 			}
 			if gitSyncInfo != nil {
 				row.DraftBranch = gitSyncInfo.DraftBranch
+				row.BaseBranch = gitSyncInfo.BaseBranch
 				row.BaseHEAD = gitSyncInfo.BaseHEAD
 				row.AnchorHEAD = gitSyncInfo.AnchorHEAD
 			}

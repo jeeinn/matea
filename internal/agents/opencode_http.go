@@ -635,7 +635,13 @@ func (b *OpenCodeHTTPBackend) Submit(ctx context.Context, tc *TaskContext) (*Han
 		// instructions carry the task-scoped deploy key (base64) and the draft
 		// branch it may push. Work happens in a per-task subdirectory so
 		// concurrent sessions never share a checkout.
-		userPrompt = strings.TrimSpace(tc.UserPrompt + "\n\n" +
+		//
+		// Appended to userPrompt (NOT rebuilt from tc.UserPrompt): rebuilding
+		// dropped the memory block above, so git_sync tasks never saw what the
+		// previous round had done — a direct contributor to the 2026-08-29
+		// start-point-anchoring incident. The mandatory workflow stays last
+		// (recency window); memory never displaces it.
+		userPrompt = strings.TrimSpace(userPrompt + "\n\n" +
 			BuildGitSyncInstructions(tc.GitSync, fmt.Sprintf("matea-hub-%d", tc.TaskID)))
 	}
 

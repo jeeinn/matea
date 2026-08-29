@@ -75,10 +75,16 @@ func TestBuildGitSyncInstructionsContinuationAnchor(t *testing.T) {
 	withAnchor := BuildGitSyncInstructions(info, "matea-hub-42")
 	assert.Contains(t, withAnchor, "git checkout -b matea/hub-42 eeee4444eeee4444eeee4444eeee4444eeee4444")
 	assert.Contains(t, withAnchor, "CONTINUES prior session work")
+	// F3: the start point is enforced, not merely suggested — the checkout is
+	// followed by a self-check the hub cannot skip without failing loudly.
+	assert.Contains(t, withAnchor, "git merge-base --is-ancestor eeee4444eeee4444eeee4444eeee4444eeee4444 HEAD")
+	assert.Contains(t, withAnchor, "git clone --no-single-branch")
+	assert.Contains(t, withAnchor, "--depth")
 
 	info.AnchorHEAD = ""
 	without := BuildGitSyncInstructions(info, "matea-hub-42")
-	assert.Contains(t, without, "git checkout -b matea/hub-42\n")
+	assert.Contains(t, without, "git checkout -b matea/hub-42 &&")
+	assert.Contains(t, without, "git merge-base --is-ancestor aaaa0000 HEAD", "fresh sessions self-check against the base head")
 	assert.NotContains(t, without, "CONTINUES prior session work")
 	assert.NotContains(t, without, "eeee4444")
 }
@@ -332,6 +338,65 @@ func TestOpenCodeSubmitInjectsMemoryContext(t *testing.T) {
 	assert.Contains(t, capturedBody, "prior analysis", "OpenCode must receive repo/issue memory (previously dropped)")
 	assert.Contains(t, capturedBody, "task 0: explored the repo", "session memory reaches OpenCode")
 	assert.Contains(t, capturedBody, "Session continuation memory")
+}
+
+// A git_sync write task must keep the memory block AND receive the mandatory
+// git workflow, with memory first (recency: the workflow stays last). Before
+// the 2026-08-29 fix the git branch rebuilt the prompt from tc.UserPrompt and
+// silently dropped memory — task 16's hub never learned what task 14 had done.
+func TestOpenCodeSubmitKeepsMemoryBeforeGitSyncContract(t *testing.T) {
+	var capturedBody string
+	srv := newTestOpenCodeServer(t, map[string]http.HandlerFunc{
+		"/session/": func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/message") && r.Method == http.MethodPost {
+				var body map[string]any
+				json.NewDecoder(r.Body).Decode(&body)
+				raw, _ := json.Marshal(body)
+				capturedBody = string(raw)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "role": "assistant", "content": "ok"})
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/message") && r.Method == http.MethodGet {
+				json.NewEncoder(w).Encode([]any{map[string]any{
+					"info":  map[string]any{"id": "msg-2", "role": "assistant"},
+					"parts": []any{map[string]any{"type": "text", "text": "Done."}},
+				}})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		},
+	})
+	b := newTestBackend(t, srv.URL)
+
+	_, err := b.Submit(context.Background(), &TaskContext{
+		TaskType:      "solve_issue",
+		Repo:          "o/r",
+		IssueID:       3,
+		TaskID:        9802,
+		UserPrompt:    "Continue the work",
+		MemoryKeys:    map[string]string{AnalyzeMemoryKey: "prior analysis"},
+		SessionMemory: "task 14: pushed matea/hub-14",
+		GitSync: &GitSyncInfo{
+			CloneURL:       "ssh://git@example.com/o/r.git",
+			PrivateKey:     "PRIVKEY",
+			DraftBranch:    DraftBranchName(9802),
+			BaseBranch:     "main",
+			BaseHEAD:       "aaaa0000",
+			AnchorHEAD:     "eeee4444",
+			CommitAuthor:   "Matea Hub <hub@matea.local>",
+			RequiredFooter: RequiredFooter(9802),
+			HubPush:        true,
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, capturedBody)
+	assert.Contains(t, capturedBody, "Session continuation memory")
+	assert.Contains(t, capturedBody, "Git workflow (MANDATORY")
+	assert.Less(t, strings.Index(capturedBody, "Session continuation memory"),
+		strings.Index(capturedBody, "Git workflow (MANDATORY"),
+		"memory must survive the git_sync append and stay before the workflow")
+	assert.Contains(t, capturedBody, "eeee4444", "the continuation anchor reaches the hub")
 }
 
 // saveSessionMemory / saveSessionProgress guard rails.
