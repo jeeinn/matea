@@ -3,6 +3,8 @@ package agents
 import (
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jeeinn/matea/internal/gitea"
@@ -48,10 +50,11 @@ func FinalizeWriteTaskPR(client *gitea.Client, owner, repo, branchName, baseBran
 	// jeeinn/rust-study PR #8 is a live example, and it tells a reviewer
 	// nothing about what the PR changes. Resolve the real subject instead.
 	subject := prTitleSubject(client, owner, repo, task)
-	prTitle := fmt.Sprintf("AI Solution: %s", subject)
+	prefix := "AI Solution"
 	if taskSubType == "bugfix" {
-		prTitle = fmt.Sprintf("Bugfix: %s", subject)
+		prefix = "Bugfix"
 	}
+	prTitle := buildPRTitle(prefix, subject)
 	contentPreview := agentResult
 	if len(contentPreview) > 500 {
 		contentPreview = contentPreview[:500] + "..."
@@ -87,39 +90,137 @@ func FinalizeWriteTaskPR(client *gitea.Client, owner, repo, branchName, baseBran
 	}, nil
 }
 
+// prTitlePrefixes are the subjects FinalizeWriteTaskPR puts in front of a PR
+// title. A subject that already carries one came from another Matea PR and
+// must not be prefixed twice: jeeinn/rust-study PR #9 was titled
+// "AI Solution: AI Solution: issues" because PR #8's own title was used as the
+// subject verbatim.
+var prTitlePrefixes = []string{"AI Solution:", "Bugfix:"}
+
+// webhookEventNames are the values store.Task.Event can hold. A subject left
+// over from one of these is the fingerprint of the pre-2026-08-29 bug that
+// titled every PR after the webhook event name ("AI Solution: issues"); it
+// says nothing about the change and must not be propagated to the next PR.
+var webhookEventNames = map[string]bool{
+	"issues": true, "issue_comment": true, "issue_assign": true,
+	"pull_request": true, "pull_request_comment": true, "pull_request_assign": true,
+	"pull_request_review": true, "pull_request_review_request": true,
+	"push": true, "create": true, "delete": true, "fork": true, "release": true,
+}
+
+// refsIssuePattern matches the "Refs #N" line FinalizeWriteTaskPR appends to a
+// PR body. Deliberately line-anchored: an inline "#N" inside a quoted diff or a
+// code block is not a cross-reference.
+//
+// workflow.linkedIssuePattern does NOT match "refs" (it only knows Gitea's
+// close keywords), which is why a continuation task on a PR loses the link to
+// the original issue and inherits the PR's title instead. The title only needs
+// the reference, so it is read here rather than by relaxing that pattern —
+// task.IssueID drives session keys and comment writeback, and changing what it
+// resolves to would move where replies land.
+var refsIssuePattern = regexp.MustCompile(`(?im)^refs\s+#(\d+)\s*$`)
+
+// buildPRTitle joins a prefix and a subject without stacking prefixes.
+func buildPRTitle(prefix, subject string) string {
+	for _, p := range prTitlePrefixes {
+		if strings.HasPrefix(subject, p) {
+			subject = strings.TrimSpace(strings.TrimPrefix(subject, p))
+			break
+		}
+	}
+	if subject == "" {
+		return prefix
+	}
+	return prefix + ": " + subject
+}
+
 // prTitleSubject resolves what a PR is actually about, for use in its title.
 //
-// task.Event holds the webhook event NAME ("issues", "issue_comment",
-// "pull_request") — not the subject of the work — so titles built from it came
-// out as "AI Solution: issues", which tells a reviewer nothing about the
-// change (jeeinn/rust-study PR #8 is titled exactly that). This prefers the
-// linked issue's or PR's real title and falls back to the task id, which at
-// least identifies the task; an event name is never used as a title subject.
+// task.Event holds the webhook event NAME ("issues", "issue_comment") — not
+// the subject of the work — so titles built from it came out as
+// "AI Solution: issues" (jeeinn/rust-study PR #8). Resolution order:
+//
+//  1. the title of the linked issue or PR;
+//  2. if that title is itself an event-name leftover, the title of the issue
+//     referenced by the "Refs #N" line of its body — the original request the
+//     PR was answering (PR #8's body carries "Refs #7", whose title is
+//     "更新项目的readme，符合当前项目最新描述");
+//  3. the task id, which at least identifies the task.
+//
+// An event name is never used as a title subject.
 func prTitleSubject(client *gitea.Client, owner, repo string, task *store.Task) string {
 	if task == nil {
 		return "AI 任务"
 	}
-	if client != nil {
-		if id := firstNonZero(task.IssueID, task.PRID); id > 0 {
-			if issue, err := client.IssueGet(owner, repo, id); err == nil {
-				if title, ok := issue["title"].(string); ok && strings.TrimSpace(title) != "" {
-					return truncatePRTitle(strings.TrimSpace(title))
-				}
-			} else {
-				log.Printf("[WARN] Task %d: cannot read title of %s/%s#%d for PR title: %v", task.ID, owner, repo, id, err)
+	if client == nil {
+		return fmt.Sprintf("Task %d", task.ID)
+	}
+	seen := make(map[int]bool, 2)
+	for _, id := range []int{task.IssueID, task.PRID} {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		obj, err := client.IssueGet(owner, repo, id)
+		if err != nil {
+			log.Printf("[WARN] Task %d: cannot read title of %s/%s#%d for PR title: %v", task.ID, owner, repo, id, err)
+			continue
+		}
+		title, _ := obj["title"].(string)
+		if subject, ok := cleanPRTitleSubject(title); ok {
+			return truncatePRTitle(subject)
+		}
+		// Hop 2: the object's own title is unusable, follow its "Refs #N".
+		body, _ := obj["body"].(string)
+		if ref := extractRefsIssue(body); ref > 0 && !seen[ref] {
+			seen[ref] = true
+			linked, err := client.IssueGet(owner, repo, ref)
+			if err != nil {
+				log.Printf("[WARN] Task %d: cannot read title of linked %s/%s#%d for PR title: %v", task.ID, owner, repo, ref, err)
+				continue
+			}
+			linkedTitle, _ := linked["title"].(string)
+			if subject, ok := cleanPRTitleSubject(linkedTitle); ok {
+				log.Printf("[INFO] Task %d: PR title falls back to linked #%d (%s/%s#%d is an event-name leftover)", task.ID, ref, owner, repo, id)
+				return truncatePRTitle(subject)
 			}
 		}
 	}
 	return fmt.Sprintf("Task %d", task.ID)
 }
 
-func firstNonZero(vals ...int) int {
-	for _, v := range vals {
-		if v > 0 {
-			return v
+// cleanPRTitleSubject reports whether title is usable as a PR title subject,
+// stripping a Matea prefix when present. Empty titles and webhook event names
+// (the fingerprint of the old event-name bug) are rejected.
+func cleanPRTitleSubject(title string) (string, bool) {
+	subject := strings.TrimSpace(title)
+	for _, p := range prTitlePrefixes {
+		if strings.HasPrefix(subject, p) {
+			subject = strings.TrimSpace(strings.TrimPrefix(subject, p))
+			break
 		}
 	}
-	return 0
+	if subject == "" {
+		return "", false
+	}
+	if webhookEventNames[strings.ToLower(subject)] {
+		return "", false
+	}
+	return subject, true
+}
+
+// extractRefsIssue returns the issue number of a body's "Refs #N" line, or 0.
+func extractRefsIssue(body string) int {
+	m := refsIssuePattern.FindStringSubmatch(body)
+	if len(m) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // truncatePRTitle shortens s to maxPRTitleRunes, appending an ellipsis.
