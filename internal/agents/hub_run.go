@@ -170,9 +170,17 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		// Session continuation (B2.3): when the task's session recorded a
 		// LastHead, the hub branches the NEW per-task draft branch from that
 		// commit instead of the base tip. Validation anchors on it too.
-		if anchor := f.sessionLastHead(task); anchor != "" {
+		anchor := f.sessionLastHead(task)
+		if anchor != "" {
 			gitSyncInfo.AnchorHEAD = anchor
 			log.Printf("[INFO] hub execution task %d: session continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
+		}
+		// Prepare may have pointed the draft at an existing PR's head branch.
+		// That is only safe with an anchor: see effectiveDraftBranch.
+		if settled := effectiveDraftBranch(gitSyncInfo.DraftBranch, anchor, task.ID); settled != gitSyncInfo.DraftBranch {
+			log.Printf("[WARN] hub execution task %d: no session anchor to continue PR head branch %s; using a fresh %s (the PR keeps its current commits)",
+				task.ID, gitSyncInfo.DraftBranch, settled)
+			gitSyncInfo.DraftBranch = settled
 		}
 		tc.GitSync = info
 	}

@@ -175,10 +175,17 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 		return nil, nil, fmt.Errorf("git_sync prepare: issue deploy key: %w", err)
 	}
 
+	draftBranch, draftNote := resolveGitSyncDraftBranch(adminClient, owner, repo, task)
+	if draftBranch == "" {
+		draftBranch = DraftBranchName(task.ID)
+	} else {
+		log.Printf("[INFO] git_sync task %d: pushing to PR head branch %s instead of a fresh per-task branch (%s)", task.ID, draftBranch, draftNote)
+	}
+
 	info := &GitSyncInfo{
 		CloneURL:       repoInfo.SSHURL,
 		PrivateKey:     key.PrivateKey,
-		DraftBranch:    DraftBranchName(task.ID),
+		DraftBranch:    draftBranch,
 		BaseBranch:     base,
 		BaseHEAD:       branch.Commit.ID,
 		CommitAuthor:   "Matea Hub <hub@matea.local>",
@@ -186,6 +193,85 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 		HubPush:        true,
 	}
 	return info, key, nil
+}
+
+// resolveGitSyncDraftBranch picks the branch a git_sync hub must push, or ""
+// when the task should get a fresh per-task branch (DraftBranchName).
+//
+// Before this existed every task pushed matea/hub-{taskID}, so a task
+// triggered by an @mention on an existing pull request pushed a brand new
+// branch and FinalizeWriteTaskPR — which only looks for a PR whose HEAD is
+// that branch — found nothing and opened a second PR. Observed on
+// jeeinn/rust-study: "@code-opencode" on PR #8 (head matea/hub-14) pushed
+// matea/hub-17 and opened PR #9, so the review conversation the user was
+// answering stayed on #8 with nothing attached to it. The builtin write path
+// never had this bug: resolveWorkBranch reuses task.BaseBranch (the PR head).
+//
+// The head branch is reused only when it is one of Matea's own draft
+// branches. Pointing an AI coding backend at a human-authored branch would
+// let it rewrite someone else's work, and the trust model already bounds hub
+// pushes to the matea/hub- prefix.
+//
+// Gitea numbers issues and PRs in one space, so the conversation id can
+// arrive as PRID (a PR conversation) or as IssueID (the effective key, used
+// when the resolver found no linked issue). Both are probed.
+func resolveGitSyncDraftBranch(client *gitea.Client, owner, repo string, task *store.Task) (branch, note string) {
+	if client == nil || task == nil {
+		return "", ""
+	}
+	seen := make(map[int]bool, 2)
+	for _, id := range []int{task.PRID, task.IssueID} {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		pr, err := client.PRGet(owner, repo, id)
+		if err != nil {
+			// Either a plain issue (not a PR) or unreachable. Neither is a
+			// reason to fail the task — fall through to a fresh branch.
+			log.Printf("[DEBUG] git_sync task %d: %s/%s#%d is not a readable PR: %v", task.ID, owner, repo, id, err)
+			continue
+		}
+		state, err := gitea.PRState(pr)
+		if err != nil {
+			log.Printf("[WARN] git_sync task %d: cannot read state of PR #%d: %v", task.ID, id, err)
+			continue
+		}
+		if state != "open" {
+			log.Printf("[INFO] git_sync task %d: PR #%d is %s; it cannot take new commits, using a fresh draft branch", task.ID, id, state)
+			continue
+		}
+		head, err := gitea.PRHeadRef(pr)
+		if err != nil {
+			log.Printf("[WARN] git_sync task %d: cannot read head ref of PR #%d: %v", task.ID, id, err)
+			continue
+		}
+		if !isDraftBranch(head) {
+			log.Printf("[INFO] git_sync task %d: PR #%d head %q is not a Matea draft branch (not %s*); leaving a human branch alone", task.ID, id, head, DraftBranchPrefix)
+			continue
+		}
+		return head, fmt.Sprintf("open PR #%d head", id)
+	}
+	return "", ""
+}
+
+// effectiveDraftBranch settles the draft branch once the continuation anchor
+// is known.
+//
+// Reusing an existing PR's head branch (resolveGitSyncDraftBranch) is only safe
+// when the session recorded a head to continue from. Without an anchor the hub
+// branches from the base tip — which would silently drop the PR's existing
+// commits, and the push would then be rejected as non-fast-forward — so the
+// task keeps its own per-task branch and gets its own PR instead.
+func effectiveDraftBranch(prepared, anchor string, taskID int64) string {
+	if prepared == "" || prepared == DraftBranchName(taskID) {
+		return prepared
+	}
+	if anchor == "" {
+		return DraftBranchName(taskID)
+	}
+	return prepared
 }
 
 // isDraftBranch reports whether ref is one of the hub-owned draft branches

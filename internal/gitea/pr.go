@@ -109,6 +109,19 @@ func PRHeadRef(pr map[string]interface{}) (string, error) {
 	return ref, nil
 }
 
+// PRState extracts the PR's state ("open" / "closed" / "merged") from a PR
+// detail map returned by PRGet.
+//
+// git_sync Prepare uses it to decide whether a PR conversation can still take
+// new commits: only an open PR has a head branch worth pushing to.
+func PRState(pr map[string]interface{}) (string, error) {
+	state, ok := pr["state"].(string)
+	if !ok || state == "" {
+		return "", fmt.Errorf("PR state missing")
+	}
+	return state, nil
+}
+
 // PRBaseRef extracts the base branch ref from a PR detail map returned by
 // PRGet: the branch the PR merges INTO (as opposed to PRHeadRef, the branch
 // carrying the proposed changes).
