@@ -8,12 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **git_sync 任务在 PR 上发起时复用该 PR 的 head 分支**：此前 draft 分支恒为 `matea/hub-{当前taskID}`，于是在 PR #8 上 `@code-opencode` 会推 `matea/hub-17` 并开出一个新 PR #9，用户正在回答的 review 对话留在 #8 上、什么都没挂上去。现改为：任务源自一个 **open** PR、且其 head 是 Matea 自己的 draft 分支（`matea/hub-*`）时，直接推该 head 分支，提交进入原 PR。builtin 写路径从未有此问题（`resolveWorkBranch` 复用 `task.BaseBranch`）。`task.PRID` 与 `task.IssueID` 都会探测——Gitea 的 issue 与 PR 共用编号空间，resolver 未解析到关联 issue 时会话 id 落在后者上。三道回退：head 不是 `matea/hub-*`（不改写人工分支）、PR 非 open（合并后的 PR 不能收提交）、会话无 LastHead 锚点（无锚点会让 hub 从 base tip 起分支，静默丢弃 PR 已有提交且 push 被 non-fast-forward 拒绝）
 - **PR 标题改用真实 issue/PR 标题**：此前标题取自 `task.Event`（webhook **事件名**），于是每个 PR 都叫 `AI Solution: issues`（`jeeinn/rust-study` PR #8 即如此），对评审者零信息量。现优先取关联 issue / PR 的真实标题（超 60 字截断），取不到时退化为 `Task {id}`；事件名不再作为标题来源
 - **PR 相关文案中文化**：PR body 标题 `## AI Generated Solution` → `## AI 生成的解决方案`；创建回执 `✅ PR created: #N` → `✅ PR 已创建：#N`；更新分支回执 `🔄 Updated PR branch \`x\` with new changes` → `🔄 已更新 PR 分支 \`x\``
 - **评论 footer 用 Agent 名替代数据库 ID**：`*Task ID: 16 | Agent: 3 | Type: review_pr*` 里的 `3` 是 `agents` 表行 id，读者无从对应。现渲染为 Gitea 用户名（如 `@code-review`），无关联账号时回退内部名
 - **L3 通知模板不再内联绝对 URL**：`L3CoderPROpened` 的 `{{pr_url}}` 由服务端 `gitea.url` 拼出，docker-compose 下是内网地址（实测 `http://localhost:3000/...`），外部打不开。改为原生 `#N` 引用（Gitea 按自身 ROOT_URL 渲染，且带 PR 状态）；同时新增 `{{reviewer_hint}}`——存在 review 角色 Agent 时具名提示（`@code-review`），否则提示先指派一个，替代原来"Request reviewer Agent 进行代码审查"这种没说找谁的措辞
 
 ### Fixed
+- **PR 标题不再叠加前缀**：标题 subject 取自关联对象时，若该对象本身是 Matea 开的 PR，它的标题已带 `AI Solution:` / `Bugfix:` 前缀，外面再拼一次就得到 `AI Solution: AI Solution: issues`（`jeeinn/rust-study` PR #9 现场）。现先剥离已知前缀再按当前任务类型重新加
+- **PR 标题不再继承 webhook 事件名**：上一版把「取真实标题」实现为「取关联对象的标题」，但关联对象若是旧版本开的 PR（其 subject 就是事件名 `issues`），新 PR 会原样继承这个垃圾标题。现识别出事件名残留后，顺着该对象 body 里的 `Refs #N` 追溯到最初的需求 issue（PR #8 body 的 `Refs #7` → issue #7 的 `更新项目的readme，符合当前项目最新描述`）；追溯不到才退化为 `Task {id}`。注意 `workflow.linkedIssuePattern` 只认 Gitea 的 close 关键字、不认 `Refs`，本次**未**放宽它——`task.IssueID` 决定会话 key 与评论写回位置，改动会让回复跑到别处
 - **code review 状态卡永远停在「处理中」**：`postL3Notification` 的 switch 只覆盖 `analyze_issue` 与写任务类型，`review_pr` / `reply_comment` 直接落空，`completeStatusCard` 从未被调用。`jeeinn/rust-study` PR #8 上一条 56 秒就跑完的 review，卡片至今显示 `🔄 处理中`。现补齐这两类（detail 留空——翻转状态是卡片机制本身的职责，不应依赖 Notify 开关）
 - **review 状态卡建在一处、完成在另一处**：状态卡创建用的是 `issueID`（`effectiveIssueKey`，偏向关联 issue），而结果评论与失败写回用的是 `writebackTargetID`（`review_pr` 偏向 PRID）——两套优先级相反，导致 PR 上 review 的卡建在别处、完成无处可 PATCH。现两侧统一走 `writebackTargetID`
 - **状态卡的任务 ID 不再渲染成 `#N`**：Gitea 会把 `#N` 自动链接到本仓库同号的 issue/PR，于是 task 16 的卡片显示成指向 PR #16 的链接——一个完全不相干的对象。现直接输出数字（如 `| **任务** | 16 |`）。`L3AnalyzeDone` 的 `task #{{task_id}}` 同步改为 `任务 {{task_id}}`
