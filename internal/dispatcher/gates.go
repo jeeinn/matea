@@ -69,7 +69,7 @@ func (d *Dispatcher) gatesForTransition(ctx *store.WorkflowContext, role string)
 // unassignPreviousAgentOnTransition removes the previous agent from the issue's assignee
 // when the stage transitions to a different role. This is controlled by the
 // stage_transition_unassign gate policy.
-func (d *Dispatcher) unassignPreviousAgentOnTransition(repo string, issueID int, prevAgentID int64, newAgentID int64) {
+func (d *Dispatcher) unassignPreviousAgentOnTransition(repo string, issueID, prID int, prevAgentID int64, newAgentID int64) {
 	giteaCfg := d.giteaCfg.Load()
 	if d.wfPolicy == nil || giteaCfg == nil {
 		return
@@ -106,16 +106,20 @@ func (d *Dispatcher) unassignPreviousAgentOnTransition(repo string, issueID int,
 		return
 	}
 
+	// The agent was assigned on the conversation the user acted in, which for
+	// a PR task is the PR even though the task is keyed to the linked issue.
+	target := conversationTarget(issueID, prID)
+
 	giteaClient := gitea.NewClient(giteaCfg.URL, giteaCfg.AdminToken)
-	if err := giteaClient.IssueUnassign(owner, repoName, issueID, prevAgent.GiteaUsername); err != nil {
-		log.Printf("[WARN] Failed to unassign agent %s from issue %s#%d: %v",
-			prevAgent.GiteaUsername, repo, issueID, err)
+	if err := giteaClient.IssueUnassign(owner, repoName, target, prevAgent.GiteaUsername); err != nil {
+		log.Printf("[WARN] Failed to unassign agent %s from %s#%d: %v",
+			prevAgent.GiteaUsername, repo, target, err)
 		if level == workflow.GateHard {
-			d.postGateComment(prevAgent, repo, issueID,
+			d.postGateComment(prevAgent, repo, target,
 				fmt.Sprintf("⚠️ 未能从 Issue 移除前一 Agent [%s] 的分配，已按配置继续执行", prevAgent.GiteaUsername))
 		}
 	} else {
-		log.Printf("[INFO] Unassigned agent %s from issue %s#%d on stage transition",
-			prevAgent.GiteaUsername, repo, issueID)
+		log.Printf("[INFO] Unassigned agent %s from %s#%d on stage transition",
+			prevAgent.GiteaUsername, repo, target)
 	}
 }

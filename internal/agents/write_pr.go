@@ -109,29 +109,44 @@ var webhookEventNames = map[string]bool{
 }
 
 // refsIssuePattern matches the "Refs #N" line FinalizeWriteTaskPR appends to a
-// PR body. Deliberately line-anchored: an inline "#N" inside a quoted diff or a
-// code block is not a cross-reference.
+// PR body, so a title can be traced back to the issue the work came from.
 //
-// workflow.linkedIssuePattern does NOT match "refs" (it only knows Gitea's
-// close keywords), which is why a continuation task on a PR loses the link to
-// the original issue and inherits the PR's title instead. The title only needs
-// the reference, so it is read here rather than by relaxing that pattern —
-// task.IssueID drives session keys and comment writeback, and changing what it
-// resolves to would move where replies land.
+// workflow.referencedIssuePattern reads the same footer for the session key,
+// and the duplication is deliberate on both counts. It cannot be shared —
+// workflow imports this package, so the dependency cannot run the other way —
+// and it should not be: that one matches human prose anywhere in a body, while
+// this one is line-anchored because it reads a footer Matea generated itself,
+// where an inline "#N" inside a quoted diff or a code block is not a reference.
 var refsIssuePattern = regexp.MustCompile(`(?im)^refs\s+#(\d+)\s*$`)
 
 // buildPRTitle joins a prefix and a subject without stacking prefixes.
 func buildPRTitle(prefix, subject string) string {
-	for _, p := range prTitlePrefixes {
-		if strings.HasPrefix(subject, p) {
-			subject = strings.TrimSpace(strings.TrimPrefix(subject, p))
-			break
-		}
-	}
+	subject = stripMateaPrefix(subject)
 	if subject == "" {
 		return prefix
 	}
 	return prefix + ": " + subject
+}
+
+// stripMateaPrefix removes a Matea-generated title prefix when present, and
+// returns the subject trimmed. Used before a prefix is applied, so a subject
+// that already carries one is not prefixed twice — jeeinn/rust-study PR #9 was
+// titled "AI Solution: AI Solution: issues" because PR #8's own title was
+// reused as the subject verbatim.
+//
+// The comparison is case-insensitive: a prefix written by an older version, or
+// by hand, ("ai solution:", "BUGFIX:") is the same prefix and must not survive
+// to be prefixed again.
+func stripMateaPrefix(subject string) string {
+	trimmed := strings.TrimSpace(subject)
+	lower := strings.ToLower(trimmed)
+	for _, p := range prTitlePrefixes {
+		pLower := strings.ToLower(p)
+		if strings.HasPrefix(lower, pLower) {
+			return strings.TrimSpace(trimmed[len(p):])
+		}
+	}
+	return trimmed
 }
 
 // prTitleSubject resolves what a PR is actually about, for use in its title.
@@ -156,10 +171,7 @@ func prTitleSubject(client *gitea.Client, owner, repo string, task *store.Task) 
 		return fmt.Sprintf("Task %d", task.ID)
 	}
 	seen := make(map[int]bool, 2)
-	for _, id := range []int{task.IssueID, task.PRID} {
-		if id <= 0 || seen[id] {
-			continue
-		}
+	for _, id := range conversationIDsIssueFirst(task) {
 		seen[id] = true
 
 		obj, err := client.IssueGet(owner, repo, id)
@@ -167,12 +179,13 @@ func prTitleSubject(client *gitea.Client, owner, repo string, task *store.Task) 
 			log.Printf("[WARN] Task %d: cannot read title of %s/%s#%d for PR title: %v", task.ID, owner, repo, id, err)
 			continue
 		}
-		title, _ := obj["title"].(string)
+		what := fmt.Sprintf("%s/%s#%d", owner, repo, id)
+		title := objectString(obj, "title", what)
 		if subject, ok := cleanPRTitleSubject(title); ok {
 			return truncatePRTitle(subject)
 		}
 		// Hop 2: the object's own title is unusable, follow its "Refs #N".
-		body, _ := obj["body"].(string)
+		body := objectString(obj, "body", what)
 		if ref := extractRefsIssue(body); ref > 0 && !seen[ref] {
 			seen[ref] = true
 			linked, err := client.IssueGet(owner, repo, ref)
@@ -180,7 +193,7 @@ func prTitleSubject(client *gitea.Client, owner, repo string, task *store.Task) 
 				log.Printf("[WARN] Task %d: cannot read title of linked %s/%s#%d for PR title: %v", task.ID, owner, repo, ref, err)
 				continue
 			}
-			linkedTitle, _ := linked["title"].(string)
+			linkedTitle := objectString(linked, "title", fmt.Sprintf("%s/%s#%d", owner, repo, ref))
 			if subject, ok := cleanPRTitleSubject(linkedTitle); ok {
 				log.Printf("[INFO] Task %d: PR title falls back to linked #%d (%s/%s#%d is an event-name leftover)", task.ID, ref, owner, repo, id)
 				return truncatePRTitle(subject)
@@ -190,17 +203,32 @@ func prTitleSubject(client *gitea.Client, owner, repo string, task *store.Task) 
 	return fmt.Sprintf("Task %d", task.ID)
 }
 
+// objectString reads a string field out of an IssueGet / PRGet payload.
+//
+// A failed type assertion is not silently swallowed: an absent field is normal
+// (an issue need not have a body) but a field of the wrong type means Gitea
+// answered with a shape we do not understand, and quietly degrading that to
+// "" makes it look like "this issue has no title" instead of "we could not
+// read it". Callers fall back either way; the log is what makes the
+// difference diagnosable.
+func objectString(obj map[string]interface{}, key, what string) string {
+	v, ok := obj[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		log.Printf("[WARN] PR title: %s has a non-string %q (%T); treating it as empty", what, key, v)
+		return ""
+	}
+	return s
+}
+
 // cleanPRTitleSubject reports whether title is usable as a PR title subject,
 // stripping a Matea prefix when present. Empty titles and webhook event names
 // (the fingerprint of the old event-name bug) are rejected.
 func cleanPRTitleSubject(title string) (string, bool) {
-	subject := strings.TrimSpace(title)
-	for _, p := range prTitlePrefixes {
-		if strings.HasPrefix(subject, p) {
-			subject = strings.TrimSpace(strings.TrimPrefix(subject, p))
-			break
-		}
-	}
+	subject := stripMateaPrefix(title)
 	if subject == "" {
 		return "", false
 	}

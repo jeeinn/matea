@@ -170,22 +170,17 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		// Continuation anchor: the commit the hub must branch from, instead of
 		// the base tip. Validation anchors on it too (B2.3).
 		//
-		// Order matters. The session LastHead wins when present, but it is
-		// usually absent for a task on a PR: sessions are keyed by
-		// (repo, issueID, agent, role), and resolveLinkedIssue only understands
-		// Fixes/Closes/Resolves — so a PR whose body says "Refs #7" resolves to
-		// issueID=8 (its own number) and lands in a NEW session rather than the
-		// one that opened it. On jeeinn/rust-study that made reusing the PR
-		// head branch a no-op: no anchor, so the guard below fell back to a
-		// fresh branch and PR #9 was opened anyway.
-		//
-		// The fallback is therefore not "give up" but "ask the branch itself":
-		// a draft branch that already exists on the remote carries its own
-		// start point, and Prepare recorded it (draftBranchChoice.Head).
+		// Order matters, and the fallback is not "give up" but "ask the branch
+		// itself": a draft branch that already exists on the remote carries its
+		// own start point, and Prepare recorded it (draftBranchChoice.Head).
+		// Without it, a task with no session to inherit from produced no anchor,
+		// the guard below reverted to a per-task branch, and PR #9 was opened
+		// anyway (jeeinn/rust-study). See continuationAnchor for why LastHead
+		// still wins and what that costs.
 		anchor := continuationAnchor(f.sessionLastHead(task), gitSyncInfo.DraftBranchHEAD)
 		if anchor != "" {
 			gitSyncInfo.AnchorHEAD = anchor
-			log.Printf("[INFO] hub execution task %d: continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
+			log.Printf("[INFO] hub execution task %d: continuation anchored at %s", task.ID, shortSHA(anchor))
 		}
 		// Prepare may have pointed the draft at an existing PR's head branch.
 		// That is only safe with an anchor: see effectiveDraftBranch.
@@ -216,7 +211,8 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 				return nil, fmt.Errorf("git_sync re-attach: cannot resolve base branch for task %d (no gitea client factory)", task.ID)
 			}
 			owner, repo := splitOwnerRepo(task.Repo)
-			resolved, rerr := resolveGitSyncBaseBranch(f.giteaFactory.GetAdminGiteaClient(), owner, repo, task, "")
+			lookup := newPRLookup(f.giteaFactory.GetAdminGiteaClient(), owner, repo)
+			resolved, rerr := resolveGitSyncBaseBranch(lookup, task, "")
 			if rerr != nil {
 				return nil, fmt.Errorf("git_sync re-attach: %w", rerr)
 			}

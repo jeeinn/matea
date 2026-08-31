@@ -160,14 +160,18 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 		return nil, nil, fmt.Errorf("git_sync transport: admin gitea client unavailable")
 	}
 
-	repoInfo, err := adminClient.GetRepo(owner, repo)
+	// One lookup for the whole Prepare: the repository and the conversation's
+	// PR are each read once, however many resolvers below ask about them.
+	lookup := newPRLookup(adminClient, owner, repo)
+
+	repoInfo, err := lookup.Repo()
 	if err != nil {
 		return nil, nil, fmt.Errorf("git_sync prepare: get repo: %w", err)
 	}
 	if repoInfo.SSHURL == "" {
 		return nil, nil, fmt.Errorf("git_sync prepare: repo %s/%s has no ssh_url (SSH must be enabled on the Gitea server)", owner, repo)
 	}
-	base, err := resolveGitSyncBaseBranch(adminClient, owner, repo, task, repoInfo.DefaultBranch)
+	base, err := resolveGitSyncBaseBranch(lookup, task, repoInfo.DefaultBranch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("git_sync prepare: %w", err)
 	}
@@ -181,7 +185,7 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 		return nil, nil, fmt.Errorf("git_sync prepare: issue deploy key: %w", err)
 	}
 
-	choice := resolveGitSyncDraftBranch(adminClient, owner, repo, task)
+	choice := resolveGitSyncDraftBranch(lookup, task)
 	draftBranch := choice.Branch
 	if draftBranch == "" {
 		draftBranch = DraftBranchName(task.ID)
@@ -220,25 +224,24 @@ func (t *gitSyncTransport) Prepare(ctx context.Context, task *store.Task, owner,
 // let it rewrite someone else's work, and the trust model already bounds hub
 // pushes to the matea/hub- prefix.
 //
-// Gitea numbers issues and PRs in one space, so the conversation id can
-// arrive as PRID (a PR conversation) or as IssueID (the effective key, used
-// when the resolver found no linked issue). Both are probed.
-func resolveGitSyncDraftBranch(client *gitea.Client, owner, repo string, task *store.Task) draftBranchChoice {
-	if client == nil || task == nil {
+// That prefix check is why this is NOT shared with resolveWorkBranch: the
+// builtin path pushes with Matea's own credentials into its own sandbox, so
+// working directly on a human's PR branch is the point (that is how you ask an
+// agent to fix your PR). A hub gets a deploy key scoped to matea/hub-*, and
+// handing it a branch outside that scope would fail the push or, worse, widen
+// the key. Same-looking decision, different trust boundary.
+//
+// Both ids are probed, PR first — see conversationIDs.
+func resolveGitSyncDraftBranch(lookup *prLookup, task *store.Task) draftBranchChoice {
+	if !lookup.Available() || task == nil {
 		return draftBranchChoice{}
 	}
-	seen := make(map[int]bool, 2)
-	for _, id := range []int{task.PRID, task.IssueID} {
-		if id <= 0 || seen[id] {
-			continue
-		}
-		seen[id] = true
-
-		pr, err := client.PRGet(owner, repo, id)
+	for _, id := range conversationIDsPRFirst(task) {
+		pr, err := lookup.PR(id)
 		if err != nil {
 			// Either a plain issue (not a PR) or unreachable. Neither is a
 			// reason to fail the task — fall through to a fresh branch.
-			log.Printf("[DEBUG] git_sync task %d: %s/%s#%d is not a readable PR: %v", task.ID, owner, repo, id, err)
+			log.Printf("[DEBUG] git_sync task %d: #%d is not a readable PR: %v", task.ID, id, err)
 			continue
 		}
 		state, err := gitea.PRState(pr)
@@ -280,19 +283,23 @@ func resolveGitSyncDraftBranch(client *gitea.Client, owner, repo string, task *s
 // draftBranchChoice is what resolveGitSyncDraftBranch decided: which branch a
 // git_sync hub must push, and where it must start from.
 //
-// Head is the part that is easy to get wrong. The obvious anchor — the session
-// LastHead — is usually EMPTY for a task on a PR: sessions are keyed by
-// (repo, issueID, agent, role), and resolveLinkedIssue only understands
-// Fixes/Closes/Resolves, so a PR whose body says "Refs #7" resolves to
-// issueID=8 (its own number, via effectiveIssueKey) and lands in a brand new
-// session instead of the one that opened it. On jeeinn/rust-study that made
-// "reuse the PR head branch" a no-op: the guard saw no anchor and fell back to
-// a fresh branch, so PR #9 was opened anyway.
+// Head is the part that is easy to get wrong. The obvious anchor is the
+// session LastHead, but it answers a different question: "where did MY last
+// task leave this branch", not "where is this branch now". The two diverge
+// whenever anything else touched the branch — a human pushing a fixup to the
+// PR, another agent, a rebase.
 //
 // A branch that already exists on the remote does not need a session to be
-// continued — its own tip is the answer. Session LastHead still wins when
-// present, because it is the authoritative head Matea fetched after the last
-// successful push.
+// continued: its own tip is the answer, and it is always current. That is why
+// this field is not a workaround for the session-key bug that motivated it
+// (a PR body saying "Refs #7" used to land in a session keyed 8 instead of 7,
+// making "reuse the PR head branch" a no-op — jeeinn/rust-study PR #9). The
+// resolver understands Refs now, so LastHead is usually present again, but the
+// tip stays the authoritative value for a branch that exists.
+//
+// LastHead still wins in continuationAnchor, because Approve's validation
+// anchors on it (B2.3). Flipping that priority is a validation change, not a
+// cleanup — see the note there.
 type draftBranchChoice struct {
 	// Branch is the branch to push, or "" when the task should get a fresh
 	// per-task branch (DraftBranchName).
@@ -306,21 +313,23 @@ type draftBranchChoice struct {
 
 // continuationAnchor picks the commit the hub must branch the draft from.
 //
-// The session LastHead wins when there is one — it is the head Matea fetched
-// after the last successful push, and validation anchors on it (B2.3).
+// The session LastHead wins when there is one, because Approve's three-element
+// validation anchors on the same value (B2.3): a hub told to start elsewhere
+// would produce a draft that fails validation.
 //
-// The fallback is the point of this function, and it is not "give up". A task
-// on a pull request usually lands in a brand new session: sessions are keyed by
-// (repo, issueID, agent, role), resolveLinkedIssue only understands
-// Fixes/Closes/Resolves, so a PR whose body says "Refs #7" is keyed 8 — its own
-// number, via effectiveIssueKey — not 7. The session that opened the PR (keyed
-// 7) holds the LastHead, and this task cannot see it.
+// KNOWN LIMIT: that makes the anchor a memory rather than an observation. If
+// anything pushed to the draft branch since Matea's last task — a human fixup
+// on the PR, another agent — LastHead is behind the real tip, and the hub is
+// asked to branch from the older commit. Preferring draftBranchHEAD instead
+// would fix that but has to move validation with it, so it is deliberately out
+// of scope here.
 //
-// But a draft branch that already exists on the remote carries its own start
-// point, and Prepare recorded it. On jeeinn/rust-study that is the difference
-// between PR #8 receiving the follow-up commits and a pointless PR #9 being
-// opened: with sessionLastHead empty and no fallback, the reuse guard
-// (effectiveDraftBranch) reverted the branch and the whole fix was a no-op.
+// The fallback is not "give up". A draft branch that already exists on the
+// remote carries its own start point and Prepare recorded it, so a task with no
+// session to inherit from can still continue the branch. Before that fallback
+// existed, the reuse guard (effectiveDraftBranch) saw no anchor, reverted to a
+// per-task branch, and PR #9 was opened anyway — the fix was a no-op in exactly
+// the case it was written for (jeeinn/rust-study).
 func continuationAnchor(sessionLastHead, draftBranchHEAD string) string {
 	if sessionLastHead != "" {
 		return sessionLastHead
@@ -377,9 +386,13 @@ func isDraftBranch(ref string) bool { return strings.HasPrefix(ref, DraftBranchP
 // above, and silently merging into a scratch branch is worse than retargeting
 // the new draft at the repository default. When nothing but draft branches is
 // available the run fails loudly — an empty base would open a malformed PR.
-func resolveGitSyncBaseBranch(client *gitea.Client, owner, repo string, task *store.Task, repoDefault string) (string, error) {
-	if client != nil && task != nil && task.PRID > 0 {
-		pr, err := client.PRGet(owner, repo, task.PRID)
+func resolveGitSyncBaseBranch(lookup *prLookup, task *store.Task, repoDefault string) (string, error) {
+	owner, repo := "", ""
+	if lookup != nil {
+		owner, repo = lookup.owner, lookup.repo
+	}
+	if lookup.Available() && task != nil && task.PRID > 0 {
+		pr, err := lookup.PR(task.PRID)
 		switch {
 		case err != nil:
 			log.Printf("[WARN] git_sync: resolve base branch of PR #%d (%s/%s): %v", task.PRID, owner, repo, err)
@@ -398,8 +411,8 @@ func resolveGitSyncBaseBranch(client *gitea.Client, owner, repo string, task *st
 	if b := strings.TrimSpace(repoDefault); b != "" && !isDraftBranch(b) {
 		return b, nil
 	}
-	if client != nil {
-		if info, err := client.GetRepo(owner, repo); err == nil {
+	if lookup.Available() {
+		if info, err := lookup.Repo(); err == nil {
 			if b := strings.TrimSpace(info.DefaultBranch); b != "" && !isDraftBranch(b) {
 				return b, nil
 			}

@@ -2,8 +2,10 @@ package gitea
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // CreatePRRequest is the payload for creating a pull request.
@@ -94,19 +96,39 @@ func (c *Client) PRGet(owner, repo string, prID int) (map[string]interface{}, er
 	return pr, nil
 }
 
+// prString reads a non-empty string out of a PR detail map returned by PRGet,
+// descending through nested objects: prString(pr, "head", "ref") reads
+// pr["head"]["ref"].
+//
+// Gitea nests the two branches under head/base objects, and every reader needs
+// the same defensive checks — object present, right type, value non-empty.
+// Doing that once keeps the four accessors below to one line each and their
+// errors uniform, instead of four copies of the same type assertions.
+func prString(pr map[string]interface{}, path ...string) (string, error) {
+	if len(path) == 0 {
+		return "", errors.New("prString: no path given")
+	}
+	var cur interface{} = pr
+	for i, key := range path {
+		obj, ok := cur.(map[string]interface{})
+		if !ok {
+			return "", fmt.Errorf("PR %s: %s is missing or not an object",
+				strings.Join(path, "."), strings.Join(path[:i], "."))
+		}
+		cur = obj[key]
+	}
+	s, ok := cur.(string)
+	if !ok || s == "" {
+		return "", fmt.Errorf("PR %s missing", strings.Join(path, "."))
+	}
+	return s, nil
+}
+
 // PRHeadRef extracts the head branch ref from a PR detail map returned by
 // PRGet. It is used by workspace preparation to clone the exact branch under
 // review (task 2.2.2).
 func PRHeadRef(pr map[string]interface{}) (string, error) {
-	head, ok := pr["head"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("PR head missing or wrong type")
-	}
-	ref, ok := head["ref"].(string)
-	if !ok || ref == "" {
-		return "", fmt.Errorf("PR head ref missing")
-	}
-	return ref, nil
+	return prString(pr, "head", "ref")
 }
 
 // PRHeadSHA extracts the tip commit of the PR's head branch from a PR detail
@@ -118,15 +140,7 @@ func PRHeadRef(pr map[string]interface{}) (string, error) {
 // existing commits and is rejected as non-fast-forward. The session LastHead
 // is not a substitute here — see draftBranchChoice.
 func PRHeadSHA(pr map[string]interface{}) (string, error) {
-	head, ok := pr["head"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("PR head missing or wrong type")
-	}
-	sha, ok := head["sha"].(string)
-	if !ok || sha == "" {
-		return "", fmt.Errorf("PR head sha missing")
-	}
-	return sha, nil
+	return prString(pr, "head", "sha")
 }
 
 // PRState extracts the PR's state ("open" / "closed" / "merged") from a PR
@@ -135,11 +149,7 @@ func PRHeadSHA(pr map[string]interface{}) (string, error) {
 // git_sync Prepare uses it to decide whether a PR conversation can still take
 // new commits: only an open PR has a head branch worth pushing to.
 func PRState(pr map[string]interface{}) (string, error) {
-	state, ok := pr["state"].(string)
-	if !ok || state == "" {
-		return "", fmt.Errorf("PR state missing")
-	}
-	return state, nil
+	return prString(pr, "state")
 }
 
 // PRBaseRef extracts the base branch ref from a PR detail map returned by
@@ -151,15 +161,7 @@ func PRState(pr map[string]interface{}) (string, error) {
 // it is the only authoritative source of "where should this work land", since
 // store.Task.BaseBranch holds the PR head / session working branch.
 func PRBaseRef(pr map[string]interface{}) (string, error) {
-	base, ok := pr["base"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("PR base missing or wrong type")
-	}
-	ref, ok := base["ref"].(string)
-	if !ok || ref == "" {
-		return "", fmt.Errorf("PR base ref missing")
-	}
-	return ref, nil
+	return prString(pr, "base", "ref")
 }
 
 // PRDiff returns the diff of a pull request.

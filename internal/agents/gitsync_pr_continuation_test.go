@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/jeeinn/matea/internal/gitea"
@@ -43,11 +44,21 @@ type fakeObject struct {
 	state   string // PRs only; empty means "not a PR" (404 on /pulls/{index})
 }
 
-// newPRContinuationServer serves the two lookups the fixes rely on:
-// /pulls/{index} (draft-branch reuse) and /issues/{index} (PR title). counts
-// records how many times each object was fetched, so a test can prove the
+// prContinuationMux serves the two lookups the fixes rely on, against one
+// shared set of fake objects:
+//
+//	GET /issues/{index} — titles and bodies, for PR title resolution
+//	GET /pulls/{index}  — head ref / head sha / state, for draft-branch reuse
+//
+// Gitea numbers issues and PRs in one space, so both routes answer from the
+// same objects and /pulls 404s for a plain issue. counts, when non-nil,
+// records how many times each object was fetched so a test can prove the
 // resolver does not probe the same conversation id twice.
-func newPRContinuationServer(t *testing.T, objects []fakeObject, counts *map[int]int) *httptest.Server {
+//
+// Handlers run on the httptest server's goroutine, so they report problems
+// with t.Errorf — never require/Fatal, whose FailNow is only legal on the
+// goroutine running the test.
+func prContinuationMux(t *testing.T, objects []fakeObject, counts *map[int]int) *http.ServeMux {
 	t.Helper()
 	byNumber := make(map[int]fakeObject, len(objects))
 	for _, o := range objects {
@@ -58,43 +69,103 @@ func newPRContinuationServer(t *testing.T, objects []fakeObject, counts *map[int
 			(*counts)[n]++
 		}
 	}
+	notFound := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusNotFound)
+		writeTestJSON(t, w, map[string]any{"message": "not found"})
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/o/r/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
-		var n int
-		require.NoError(t, json.Unmarshal([]byte(r.PathValue("index")), &n))
+		n, ok := pathIndex(t, w, r.PathValue("index"))
+		if !ok {
+			return
+		}
 		record(n)
 		o, ok := byNumber[n]
 		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"message": "not found"})
+			notFound(w)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		writeTestJSON(t, w, map[string]any{
 			"number": o.number,
 			"title":  o.title,
 			"body":   o.body,
 		})
 	})
 	mux.HandleFunc("/api/v1/repos/o/r/pulls/{index}", func(w http.ResponseWriter, r *http.Request) {
-		var n int
-		require.NoError(t, json.Unmarshal([]byte(r.PathValue("index")), &n))
+		n, ok := pathIndex(t, w, r.PathValue("index"))
+		if !ok {
+			return
+		}
 		record(n)
 		o, ok := byNumber[n]
 		// A plain issue is not a PR: Gitea 404s the pulls route for it.
 		if !ok || o.state == "" {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"message": "not found"})
+			notFound(w)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		writeTestJSON(t, w, map[string]any{
 			"number": o.number,
 			"state":  o.state,
 			"head":   map[string]any{"ref": o.headRef, "sha": o.headSHA},
 			"base":   map[string]any{"ref": "main"},
 		})
 	})
-	return httptest.NewServer(mux)
+	return mux
+}
+
+// newPRContinuationServer serves the shared routes for tests that drive the
+// gitea client directly.
+func newPRContinuationServer(t *testing.T, objects []fakeObject, counts *map[int]int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(prContinuationMux(t, objects, counts))
+}
+
+// newPRContinuationTransport wires a git_sync transport against the shared
+// routes plus the repo and branch routes Prepare needs.
+func newPRContinuationTransport(t *testing.T, objects []fakeObject) WorkspaceTransport {
+	t.Helper()
+	mux := prContinuationMux(t, objects, nil)
+	mux.HandleFunc("/api/v1/repos/o/r", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"default_branch": "main",
+			"ssh_url":        "ssh://git@example.com/o/r.git",
+		})
+	})
+	mux.HandleFunc("/api/v1/repos/o/r/branches/{name...}", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"name":   r.PathValue("name"),
+			"commit": map[string]any{"id": "1111111111111111111111111111111111111111"},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(srv.URL, "")}
+	return NewGitSyncTransport(factory, &fakeDeployKeyIssuer{}, t.TempDir(), DiffPolicy{})
+}
+
+// pathIndex parses a {index} path segment, answering 400 when it is not a
+// number. It must not use require: httptest handlers run on their own
+// goroutine, and FailNow is only legal on the goroutine running the test.
+func pathIndex(t *testing.T, w http.ResponseWriter, raw string) (int, bool) {
+	t.Helper()
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		http.Error(w, "bad index: "+raw, http.StatusBadRequest)
+		t.Errorf("path segment %q is not a number: %v", raw, err)
+		return 0, false
+	}
+	return n, true
+}
+
+// writeTestJSON encodes a fixture response. An encoding failure is a bug in
+// the fixture, and swallowing it turns into a confusing decode error on the
+// client side, so it is reported here.
+func writeTestJSON(t *testing.T, w http.ResponseWriter, v any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		t.Errorf("encode JSON response: %v", err)
+	}
 }
 
 func TestResolveGitSyncDraftBranchReusesOpenPRHead(t *testing.T) {
@@ -108,13 +179,13 @@ func TestResolveGitSyncDraftBranchReusesOpenPRHead(t *testing.T) {
 	client := gitea.NewClient(srv.URL, "tok")
 
 	// PR conversation: PRID carries the conversation.
-	choice := resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, PRID: 8})
+	choice := resolveGitSyncDraftBranch(newPRLookup(client, "o", "r"), &store.Task{ID: 17, PRID: 8})
 	assert.Equal(t, "matea/hub-14", choice.Branch, "a task on an open PR must push that PR's head branch, not matea/hub-17")
 	assert.Contains(t, choice.Note, "#8")
 
 	// The effective key carries it instead when the resolver found no linked
 	// issue (task.IssueID == PR number, PRID unset).
-	choice = resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, IssueID: 8})
+	choice = resolveGitSyncDraftBranch(newPRLookup(client, "o", "r"), &store.Task{ID: 17, IssueID: 8})
 	assert.Equal(t, "matea/hub-14", choice.Branch, "PRID==0 must not hide the conversation: IssueID shares Gitea's numbering")
 }
 
@@ -128,7 +199,7 @@ func TestResolveGitSyncDraftBranchCarriesTheBranchTip(t *testing.T) {
 	srv := newPRContinuationServer(t, objects, nil)
 	defer srv.Close()
 
-	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8})
+	choice := resolveGitSyncDraftBranch(newPRLookup(gitea.NewClient(srv.URL, "tok"), "o", "r"), &store.Task{ID: 17, PRID: 8})
 	assert.Equal(t, "aaaa1111", choice.Head,
 		"the branch tip travels with the choice: without it a task whose session is new has no anchor and the reuse is silently reverted")
 }
@@ -142,7 +213,7 @@ func TestResolveGitSyncDraftBranchRefusedWhenTipUnreadable(t *testing.T) {
 	srv := newPRContinuationServer(t, objects, nil)
 	defer srv.Close()
 
-	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8})
+	choice := resolveGitSyncDraftBranch(newPRLookup(gitea.NewClient(srv.URL, "tok"), "o", "r"), &store.Task{ID: 17, PRID: 8})
 	assert.Empty(t, choice.Branch, "no readable tip → no reuse, rather than reuse with an unknown start point")
 }
 
@@ -190,7 +261,7 @@ func TestResolveGitSyncDraftBranchReuseIsRefusedWhenUnsafe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newPRContinuationServer(t, tc.objects, nil)
 			defer srv.Close()
-			choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", tc.task)
+			choice := resolveGitSyncDraftBranch(newPRLookup(gitea.NewClient(srv.URL, "tok"), "o", "r"), tc.task)
 			assert.Empty(t, choice.Branch, "must fall back to a fresh per-task branch")
 			assert.Empty(t, choice.Note)
 			assert.Empty(t, choice.Head, "a fresh branch has no remote tip to continue from")
@@ -198,66 +269,46 @@ func TestResolveGitSyncDraftBranchReuseIsRefusedWhenUnsafe(t *testing.T) {
 	}
 }
 
-func TestResolveGitSyncDraftBranchProbesEachIdOnce(t *testing.T) {
+// One Prepare must read the conversation's PR once, no matter how many
+// resolvers ask about it. Two do: the base resolver wants base.ref, the draft
+// resolver wants head.ref and head.sha. They are kept independent and share a
+// prLookup instead of a parameter.
+//
+// The task also carries the same id in PRID and IssueID — the shape of a PR
+// with no linked issue — so this covers both ways the count could double.
+func TestGitSyncResolversShareOnePRRead(t *testing.T) {
 	objects := []fakeObject{{number: 8, headRef: "matea/hub-14", headSHA: "aaaa1111", state: "open"}}
 	counts := map[int]int{}
 	srv := newPRContinuationServer(t, objects, &counts)
 	defer srv.Close()
 
-	// PRID and IssueID both hold the conversation id for a PR with no linked
-	// issue; probing twice would double the API calls for every task.
-	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8, IssueID: 8})
+	lookup := newPRLookup(gitea.NewClient(srv.URL, "tok"), "o", "r")
+	task := &store.Task{ID: 17, PRID: 8, IssueID: 8}
+
+	base, err := resolveGitSyncBaseBranch(lookup, task, "main")
+	require.NoError(t, err)
+	assert.Equal(t, "main", base)
+
+	choice := resolveGitSyncDraftBranch(lookup, task)
 	assert.Equal(t, "matea/hub-14", choice.Branch)
-	assert.Equal(t, 1, counts[8], "the same conversation id must be probed once, not once per field")
+	assert.Equal(t, "aaaa1111", choice.Head)
+
+	assert.Equal(t, 1, counts[8], "the conversation's PR must be fetched once per Prepare, not once per resolver")
 }
 
-// newPRContinuationTransport wires a git_sync transport against a fake Gitea
-// serving the repo, branch and PR routes Prepare needs.
-func newPRContinuationTransport(t *testing.T, objects []fakeObject) WorkspaceTransport {
-	t.Helper()
-	byNumber := make(map[int]fakeObject, len(objects))
-	for _, o := range objects {
-		byNumber[o.number] = o
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/repos/o/r", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"default_branch": "main",
-			"ssh_url":        "ssh://git@example.com/o/r.git",
-		})
-	})
-	mux.HandleFunc("/api/v1/repos/o/r/branches/{name...}", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"name":   r.PathValue("name"),
-			"commit": map[string]any{"id": "1111111111111111111111111111111111111111"},
-		})
-	})
-	mux.HandleFunc("/api/v1/repos/o/r/pulls/{index}", func(w http.ResponseWriter, r *http.Request) {
-		n := pathIndex(t, r.PathValue("index"))
-		o, ok := byNumber[n]
-		if !ok || o.state == "" {
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"message": "not found"})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"number": o.number,
-			"state":  o.state,
-			"head":   map[string]any{"ref": o.headRef, "sha": o.headSHA},
-			"base":   map[string]any{"ref": "main"},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	factory := &gitSyncTestGiteaFactory{client: gitea.NewClient(srv.URL, "")}
-	return NewGitSyncTransport(factory, &fakeDeployKeyIssuer{}, t.TempDir(), DiffPolicy{})
-}
+// A lookup memoizes failures too: a task on a plain issue 404s /pulls, and
+// repeating that per resolver only doubles the log noise.
+func TestPRLookupMemoizesFailures(t *testing.T) {
+	counts := map[int]int{}
+	srv := newPRContinuationServer(t, []fakeObject{{number: 7, title: "real issue"}}, &counts)
+	defer srv.Close()
 
-func pathIndex(t *testing.T, raw string) int {
-	t.Helper()
-	var n int
-	require.NoError(t, json.Unmarshal([]byte(raw), &n))
-	return n
+	lookup := newPRLookup(gitea.NewClient(srv.URL, "tok"), "o", "r")
+	_, err1 := lookup.PR(7)
+	_, err2 := lookup.PR(7)
+	require.Error(t, err1)
+	assert.Equal(t, err1, err2)
+	assert.Equal(t, 1, counts[7], "a failed PR lookup must not be retried within one Prepare")
 }
 
 func TestGitSyncPrepareReusesPRHeadBranch(t *testing.T) {
@@ -295,10 +346,12 @@ func TestGitSyncPrepareUsesFreshBranchWithoutAnOpenPR(t *testing.T) {
 // the unit tests above cannot: they would still pass if hub_run.go stopped
 // consulting continuationAnchor.
 //
-// The scenario is jeeinn/rust-study exactly: task 14 opened PR #8 from issue #7
-// and is session-keyed 7; the follow-up on PR #8 is keyed 8 because
-// resolveLinkedIssue does not understand "Refs #7", so it lands in a brand new
-// session holding no LastHead.
+// The scenario is a follow-up task with no session to inherit from, which is
+// how jeeinn/rust-study failed: task 14 opened PR #8 from issue #7 and was
+// session-keyed 7, while the follow-up on PR #8 was keyed 8 — resolveLinkedIssue
+// did not understand "Refs #7" then. That key bug is fixed, but a task can still
+// arrive with no session (a PR whose body links nothing, a pruned session), and
+// it must continue the branch all the same.
 func TestRunViaHubContinuesOnPRHeadBranchWithoutASession(t *testing.T) {
 	// The remote already carries the branch PR #8 points at.
 	cloneURL, mainHEAD, prHeadSHA := setupGitSyncRemote(t, 9614)

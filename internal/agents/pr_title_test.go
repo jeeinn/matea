@@ -30,6 +30,32 @@ func TestPRTitleDoesNotStackPrefixes(t *testing.T) {
 	assert.Equal(t, "AI Solution", buildPRTitle("AI Solution", ""))
 }
 
+func TestObjectString(t *testing.T) {
+	// A missing field is normal — an issue need not have a body.
+	assert.Equal(t, "", objectString(map[string]interface{}{}, "body", "o/r#1"))
+	// A field of the wrong type means Gitea returned a shape we do not
+	// understand. It degrades to "" like a missing field, but is logged:
+	// silently accepting it would look like "this issue has no title".
+	assert.Equal(t, "", objectString(map[string]interface{}{"title": 42}, "title", "o/r#1"))
+	assert.Equal(t, "", objectString(map[string]interface{}{"title": nil}, "title", "o/r#1"))
+	assert.Equal(t, "hello", objectString(map[string]interface{}{"title": "hello"}, "title", "o/r#1"))
+	assert.Equal(t, "", objectString(map[string]interface{}{"title": ""}, "title", "o/r#1"))
+}
+
+// A prefix is a prefix regardless of how it was capitalised: an older Matea
+// version, or a human edit, writing "ai solution:" is the same prefix and must
+// not survive to be prefixed a second time.
+func TestPRTitlePrefixStrippingIsCaseInsensitive(t *testing.T) {
+	assert.Equal(t, "修复登录", stripMateaPrefix("AI Solution: 修复登录"))
+	assert.Equal(t, "修复登录", stripMateaPrefix("ai solution: 修复登录"))
+	assert.Equal(t, "修复登录", stripMateaPrefix("AI SOLUTION: 修复登录"))
+	assert.Equal(t, "修复登录", stripMateaPrefix("BUGFIX: 修复登录"))
+	assert.Equal(t, "修复登录", stripMateaPrefix("bugfix: 修复登录"))
+	// Not a prefix — left alone.
+	assert.Equal(t, "AI 生成的方案", stripMateaPrefix("AI 生成的方案"))
+	assert.Equal(t, "", stripMateaPrefix(""))
+}
+
 func TestPRTitleSubjectPrefersRealIssueTitle(t *testing.T) {
 	objects := []fakeObject{
 		{number: 7, title: "更新项目的readme，符合当前项目最新描述"},

@@ -35,8 +35,32 @@ func NewResolver(registry *agents.Registry) *Resolver {
 	return &Resolver{registry: registry}
 }
 
-// linkedIssuePattern matches "Fixes #N", "Closes #N", "Resolves #N" in PR bodies.
-var linkedIssuePattern = regexp.MustCompile(`(?i)(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s+#(\d+)`)
+// A PR body links back to the issue it came from in one of two ways, and they
+// are matched separately because they do not carry equal weight.
+//
+// closingIssuePattern is Gitea's own close syntax: merging the PR closes the
+// issue, which makes it an unambiguous statement of what the PR is for.
+//
+// referencedIssuePattern is a plain reference — it links without closing, and
+// it is what Matea itself writes: prBody appends "Refs #N" to every PR it
+// opens. Not recognising it meant a Matea PR was treated as having no linked
+// issue at all, so everything keyed off ResolveLogicIssueAndPR fell back to the
+// PR's own number: a brand new session per PR, in which the coder's LastHead
+// continuation anchor was never found, so every follow-up @mention on a PR
+// started from scratch. Observed on jeeinn/rust-study PR #8 ("Refs #7"): its
+// continuation task was keyed 8 while the task that opened it was keyed 7.
+//
+// Close beats reference regardless of position in the body (see
+// extractLinkedIssue). A body carrying both — "Refs #7, Closes #12" — is
+// stating that it closes #12 and merely mentions #7, and reading it by document
+// order would have silently changed which issue such a PR belongs to.
+//
+// Keys that address a human rather than storage must not follow either — see
+// dispatcher.conversationTarget.
+var (
+	closingIssuePattern    = regexp.MustCompile(`(?i)(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s+#(\d+)`)
+	referencedIssuePattern = regexp.MustCompile(`(?i)(?:refs?|references?)\s+#(\d+)`)
+)
 
 // mentionPattern matches @username in comment bodies.
 var mentionPattern = regexp.MustCompile(`@(\w[\w-]*)`)
@@ -230,7 +254,8 @@ func (r *Resolver) resolvePRClosed(evt *giteaingress.WebhookEvent) *ResolveResul
 }
 
 // resolveLinkedIssue extracts the linked issue number from PR / PR-as-issue body
-// (Fixes/Closes/Resolves #N). Returns 0 if none found.
+// (close keyword or plain reference — see closingIssuePattern). Returns 0 if
+// none found.
 func (r *Resolver) resolveLinkedIssue(evt *giteaingress.WebhookEvent) int {
 	for _, body := range linkedIssueBodies(evt) {
 		if n := extractLinkedIssue(body); n > 0 {
@@ -256,15 +281,16 @@ func linkedIssueBodies(evt *giteaingress.WebhookEvent) []string {
 }
 
 func extractLinkedIssue(body string) int {
-	matches := linkedIssuePattern.FindStringSubmatch(body)
-	if len(matches) < 2 {
-		return 0
+	for _, re := range []*regexp.Regexp{closingIssuePattern, referencedIssuePattern} {
+		matches := re.FindStringSubmatch(body)
+		if len(matches) < 2 {
+			continue
+		}
+		if n, err := strconv.Atoi(matches[1]); err == nil && n > 0 {
+			return n
+		}
 	}
-	n, err := strconv.Atoi(matches[1])
-	if err != nil {
-		return 0
-	}
-	return n
+	return 0
 }
 
 // isPRConversation reports whether the event is about a pull request thread.
@@ -279,12 +305,17 @@ func isPRConversation(evt *giteaingress.WebhookEvent) bool {
 }
 
 // ResolveLogicIssueAndPR returns logical identifiers for an event:
-//   - logic issue id from Fixes/Closes #N when on a PR; else the Issue number
+//   - logic issue id from the PR body's issue reference (see extractLinkedIssue)
+//     when on a PR; else the Issue number
 //   - pr id when the conversation is a PR (0 for plain issues)
 //
 // Pure PR with no linked issue: issueID=0, prID=P. Downstream must map this
-// via effectiveIssueKey (prID) for session/lock/workflow/writeback — do not
-// key storage on raw 0.
+// via effectiveIssueKey (prID) for session / lock / workflow — do not key
+// storage on raw 0.
+//
+// Note that "which id keys storage" and "where does a reply go" are different
+// questions once a PR resolves to a linked issue: replies belong on the PR the
+// user wrote in. See dispatcher.conversationTarget.
 func (r *Resolver) ResolveLogicIssueAndPR(evt *giteaingress.WebhookEvent) (issueID, prID int) {
 	if isPRConversation(evt) {
 		if evt.PR != nil {
