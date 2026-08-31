@@ -13,6 +13,7 @@
 | [`../HUB-BACKENDS.md`](../HUB-BACKENDS.md) | Hub 后端权威文档（git_sync 信任模型 / 契约 / SLO） |
 | [`../remote-hub-deployment-flow.md`](../remote-hub-deployment-flow.md) | 远端 Hub 部署流程 |
 | [`../todo-20260714-LLMProvider-可选增强.md`](../todo-20260714-LLMProvider-可选增强.md) | LLM 剩余可选增强 |
+| [`../plan-20260831-internationalization.md`](../plan-20260831-internationalization.md) | 中英双语 i18n 方案（待实现） |
 
 ---
 
@@ -20,6 +21,9 @@
 
 | 文件 | 说明 |
 |------|------|
+| `20260829-plan-gitsync-continuation-anchor.md` | git_sync 续写锚点开错 base 事故复盘与修复方案（F1–F5 已落地，F6 经评审否决） |
+| `20260828-plan-issue-status-card.md` | Issue 进度状态卡方案（1 任务 = 1 评论，PR 作者归属 Agent，`Fixes` → `Refs` 已落地） |
+| `20260827-plan-hub-conversation-log.md` | Hub 后端对话日志透传方案 A（已落地，复用 `debug.conversation_log.enabled`） |
 | `20260714-server-runtime-design-v4.md` | OpenCode / CodingBackend 设计（shared_path 时代；权威已由 ../HUB-BACKENDS.md 取代） |
 | `20260723-RENAME-TO-MATEA.md` | 项目更名实施梳理（已实施完成） |
 | `20260803-规划评审-Hub演进与Agent简化方案.md` | Hub 演进评审（结论已并入产品演进计划） |

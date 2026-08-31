@@ -61,6 +61,9 @@ P0–P2 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review 
 - [ ] **3.5 Cron 扫描：定时处理 backlog issue/PR**
   可选触发方式，复用 `internal/gitea` 客户端轮询未处理 Issue/PR 并入队。
 
+- [ ] **3.6 中英双语界面（i18n）**
+  抽出 PR/评论/状态卡/L3 通知等用户可见文案为语义化键，按任务/Agent/仓库/全局四级 locale 渲染。详见 [plan-20260831-internationalization.md](plan-20260831-internationalization.md)。
+
 ---
 
 ## 明确不做
@@ -108,4 +111,5 @@ P0–P2 → 写路径/摩擦/Bootstrap（已归档）→ PR 续作注入 review 
 | [remote-hub-deployment-flow.md](remote-hub-deployment-flow.md) | 远端 Hub 部署流程（含实现状态横幅） |
 | [matea_产品演进实施计划_保留产品形态_引入_hub_后端.md](matea_产品演进实施计划_保留产品形态_引入_hub_后端.md) | 产品定位与演进规划 |
 | [todo-20260714-LLMProvider-可选增强.md](todo-20260714-LLMProvider-可选增强.md) | LLM 可选增强 |
+| [plan-20260831-internationalization.md](plan-20260831-internationalization.md) | 中英双语 i18n 方案（待实现） |
 | [archived/](archived/) | 历史设计、计划、评审、签核、E2E（索引见 [archived/README.md](archived/README.md)） |
