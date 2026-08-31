@@ -167,20 +167,33 @@ func (f *RunnerFactory) runViaHub(ctx context.Context, task *store.Task, agent *
 		}
 		gitSyncInfo = info
 		issuedKey = key
-		// Session continuation (B2.3): when the task's session recorded a
-		// LastHead, the hub branches the NEW per-task draft branch from that
-		// commit instead of the base tip. Validation anchors on it too.
-		anchor := f.sessionLastHead(task)
+		// Continuation anchor: the commit the hub must branch from, instead of
+		// the base tip. Validation anchors on it too (B2.3).
+		//
+		// Order matters. The session LastHead wins when present, but it is
+		// usually absent for a task on a PR: sessions are keyed by
+		// (repo, issueID, agent, role), and resolveLinkedIssue only understands
+		// Fixes/Closes/Resolves — so a PR whose body says "Refs #7" resolves to
+		// issueID=8 (its own number) and lands in a NEW session rather than the
+		// one that opened it. On jeeinn/rust-study that made reusing the PR
+		// head branch a no-op: no anchor, so the guard below fell back to a
+		// fresh branch and PR #9 was opened anyway.
+		//
+		// The fallback is therefore not "give up" but "ask the branch itself":
+		// a draft branch that already exists on the remote carries its own
+		// start point, and Prepare recorded it (draftBranchChoice.Head).
+		anchor := continuationAnchor(f.sessionLastHead(task), gitSyncInfo.DraftBranchHEAD)
 		if anchor != "" {
 			gitSyncInfo.AnchorHEAD = anchor
-			log.Printf("[INFO] hub execution task %d: session continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
+			log.Printf("[INFO] hub execution task %d: continuation anchored at %s", task.ID, anchor[:min(8, len(anchor))])
 		}
 		// Prepare may have pointed the draft at an existing PR's head branch.
 		// That is only safe with an anchor: see effectiveDraftBranch.
 		if settled := effectiveDraftBranch(gitSyncInfo.DraftBranch, anchor, task.ID); settled != gitSyncInfo.DraftBranch {
-			log.Printf("[WARN] hub execution task %d: no session anchor to continue PR head branch %s; using a fresh %s (the PR keeps its current commits)",
+			log.Printf("[WARN] hub execution task %d: no anchor to continue PR head branch %s; using a fresh %s (the PR keeps its current commits)",
 				task.ID, gitSyncInfo.DraftBranch, settled)
 			gitSyncInfo.DraftBranch = settled
+			gitSyncInfo.DraftBranchHEAD = ""
 		}
 		tc.GitSync = info
 	}

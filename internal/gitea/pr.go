@@ -109,6 +109,26 @@ func PRHeadRef(pr map[string]interface{}) (string, error) {
 	return ref, nil
 }
 
+// PRHeadSHA extracts the tip commit of the PR's head branch from a PR detail
+// map returned by PRGet.
+//
+// git_sync Prepare uses it as the continuation anchor when it decides to push
+// onto an existing PR's head branch: a branch that already exists on the
+// remote must be continued from its own tip, or the push drops the PR's
+// existing commits and is rejected as non-fast-forward. The session LastHead
+// is not a substitute here — see draftBranchChoice.
+func PRHeadSHA(pr map[string]interface{}) (string, error) {
+	head, ok := pr["head"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("PR head missing or wrong type")
+	}
+	sha, ok := head["sha"].(string)
+	if !ok || sha == "" {
+		return "", fmt.Errorf("PR head sha missing")
+	}
+	return sha, nil
+}
+
 // PRState extracts the PR's state ("open" / "closed" / "merged") from a PR
 // detail map returned by PRGet.
 //

@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -38,6 +39,7 @@ type fakeObject struct {
 	title   string
 	body    string
 	headRef string // PRs only
+	headSHA string // PRs only; empty means the API omitted it (unreadable tip)
 	state   string // PRs only; empty means "not a PR" (404 on /pulls/{index})
 }
 
@@ -88,7 +90,7 @@ func newPRContinuationServer(t *testing.T, objects []fakeObject, counts *map[int
 		json.NewEncoder(w).Encode(map[string]any{
 			"number": o.number,
 			"state":  o.state,
-			"head":   map[string]any{"ref": o.headRef},
+			"head":   map[string]any{"ref": o.headRef, "sha": o.headSHA},
 			"base":   map[string]any{"ref": "main"},
 		})
 	})
@@ -98,7 +100,7 @@ func newPRContinuationServer(t *testing.T, objects []fakeObject, counts *map[int
 func TestResolveGitSyncDraftBranchReusesOpenPRHead(t *testing.T) {
 	objects := []fakeObject{
 		{number: 7, title: "更新项目的readme"},
-		{number: 8, title: "AI Solution: issues", body: "body\n\nRefs #7", headRef: "matea/hub-14", state: "open"},
+		{number: 8, title: "AI Solution: issues", body: "body\n\nRefs #7", headRef: "matea/hub-14", headSHA: "aaaa1111", state: "open"},
 	}
 	counts := map[int]int{}
 	srv := newPRContinuationServer(t, objects, &counts)
@@ -106,14 +108,42 @@ func TestResolveGitSyncDraftBranchReusesOpenPRHead(t *testing.T) {
 	client := gitea.NewClient(srv.URL, "tok")
 
 	// PR conversation: PRID carries the conversation.
-	branch, note := resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, PRID: 8})
-	assert.Equal(t, "matea/hub-14", branch, "a task on an open PR must push that PR's head branch, not matea/hub-17")
-	assert.Contains(t, note, "#8")
+	choice := resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, PRID: 8})
+	assert.Equal(t, "matea/hub-14", choice.Branch, "a task on an open PR must push that PR's head branch, not matea/hub-17")
+	assert.Contains(t, choice.Note, "#8")
 
 	// The effective key carries it instead when the resolver found no linked
 	// issue (task.IssueID == PR number, PRID unset).
-	branch, _ = resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, IssueID: 8})
-	assert.Equal(t, "matea/hub-14", branch, "PRID==0 must not hide the conversation: IssueID shares Gitea's numbering")
+	choice = resolveGitSyncDraftBranch(client, "o", "r", &store.Task{ID: 17, IssueID: 8})
+	assert.Equal(t, "matea/hub-14", choice.Branch, "PRID==0 must not hide the conversation: IssueID shares Gitea's numbering")
+}
+
+// TestResolveGitSyncDraftBranchCarriesTheBranchTip is the regression test for
+// the anchor hole: reusing a branch is only half the fix, the hub also has to
+// be told where to start from.
+func TestResolveGitSyncDraftBranchCarriesTheBranchTip(t *testing.T) {
+	objects := []fakeObject{
+		{number: 8, title: "AI Solution: issues", headRef: "matea/hub-14", headSHA: "aaaa1111", state: "open"},
+	}
+	srv := newPRContinuationServer(t, objects, nil)
+	defer srv.Close()
+
+	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8})
+	assert.Equal(t, "aaaa1111", choice.Head,
+		"the branch tip travels with the choice: without it a task whose session is new has no anchor and the reuse is silently reverted")
+}
+
+func TestResolveGitSyncDraftBranchRefusedWhenTipUnreadable(t *testing.T) {
+	// Gitea omitted head.sha. Pushing onto a branch whose tip we cannot name
+	// would be guessing at the start point, so keep the per-task branch.
+	objects := []fakeObject{
+		{number: 8, title: "AI Solution: issues", headRef: "matea/hub-14", state: "open"},
+	}
+	srv := newPRContinuationServer(t, objects, nil)
+	defer srv.Close()
+
+	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8})
+	assert.Empty(t, choice.Branch, "no readable tip → no reuse, rather than reuse with an unknown start point")
 }
 
 func TestResolveGitSyncDraftBranchReuseIsRefusedWhenUnsafe(t *testing.T) {
@@ -160,23 +190,24 @@ func TestResolveGitSyncDraftBranchReuseIsRefusedWhenUnsafe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newPRContinuationServer(t, tc.objects, nil)
 			defer srv.Close()
-			branch, note := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", tc.task)
-			assert.Empty(t, branch, "must fall back to a fresh per-task branch")
-			assert.Empty(t, note)
+			choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", tc.task)
+			assert.Empty(t, choice.Branch, "must fall back to a fresh per-task branch")
+			assert.Empty(t, choice.Note)
+			assert.Empty(t, choice.Head, "a fresh branch has no remote tip to continue from")
 		})
 	}
 }
 
 func TestResolveGitSyncDraftBranchProbesEachIdOnce(t *testing.T) {
-	objects := []fakeObject{{number: 8, headRef: "matea/hub-14", state: "open"}}
+	objects := []fakeObject{{number: 8, headRef: "matea/hub-14", headSHA: "aaaa1111", state: "open"}}
 	counts := map[int]int{}
 	srv := newPRContinuationServer(t, objects, &counts)
 	defer srv.Close()
 
 	// PRID and IssueID both hold the conversation id for a PR with no linked
 	// issue; probing twice would double the API calls for every task.
-	branch, _ := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8, IssueID: 8})
-	assert.Equal(t, "matea/hub-14", branch)
+	choice := resolveGitSyncDraftBranch(gitea.NewClient(srv.URL, "tok"), "o", "r", &store.Task{ID: 17, PRID: 8, IssueID: 8})
+	assert.Equal(t, "matea/hub-14", choice.Branch)
 	assert.Equal(t, 1, counts[8], "the same conversation id must be probed once, not once per field")
 }
 
@@ -212,7 +243,7 @@ func newPRContinuationTransport(t *testing.T, objects []fakeObject) WorkspaceTra
 		json.NewEncoder(w).Encode(map[string]any{
 			"number": o.number,
 			"state":  o.state,
-			"head":   map[string]any{"ref": o.headRef},
+			"head":   map[string]any{"ref": o.headRef, "sha": o.headSHA},
 			"base":   map[string]any{"ref": "main"},
 		})
 	})
@@ -234,13 +265,15 @@ func TestGitSyncPrepareReusesPRHeadBranch(t *testing.T) {
 	// what makes FinalizeWriteTaskPR report the commits on PR #8 instead of
 	// opening PR #9 (jeeinn/rust-study, 2026-08-29).
 	transport := newPRContinuationTransport(t, []fakeObject{
-		{number: 8, title: "AI Solution: issues", headRef: "matea/hub-14", state: "open"},
+		{number: 8, title: "AI Solution: issues", headRef: "matea/hub-14", headSHA: "aaaa1111", state: "open"},
 	})
 
 	info, _, err := transport.Prepare(context.Background(), &store.Task{ID: 17, Repo: "o/r", PRID: 8, IssueID: 8}, "o", "r")
 	require.NoError(t, err)
 	assert.Equal(t, "matea/hub-14", info.DraftBranch,
 		"task 17 on PR #8 must push matea/hub-14, not a fresh matea/hub-17")
+	assert.Equal(t, "aaaa1111", info.DraftBranchHEAD,
+		"the contract must carry the branch tip, or a task with a new session has no anchor and the reuse is reverted")
 	assert.Equal(t, "main", info.BaseBranch)
 	assert.Equal(t, "matea-task-id: 17", info.RequiredFooter,
 		"the footer still names THIS task, so validation stays task-scoped even on a branch another task created")
@@ -256,6 +289,73 @@ func TestGitSyncPrepareUsesFreshBranchWithoutAnOpenPR(t *testing.T) {
 	info, _, err := transport.Prepare(context.Background(), &store.Task{ID: 18, Repo: "o/r", IssueID: 7}, "o", "r")
 	require.NoError(t, err)
 	assert.Equal(t, DraftBranchName(18), info.DraftBranch)
+}
+
+// TestRunViaHubContinuesOnPRHeadBranchWithoutASession pins the WIRING, which
+// the unit tests above cannot: they would still pass if hub_run.go stopped
+// consulting continuationAnchor.
+//
+// The scenario is jeeinn/rust-study exactly: task 14 opened PR #8 from issue #7
+// and is session-keyed 7; the follow-up on PR #8 is keyed 8 because
+// resolveLinkedIssue does not understand "Refs #7", so it lands in a brand new
+// session holding no LastHead.
+func TestRunViaHubContinuesOnPRHeadBranchWithoutASession(t *testing.T) {
+	// The remote already carries the branch PR #8 points at.
+	cloneURL, mainHEAD, prHeadSHA := setupGitSyncRemote(t, 9614)
+	fake := newGitSyncFakeGitea(t, cloneURL, mainHEAD)
+	fake.prBaseRef = "main"
+	fake.prState = "open"
+	fake.prHeadRef = DraftBranchName(9614)
+	fake.prHeadSHA = prHeadSHA
+
+	db := newHubRunTestDB(t)
+	f := newGitSyncFactory(db, fake.server.URL, cloneURL, &fakeDeployKeyIssuer{})
+
+	// No session at all — SessionID empty, so sessionLastHead is "".
+	task := gitSyncApproveTask(9617)
+	task.IssueID = 8
+	task.PRID = 8
+	tc := &TaskContext{TaskType: "solve_issue", Repo: "o/r", IssueID: 8, TaskID: 9617}
+
+	// pollErr keeps the test off the real-git Approve path; the contract is
+	// attached to the TaskContext at Submit, before any polling happens.
+	hub := &gitSyncTestHub{name: "gs-opencode", pollErr: errors.New("stop before approve")}
+
+	_, err := f.runViaHub(context.Background(), task, &store.Agent{}, hub, tc)
+	require.Error(t, err)
+
+	require.NotNil(t, hub.gotTC)
+	require.NotNil(t, hub.gotTC.GitSync)
+	assert.Equal(t, DraftBranchName(9614), hub.gotTC.GitSync.DraftBranch,
+		"the hub must push PR #8's head branch, not a fresh matea/hub-9617")
+	assert.Equal(t, prHeadSHA, hub.gotTC.GitSync.AnchorHEAD,
+		"and start from that branch's tip — with no session head and no fallback, the reuse is reverted and PR #9 gets opened anyway")
+
+	// Restart re-attach rebuilds the contract from this row, so the anchor has
+	// to be persisted too: a re-attached task would otherwise approve against
+	// BaseHEAD and reject the hub's (correctly branched) push.
+	handle, err := db.GetHubHandle(9617)
+	require.NoError(t, err)
+	require.NotNil(t, handle)
+	assert.Equal(t, prHeadSHA, handle.AnchorHEAD, "the branch-tip anchor must survive a restart")
+	assert.Equal(t, DraftBranchName(9614), handle.DraftBranch)
+}
+
+// TestContinuationAnchorUsesBranchTipWithoutASession is the regression test for
+// the hole that made the whole PR-reuse fix inert: on jeeinn/rust-study the
+// follow-up task on PR #8 is keyed 8, the task that opened PR #8 was keyed 7,
+// so sessionLastHead is empty — and the old code read that as "cannot continue"
+// and reverted to a fresh branch, opening PR #9 anyway.
+func TestContinuationAnchorUsesBranchTipWithoutASession(t *testing.T) {
+	// The live scenario: no session head, branch exists on the remote.
+	assert.Equal(t, "aaaa1111", continuationAnchor("", "aaaa1111"),
+		"an existing branch supplies its own start point; no session required")
+
+	// Session head still wins: it is the authoritative head Matea fetched.
+	assert.Equal(t, "bbbb2222", continuationAnchor("bbbb2222", "aaaa1111"))
+
+	// Fresh per-task branch, no session: hub branches from the base tip.
+	assert.Equal(t, "", continuationAnchor("", ""))
 }
 
 func TestEffectiveDraftBranchNeedsAnAnchor(t *testing.T) {
