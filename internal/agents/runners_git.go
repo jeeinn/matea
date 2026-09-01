@@ -9,6 +9,22 @@ import (
 	"github.com/jeeinn/matea/internal/store"
 )
 
+// shortSHA abbreviates a commit id for a log line.
+//
+// It slices runes, not bytes: a SHA is ASCII hex, but the values reaching here
+// come from a persisted session row and from Gitea's head.sha, and a garbled
+// one would otherwise be logged as a broken rune. Short inputs are returned
+// whole — the naive sha[:8] panics on them, which is a poor way to learn that
+// a row holds something unexpected.
+func shortSHA(sha string) string {
+	const n = 8
+	r := []rune(sha)
+	if len(r) <= n {
+		return sha
+	}
+	return string(r[:n])
+}
+
 // resolveWorkBranch picks the branch to work on for session sync and checkout.
 // Priority: task.BaseBranch (PR head) > session.Branch > empty (defer to branch plan).
 func resolveWorkBranch(task *store.Task, sessionBranch string) string {

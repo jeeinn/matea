@@ -87,3 +87,15 @@ func TestCheckoutWorkBranchSkipsWhenAlreadyOnBranch(t *testing.T) {
 	assert.Equal(t, "matea/solve-issue-2", branch)
 	assert.True(t, git.HasChanges())
 }
+
+// Both call sites log a SHA that came out of storage or out of Gitea, so
+// shortSHA must survive values that are not a 40-char hex string. The previous
+// sessionLastHead[:8] panicked on a short one.
+func TestShortSHA(t *testing.T) {
+	assert.Equal(t, "aaaa1111", shortSHA("aaaa1111bbbb2222cccc3333dddd4444eeee5555"))
+	assert.Equal(t, "aaaa1111", shortSHA("aaaa1111"), "an exactly-8 id is returned whole")
+	assert.Equal(t, "abc", shortSHA("abc"), "a short id must not panic")
+	assert.Equal(t, "", shortSHA(""))
+	// Runes, not bytes: a garbled value should stay readable in the log.
+	assert.Equal(t, "锚点坏了但仍可读", shortSHA("锚点坏了但仍可读的一串字"))
+}

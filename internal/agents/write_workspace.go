@@ -178,7 +178,7 @@ func prepareWriteWorkspace(ctx context.Context, task *store.Task, agent *store.A
 			return nil, fmt.Errorf("session continuation anchor %s not found (draft branch deleted or rewound on remote?): %s",
 				sessionLastHead, errMsg)
 		}
-		log.Printf("[INFO] Task %d continues session at %s (branch %s)", task.ID, sessionLastHead[:8], branchName)
+		log.Printf("[INFO] Task %d continues session at %s (branch %s)", task.ID, shortSHA(sessionLastHead), branchName)
 	case isExistingBranch:
 		// solve_comment (PR head) or a legacy session branch without LastHead:
 		// anchor on the remote branch head.

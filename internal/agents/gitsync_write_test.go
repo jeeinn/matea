@@ -90,8 +90,24 @@ type gitSyncFakeGitea struct {
 	// prBaseRef, when set, makes GET /pulls/{n} answer with a PR whose base
 	// ref is this value — the PR a continuation task runs on.
 	prBaseRef string
+	// prState and prHeadSHA complete that PR's detail so its head branch is
+	// reusable as a draft branch (open PR, nameable head tip). Both default to
+	// empty on purpose: the base-branch tests predate draft-branch reuse and
+	// assert the legacy shape, where an unreadable state means "do not reuse".
+	prState   string
+	prHeadSHA string
+	// prHeadRef overrides the head branch name (default: matea/hub-14, the
+	// branch the base-branch tests were written around).
+	prHeadRef string
 	prCreated *gitea.CreatePRRequest
 	server    *httptest.Server
+}
+
+func (g *gitSyncFakeGitea) headRefOrLegacy() string {
+	if strings.TrimSpace(g.prHeadRef) != "" {
+		return g.prHeadRef
+	}
+	return "matea/hub-14"
 }
 
 func (g *gitSyncFakeGitea) defaultBranchOrMain() string {
@@ -123,11 +139,19 @@ func newGitSyncFakeGitea(t *testing.T, cloneURL, mainHEAD string) *gitSyncFakeGi
 			json.NewEncoder(w).Encode(map[string]any{"message": "pull request does not exist"})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		head := map[string]any{"ref": g.headRefOrLegacy()}
+		if g.prHeadSHA != "" {
+			head["sha"] = g.prHeadSHA
+		}
+		pr := map[string]any{
 			"number": 8,
 			"base":   map[string]any{"ref": g.prBaseRef},
-			"head":   map[string]any{"ref": "matea/hub-14"},
-		})
+			"head":   head,
+		}
+		if g.prState != "" {
+			pr["state"] = g.prState
+		}
+		json.NewEncoder(w).Encode(pr)
 	})
 	mux.HandleFunc("/api/v1/repos/o/r/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

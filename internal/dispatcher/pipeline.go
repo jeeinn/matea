@@ -69,9 +69,12 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 	repo := evt.Repo.FullName
 	logicIssueID := result.IssueID
 	prID := result.PRID
-	// Session / lock / workflow / task.IssueID / gate comments use effective key.
+	// Session / lock / workflow / task.IssueID use the effective key.
 	// Resolver may return logic_issue_id=0 for pure PRs; fall back to pr_id.
 	issueID := effectiveIssueKey(logicIssueID, prID)
+	// Anything a human reads goes where they asked instead: on a PR
+	// conversation, that is the PR, not the linked issue the task is keyed to.
+	replyTo := conversationTarget(issueID, prID)
 
 	// Handle lifecycle events (archive, done) — no agent required
 	if result.Lifecycle != "" {
@@ -95,7 +98,7 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 		if !l1Result.Allowed {
 			log.Printf("[INFO] L1 gate rejected: %s — %s", l1Result.Code, l1Result.Message)
 			// Post rejection comment via agent's token
-			d.postGateComment(result.Agent, repo, issueID, l1Result.Message)
+			d.postGateComment(result.Agent, repo, replyTo, l1Result.Message)
 			return true
 		}
 	}
@@ -113,7 +116,7 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 		transition := d.wfMgr.Transition(ctx, result.Role)
 		if !transition.Allowed {
 			log.Printf("[INFO] Transition blocked: %s", transition.Reason)
-			d.postGateComment(result.Agent, repo, issueID, "⚠️ "+transition.Reason)
+			d.postGateComment(result.Agent, repo, replyTo, "⚠️ "+transition.Reason)
 			return true
 		}
 
@@ -133,17 +136,17 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 					if result.Force && gateResult.Level == "soft" {
 						// /force bypasses soft gates
 						log.Printf("[INFO] /force bypassing soft gate: %s", gateID)
-						d.postGateComment(result.Agent, repo, issueID, "⚡ /force 已跳过软门禁: "+gateResult.Message)
+						d.postGateComment(result.Agent, repo, replyTo, "⚡ /force 已跳过软门禁: "+gateResult.Message)
 						continue
 					}
 					// Hard gate or no /force — block
 					log.Printf("[INFO] L2 gate rejected: %s — %s", gateID, gateResult.Message)
-					d.postGateComment(result.Agent, repo, issueID, gateResult.Message)
+					d.postGateComment(result.Agent, repo, replyTo, gateResult.Message)
 					return true
 				}
 				if gateResult.Level == "soft" && policy.Notify.OnGateSoft {
 					// Soft gate passed — post warning
-					d.postGateComment(result.Agent, repo, issueID, gateResult.Message)
+					d.postGateComment(result.Agent, repo, replyTo, gateResult.Message)
 				}
 			}
 		}
@@ -152,7 +155,7 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 		lockKey := fmt.Sprintf("%s#%d", repo, issueID)
 		if _, loaded := d.inFlight.LoadOrStore(lockKey, true); loaded {
 			log.Printf("[INFO] In-flight lock held for %s, skipping", lockKey)
-			d.postGateComment(result.Agent, repo, issueID, "⏳ 此 Issue 正在处理中，请稍候。")
+			d.postGateComment(result.Agent, repo, replyTo, "⏳ 此 Issue 正在处理中，请稍候。")
 			return true
 		}
 
@@ -166,7 +169,7 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 		if hasPending {
 			d.inFlight.Delete(lockKey)
 			log.Printf("[INFO] Pending/running task exists for %s#%d, skipping", repo, issueID)
-			d.postGateComment(result.Agent, repo, issueID, "⏳ 已有任务正在处理中。")
+			d.postGateComment(result.Agent, repo, replyTo, "⏳ 已有任务正在处理中。")
 			return true
 		}
 
@@ -195,7 +198,7 @@ func (d *Dispatcher) handleEventV2(evt *giteaingress.WebhookEvent) bool {
 		}
 
 		// Step 6c: Unassign previous agent on stage transition (if configured)
-		d.unassignPreviousAgentOnTransition(repo, issueID, prevAgentID, result.Agent.ID)
+		d.unassignPreviousAgentOnTransition(repo, issueID, prID, prevAgentID, result.Agent.ID)
 	}
 
 	// Step 7: Build task context and enqueue

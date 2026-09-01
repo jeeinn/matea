@@ -693,23 +693,24 @@ func (e *Executor) runTask(ctx context.Context, task *store.Task, agent *store.A
 	return nil
 }
 
-// writebackTargetID returns the Gitea issue/PR index to post comments on.
-// review_pr prefers PRID so review lands on the PR thread even when IssueID is a linked issue.
-// Pure PR tasks may have IssueID=0 with PRID set — fall back to PRID for any task type.
+// writebackTargetID returns the Gitea issue/PR index to post comments on: the
+// PR whenever the task belongs to a PR conversation, because that is where the
+// user asked.
+//
+// It used to prefer IssueID for everything except review_pr. That stopped
+// being right when the resolver learned to read "Refs #N": a task on PR #8 is
+// now keyed to issue #7 (keeps the session and the coder's continuation anchor
+// continuous), so a write task answering on the PR would have posted its
+// result on the issue instead. conversationTarget keeps the two concerns apart.
 func writebackTargetID(task *store.Task) (targetID int, ok bool) {
 	if task == nil {
 		return 0, false
 	}
-	if task.TaskType == "review_pr" && task.PRID > 0 {
-		return task.PRID, true
+	id := conversationTarget(task.IssueID, task.PRID)
+	if id <= 0 {
+		return 0, false
 	}
-	if task.IssueID > 0 {
-		return task.IssueID, true
-	}
-	if task.PRID > 0 {
-		return task.PRID, true
-	}
-	return 0, false
+	return id, true
 }
 
 // writeBackToGitea posts the LLM result as a comment on the Gitea issue/PR.
